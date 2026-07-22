@@ -90,7 +90,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         <div className="hidden md:flex items-center space-x-4">
           <div className="flex items-center bg-[#F3F1ED] p-1 rounded-lg border border-[#EAE6DF]">
             <span className="text-xs font-semibold text-[#8B7D6B] px-2 uppercase tracking-wider">Ano Base:</span>
-            {[2025, 2026, 2027].map((y) => (
+            {[2024, 2025, 2026, 2027].map((y) => (
               <button
                 key={y}
                 onClick={() => handleYearSelect(y)}

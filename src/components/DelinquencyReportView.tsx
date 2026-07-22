@@ -21,9 +21,14 @@ import { exportReportToExcel, exportReportToPdf, formatCurrency } from '../utils
 interface DelinquencyReportViewProps {
   titles: DelinquentTitle[];
   selectedYear: number;
+  onNavigateToImport?: () => void;
 }
 
-export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({ titles, selectedYear }) => {
+export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
+  titles,
+  selectedYear,
+  onNavigateToImport,
+}) => {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [agingFilter, setAgingFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -129,7 +134,17 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({ ti
           </p>
         </div>
 
-        <div className="flex items-center space-x-3">
+        <div className="flex flex-wrap items-center gap-2">
+          {onNavigateToImport && (
+            <button
+              onClick={onNavigateToImport}
+              className="px-3.5 py-2 text-xs font-bold bg-rose-700 hover:bg-rose-800 text-white rounded-lg shadow-xs transition-all flex items-center gap-1.5"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-white" />
+              <span>Importar Inadimplência (Excel/CSV)</span>
+            </button>
+          )}
+
           <button
             onClick={handleExportPdf}
             className="px-3.5 py-2 text-xs font-bold bg-red-50 text-red-700 hover:bg-red-100 border border-red-200 rounded-lg transition-all flex items-center gap-1.5"

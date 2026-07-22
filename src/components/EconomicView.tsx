@@ -49,12 +49,7 @@ export const EconomicView: React.FC<EconomicViewProps> = ({
   const handleExportPdf = () => {
     const headers = [
       'Indicador',
-      'Jan %',
-      'Fev %',
-      'Mar %',
-      'Abr %',
-      'Mai %',
-      'Jun %',
+      ...monthKeys.map((m) => m.toUpperCase()),
       'Total Ano',
       'Média Mês',
     ];
@@ -62,13 +57,13 @@ export const EconomicView: React.FC<EconomicViewProps> = ({
     const rows = [
       [
         'Receita Bruta',
-        ...['jan', 'fev', 'mar', 'abr', 'mai', 'jun'].map((m) => formatCurrency(economicMonths[m]?.receitaBruta)),
+        ...monthKeys.map((m) => formatCurrency(economicMonths[m]?.receitaBruta)),
         formatCurrency(totalReceita),
         formatCurrency(avgReceita),
       ],
       [
         'CMV (Custos)',
-        ...['jan', 'fev', 'mar', 'abr', 'mai', 'jun'].map(
+        ...monthKeys.map(
           (m) => `${formatCurrency(economicMonths[m]?.cmv)} (${formatPercent(economicMonths[m]?.cmvPercent)})`
         ),
         `${formatCurrency(totalCmv)} (${formatPercent(totalCmvPercent)})`,
@@ -76,7 +71,7 @@ export const EconomicView: React.FC<EconomicViewProps> = ({
       ],
       [
         'Margem Bruta',
-        ...['jan', 'fev', 'mar', 'abr', 'mai', 'jun'].map(
+        ...monthKeys.map(
           (m) => `${formatCurrency(economicMonths[m]?.margemBruta)} (${formatPercent(economicMonths[m]?.margemPercent)})`
         ),
         `${formatCurrency(totalMargem)} (${formatPercent(totalMargemPercent)})`,
@@ -84,7 +79,7 @@ export const EconomicView: React.FC<EconomicViewProps> = ({
       ],
       [
         'Despesas Fixas',
-        ...['jan', 'fev', 'mar', 'abr', 'mai', 'jun'].map(
+        ...monthKeys.map(
           (m) => `${formatCurrency(economicMonths[m]?.despesasFixas)} (${formatPercent(economicMonths[m]?.despesasPercent)})`
         ),
         `${formatCurrency(totalDespesas)} (${formatPercent(totalDespesasPercent)})`,
@@ -92,7 +87,7 @@ export const EconomicView: React.FC<EconomicViewProps> = ({
       ],
       [
         'Resultado Econômico',
-        ...['jan', 'fev', 'mar', 'abr', 'mai', 'jun'].map(
+        ...monthKeys.map(
           (m) => `${formatCurrency(economicMonths[m]?.resultadoEconomico)} (${formatPercent(economicMonths[m]?.resultadoPercent)})`
         ),
         `${formatCurrency(totalResEco)} (${formatPercent(totalResEcoPercent)})`,
@@ -100,7 +95,7 @@ export const EconomicView: React.FC<EconomicViewProps> = ({
       ],
       [
         'Ponto de Equilíbrio',
-        ...['jan', 'fev', 'mar', 'abr', 'mai', 'jun'].map((m) => formatCurrency(economicMonths[m]?.pontoEquilibrio)),
+        ...monthKeys.map((m) => formatCurrency(economicMonths[m]?.pontoEquilibrio)),
         '-',
         formatCurrency(avgDespesas / (totalMargemPercent / 100 || 1)),
       ],

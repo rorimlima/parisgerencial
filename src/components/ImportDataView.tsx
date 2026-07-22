@@ -21,12 +21,13 @@ interface ImportDataViewProps {
   onCommitImport: (
     validEntries: ValidationRowResult[],
     year: number,
-    targetModule: 'economic' | 'financial'
+    targetModule: 'economic' | 'financial' | 'customers' | 'delinquency'
   ) => void;
   onCommitDelinquencyImport: (
     validEntries: DelinquencyValidationRowResult[]
   ) => void;
   selectedYear: number;
+  initialModule?: 'economic' | 'financial' | 'customers' | 'delinquency';
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -80,8 +81,9 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
   onCommitImport,
   onCommitDelinquencyImport,
   selectedYear,
+  initialModule,
 }) => {
-  const [targetModule, setTargetModule] = useState<'economic' | 'financial' | 'delinquency'>('financial');
+  const [targetModule, setTargetModule] = useState<'economic' | 'financial' | 'customers' | 'delinquency'>(initialModule || 'financial');
   const [year, setYear] = useState<number>(selectedYear || 2026);
   const [isDragOver, setIsDragOver] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -432,11 +434,12 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
             >
               <option value="financial">Resultado Financeiro (Caixa)</option>
               <option value="economic">Resultado Econômico (DRE)</option>
+              <option value="customers">Carteira de Clientes</option>
               <option value="delinquency">Inadimplência (Títulos Vencidos)</option>
             </select>
           </div>
 
-          {targetModule !== 'delinquency' && (
+          {targetModule !== 'delinquency' && targetModule !== 'customers' && (
             <div>
               <label className="block text-[10px] font-bold text-[#8B7D6B] uppercase">Ano Base</label>
               <select
@@ -452,6 +455,42 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
           )}
         </div>
       </div>
+
+      {/* Guia de colunas para clientes */}
+      {targetModule === 'customers' && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 space-y-3">
+          <div className="flex items-start gap-2">
+            <Info className="w-4 h-4 text-emerald-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-xs font-bold text-emerald-800">Colunas esperadas na planilha de clientes</p>
+              <p className="text-[11px] text-emerald-700 mt-0.5">
+                O sistema aceita variações de cabeçalho. Campos principais destacados com *.
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 text-[10px]">
+            {[
+              { col: 'codigo / Código', label: 'Código Cliente', req: false },
+              { col: 'razao_social / Nome / Cliente', label: 'Razão Social / Nome', req: true },
+              { col: 'cnpj_cpf / CNPJ / CPF', label: 'CNPJ ou CPF', req: false },
+              { col: 'nome_fantasia / Fantasia', label: 'Nome Fantasia', req: false },
+              { col: 'contato / Contato', label: 'Contato', req: false },
+              { col: 'telefone / Telefone', label: 'Telefone', req: false },
+              { col: 'email / E-mail', label: 'E-mail', req: false },
+              { col: 'cidade / Cidade', label: 'Cidade', req: false },
+              { col: 'estado / UF', label: 'UF (Estado)', req: false },
+              { col: 'limite_credito / Limite', label: 'Limite de Crédito', req: false },
+            ].map((item) => (
+              <div key={item.col} className="bg-white border border-emerald-100 rounded p-2">
+                <p className="font-bold text-emerald-900">
+                  {item.label} {item.req && <span className="text-red-500">*</span>}
+                </p>
+                <p className="text-emerald-600 font-mono leading-tight mt-0.5">{item.col}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Guia de colunas para inadimplência */}
       {targetModule === 'delinquency' && (

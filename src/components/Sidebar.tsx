@@ -79,18 +79,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       description: 'Títulos vencidos, aging list e cobrança',
       badge: 'Crítico',
     },
-    {
-      id: 'api-docs' as ViewTab,
-      label: 'Integração API Contábil',
-      icon: Code2,
-      description: 'Tokens e endpoints para sistemas externos',
-    },
-    {
-      id: 'postgres-settings' as ViewTab,
-      label: 'PostgreSQL (parisgerencial)',
-      icon: Database,
-      description: 'Conexão e scripts DDL do banco',
-    },
   ];
 
   return (
@@ -148,29 +136,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 );
               })}
           </nav>
-        </div>
-
-        {/* Database Box */}
-        <div className="p-3.5 rounded-xl bg-[#3F3B35]/50 border border-[#3F3B35] text-[#EAE6DF]">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[11px] font-bold text-[#C19A6B] flex items-center gap-1">
-              <Database className="w-3.5 h-3.5" />
-              Base PostgreSQL
-            </span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#C19A6B]/20 text-[#C19A6B] font-mono">
-              parisgerencial
-            </span>
-          </div>
-          <p className="text-[10px] text-[#EAE6DF]/60 leading-relaxed mb-2">
-            Estrutura DRE, fluxo de caixa, títulos e clientes sincronizados.
-          </p>
-          <button
-            onClick={() => handleSelect('postgres-settings')}
-            className="w-full text-center text-[10px] font-semibold text-[#C19A6B] hover:underline flex items-center justify-center gap-1"
-          >
-            <span>Ver Parâmetros & DDL</span>
-            <ArrowUpRight className="w-3 h-3" />
-          </button>
         </div>
       </div>
 

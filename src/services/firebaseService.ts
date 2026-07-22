@@ -12,6 +12,7 @@ import {
   limit 
 } from 'firebase/firestore';
 import { firebaseConfig } from '../firebaseConfig';
+import { INITIAL_ECONOMIC_BY_YEAR, INITIAL_FINANCIAL_BY_YEAR } from '../data/initialData';
 import {
   User,
   EconomicMonthData,
@@ -22,6 +23,26 @@ import {
 } from '../types';
 
 let firestoreDb: ReturnType<typeof getFirestore>;
+
+const ALL_MONTHS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+
+function createEmptyEconomicMonth(monthKey: string, year: number): EconomicMonthData {
+  return {
+    monthKey,
+    monthLabel: `${monthKey.charAt(0).toUpperCase() + monthKey.slice(1)}/${year.toString().slice(-2)}`,
+    receitaBruta: 0, cmv: 0, cmvPercent: 0, margemBruta: 0, margemPercent: 0,
+    despesasFixas: 0, despesasPercent: 0, resultadoEconomico: 0, resultadoPercent: 0, pontoEquilibrio: 0,
+  };
+}
+
+function createEmptyFinancialMonth(monthKey: string, year: number): FinancialMonthData {
+  return {
+    monthKey,
+    monthLabel: `${monthKey.charAt(0).toUpperCase() + monthKey.slice(1)}/${year.toString().slice(-2)}`,
+    entradasBancos: 0, entradasTesouraria: 0, totalEntradas: 0, totalSaidas: 0,
+    resultadoFinanceiro: 0, resultadoPercent: 0, estoque: 0, inadimplenciaMensal: 0, inadimplenciaAcumulada: 0,
+  };
+}
 
 export const initFirebase = () => {
   const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
@@ -43,44 +64,66 @@ export const fetchEconomicData = async (year: number): Promise<Record<string, Ec
     const q = query(collection(db, 'resultado_economico'), where('ano', '==', year));
     const snapshot = await getDocs(q);
     
+    const initialForYear = INITIAL_ECONOMIC_BY_YEAR[year];
     const result: Record<string, EconomicMonthData> = {};
-    
-    snapshot.forEach((docSnap) => {
-      const data = docSnap.data();
-      const mes_chave = data.mes_chave || '';
-      const receitaBruta = data.receita_bruta || 0;
-      const cmv = data.cmv || 0;
-      const margemBruta = data.margem_bruta || 0;
-      const despesasFixas = data.despesas_fixas || 0;
-      const resultadoEconomico = data.resultado_economico || 0;
-      
-      const cmvPercent = receitaBruta > 0 ? (cmv / receitaBruta) * 100 : 0;
-      const margemPercent = receitaBruta > 0 ? (margemBruta / receitaBruta) * 100 : 0;
-      const despesasPercent = receitaBruta > 0 ? (despesasFixas / receitaBruta) * 100 : 0;
-      const resultadoPercent = receitaBruta > 0 ? (resultadoEconomico / receitaBruta) * 100 : 0;
-
-      const monthLabel = `${mes_chave.charAt(0).toUpperCase() + mes_chave.slice(1)}/${year.toString().slice(-2)}`;
-      
-      result[mes_chave] = {
-        monthKey: mes_chave,
-        monthLabel,
-        receitaBruta,
-        cmv,
-        cmvPercent,
-        margemBruta,
-        margemPercent,
-        despesasFixas,
-        despesasPercent,
-        resultadoEconomico,
-        resultadoPercent,
-        pontoEquilibrio: data.ponto_equilibrio || 0
-      };
+    ALL_MONTHS.forEach(m => {
+      if (initialForYear && initialForYear[m]) {
+        result[m] = { ...initialForYear[m] };
+      } else {
+        result[m] = createEmptyEconomicMonth(m, year);
+      }
     });
+    
+    // Se o Firestore tiver registros para este ano, mescla com os dados do Firestore
+    if (!snapshot.empty) {
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        const mes_chave = data.mes_chave || '';
+        if (!mes_chave) return;
+
+        const receitaBruta = data.receita_bruta !== undefined ? data.receita_bruta : (result[mes_chave]?.receitaBruta || 0);
+        const cmv = data.cmv !== undefined ? data.cmv : (result[mes_chave]?.cmv || 0);
+        const margemBruta = data.margem_bruta !== undefined ? data.margem_bruta : (result[mes_chave]?.margemBruta || 0);
+        const despesasFixas = data.despesas_fixas !== undefined ? data.despesas_fixas : (result[mes_chave]?.despesasFixas || 0);
+        const resultadoEconomico = data.resultado_economico !== undefined ? data.resultado_economico : (result[mes_chave]?.resultadoEconomico || 0);
+        
+        const cmvPercent = receitaBruta > 0 ? (cmv / receitaBruta) * 100 : 0;
+        const margemPercent = receitaBruta > 0 ? (margemBruta / receitaBruta) * 100 : 0;
+        const despesasPercent = receitaBruta > 0 ? (despesasFixas / receitaBruta) * 100 : 0;
+        const resultadoPercent = receitaBruta > 0 ? (resultadoEconomico / receitaBruta) * 100 : 0;
+
+        const monthLabel = `${mes_chave.charAt(0).toUpperCase() + mes_chave.slice(1)}/${year.toString().slice(-2)}`;
+        
+        result[mes_chave] = {
+          monthKey: mes_chave,
+          monthLabel,
+          receitaBruta,
+          cmv,
+          cmvPercent,
+          margemBruta,
+          margemPercent,
+          despesasFixas,
+          despesasPercent,
+          resultadoEconomico,
+          resultadoPercent,
+          pontoEquilibrio: data.ponto_equilibrio !== undefined ? data.ponto_equilibrio : (result[mes_chave]?.pontoEquilibrio || 0)
+        };
+      });
+    } else if (initialForYear) {
+      // Se não há dados no Firestore ainda para 2024/2025, salva os dados de initialData em background
+      Object.entries(initialForYear).forEach(([mKey, mData]) => {
+        saveEconomicLaunch(year, mKey, mData).catch((err) => console.warn('Erro ao salvar lote inicial:', err));
+      });
+    }
     
     return result;
   } catch (error) {
     console.error('Error fetching economic data:', error);
-    return {};
+    const initialForYear = INITIAL_ECONOMIC_BY_YEAR[year];
+    if (initialForYear) return initialForYear;
+    const empty: Record<string, EconomicMonthData> = {};
+    ALL_MONTHS.forEach(m => { empty[m] = createEmptyEconomicMonth(m, year); });
+    return empty;
   }
 };
 
@@ -115,38 +158,61 @@ export const fetchFinancialData = async (year: number): Promise<Record<string, F
     const q = query(collection(db, 'resultado_financeiro'), where('ano', '==', year));
     const snapshot = await getDocs(q);
     
+    const initialForYear = INITIAL_FINANCIAL_BY_YEAR[year];
     const result: Record<string, FinancialMonthData> = {};
-    
-    snapshot.forEach((docSnap) => {
-      const data = docSnap.data();
-      const mes_chave = data.mes_chave || '';
-      const entradasBancos = data.entradas_bancos || 0;
-      const entradasTesouraria = data.entradas_tesouraria || 0;
-      const totalEntradas = data.total_entradas || 0;
-      const resultadoFinanceiro = data.resultado_financeiro || 0;
-      
-      const resultadoPercent = totalEntradas > 0 ? (resultadoFinanceiro / totalEntradas) * 100 : 0;
-      const monthLabel = `${mes_chave.charAt(0).toUpperCase() + mes_chave.slice(1)}/${year.toString().slice(-2)}`;
-      
-      result[mes_chave] = {
-        monthKey: mes_chave,
-        monthLabel,
-        entradasBancos,
-        entradasTesouraria,
-        totalEntradas,
-        totalSaidas: data.total_saidas || 0,
-        resultadoFinanceiro,
-        resultadoPercent,
-        estoque: data.estoque || 0,
-        inadimplenciaMensal: data.inadimplencia_mensal || 0,
-        inadimplenciaAcumulada: data.inadimplencia_acumulada || 0
-      };
+    ALL_MONTHS.forEach(m => {
+      if (initialForYear && initialForYear[m]) {
+        result[m] = { ...initialForYear[m] };
+      } else {
+        result[m] = createEmptyFinancialMonth(m, year);
+      }
     });
+    
+    // Se o Firestore tiver registros para este ano, mescla com os dados do Firestore
+    if (!snapshot.empty) {
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        const mes_chave = data.mes_chave || '';
+        if (!mes_chave) return;
+
+        const entradasBancos = data.entradas_bancos !== undefined ? data.entradas_bancos : (result[mes_chave]?.entradasBancos || 0);
+        const entradasTesouraria = data.entradas_tesouraria !== undefined ? data.entradas_tesouraria : (result[mes_chave]?.entradasTesouraria || 0);
+        const totalEntradas = data.total_entradas !== undefined ? data.total_entradas : (entradasBancos + entradasTesouraria);
+        const totalSaidas = data.total_saidas !== undefined ? data.total_saidas : (result[mes_chave]?.totalSaidas || 0);
+        const resultadoFinanceiro = data.resultado_financeiro !== undefined ? data.resultado_financeiro : (totalEntradas - totalSaidas);
+        
+        const resultadoPercent = totalEntradas > 0 ? (resultadoFinanceiro / totalEntradas) * 100 : 0;
+        const monthLabel = `${mes_chave.charAt(0).toUpperCase() + mes_chave.slice(1)}/${year.toString().slice(-2)}`;
+        
+        result[mes_chave] = {
+          monthKey: mes_chave,
+          monthLabel,
+          entradasBancos,
+          entradasTesouraria,
+          totalEntradas,
+          totalSaidas,
+          resultadoFinanceiro,
+          resultadoPercent,
+          estoque: data.estoque !== undefined ? data.estoque : (result[mes_chave]?.estoque || 0),
+          inadimplenciaMensal: data.inadimplencia_mensal !== undefined ? data.inadimplencia_mensal : (result[mes_chave]?.inadimplenciaMensal || 0),
+          inadimplenciaAcumulada: data.inadimplencia_acumulada !== undefined ? data.inadimplencia_acumulada : (result[mes_chave]?.inadimplenciaAcumulada || 0)
+        };
+      });
+    } else if (initialForYear) {
+      // Se não há dados no Firestore ainda para este ano, salva os dados de initialData em background
+      Object.entries(initialForYear).forEach(([mKey, mData]) => {
+        saveFinancialLaunch(year, mKey, mData).catch((err) => console.warn('Erro ao salvar lote inicial financeiro:', err));
+      });
+    }
     
     return result;
   } catch (error) {
     console.error('Error fetching financial data:', error);
-    return {};
+    const initialForYear = INITIAL_FINANCIAL_BY_YEAR[year];
+    if (initialForYear) return initialForYear;
+    const empty: Record<string, FinancialMonthData> = {};
+    ALL_MONTHS.forEach(m => { empty[m] = createEmptyFinancialMonth(m, year); });
+    return empty;
   }
 };
 
@@ -497,3 +563,4 @@ export const checkFirestoreConnection = async (): Promise<{isConnected: boolean;
     return { isConnected: false, error: error.message };
   }
 };
+

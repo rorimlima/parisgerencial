@@ -3,6 +3,7 @@ import {
   Search,
   UserPlus,
   Download,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { Customer } from '../types';
 import { formatCurrency, exportReportToExcel } from '../utils/exportUtils';
@@ -12,12 +13,14 @@ interface CustomerManagementViewProps {
   customers: Customer[];
   onAddCustomer: (customerData: Partial<Customer>) => void;
   userRole: string;
+  onNavigateToImport?: () => void;
 }
 
 export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
   customers,
   onAddCustomer,
   userRole,
+  onNavigateToImport,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'Adimplente' | 'Inadimplente' | 'Risco'>('all');
@@ -122,7 +125,17 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {onNavigateToImport && (
+            <button
+              onClick={onNavigateToImport}
+              className="px-3.5 py-2.5 text-xs font-bold bg-[#C19A6B] text-white hover:bg-[#A88255] rounded-lg shadow-xs transition-all flex items-center gap-2"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-white" />
+              <span>Importar Clientes (Excel/CSV)</span>
+            </button>
+          )}
+
           <button
             onClick={handleExportExcel}
             className="px-4 py-2.5 text-xs font-bold bg-[#F3F1ED] text-[#433E37] hover:bg-[#EAE6DF] rounded-lg shadow-xs transition-all flex items-center gap-2 border border-[#EAE6DF]"

@@ -48,49 +48,64 @@ export const FinancialView: React.FC<FinancialViewProps> = ({
     monthKeys.reduce((acc, m) => acc + (financialMonths[m]?.inadimplenciaAcumulada || 0), 0) / activeCount;
 
   const handleExportPdf = () => {
-    const headers = ['Métrica Financeira', 'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Total Ano'];
+    const headers = [
+      'Métrica Financeira',
+      'Jan',
+      'Fev',
+      'Mar',
+      'Abr',
+      'Mai',
+      'Jun',
+      'Jul',
+      'Ago',
+      'Set',
+      'Out',
+      'Nov',
+      'Dez',
+      'Total Ano',
+    ];
 
     const rows = [
       [
         'ENTRADAS - Bancos',
-        ...['jan', 'fev', 'mar', 'abr', 'mai', 'jun'].map((m) => formatCurrency(financialMonths[m]?.entradasBancos)),
+        ...monthKeys.map((m) => formatCurrency(financialMonths[m]?.entradasBancos)),
         formatCurrency(totalBancos),
       ],
       [
         'ENTRADAS - Tesouraria',
-        ...['jan', 'fev', 'mar', 'abr', 'mai', 'jun'].map((m) => formatCurrency(financialMonths[m]?.entradasTesouraria)),
+        ...monthKeys.map((m) => formatCurrency(financialMonths[m]?.entradasTesouraria)),
         formatCurrency(totalTesouraria),
       ],
       [
         'TOTAL ENTRADAS',
-        ...['jan', 'fev', 'mar', 'abr', 'mai', 'jun'].map((m) => formatCurrency(financialMonths[m]?.totalEntradas)),
+        ...monthKeys.map((m) => formatCurrency(financialMonths[m]?.totalEntradas)),
         formatCurrency(totalEntradas),
       ],
       [
         'TOTAL SAÍDAS',
-        ...['jan', 'fev', 'mar', 'abr', 'mai', 'jun'].map((m) => formatCurrency(financialMonths[m]?.totalSaidas)),
+        ...monthKeys.map((m) => formatCurrency(financialMonths[m]?.totalSaidas)),
         formatCurrency(totalSaidas),
       ],
       [
         'RESULTADO FINANCEIRO',
-        ...['jan', 'fev', 'mar', 'abr', 'mai', 'jun'].map(
+        ...monthKeys.map(
           (m) => `${formatCurrency(financialMonths[m]?.resultadoFinanceiro)} (${formatPercent(financialMonths[m]?.resultadoPercent)})`
         ),
         `${formatCurrency(totalResFin)} (${formatPercent(totalResFinPct)})`,
       ],
       [
         'ESTOQUE (Ativo Circulante)',
-        ...['jan', 'fev', 'mar', 'abr', 'mai', 'jun'].map((m) => formatCurrency(financialMonths[m]?.estoque)),
+        ...monthKeys.map((m) => formatCurrency(financialMonths[m]?.estoque)),
         `Média: ${formatCurrency(avgEstoque)}`,
       ],
       [
         'INADIMPLÊNCIA MENSAL',
-        ...['jan', 'fev', 'mar', 'abr', 'mai', 'jun'].map((m) => formatCurrency(financialMonths[m]?.inadimplenciaMensal)),
+        ...monthKeys.map((m) => formatCurrency(financialMonths[m]?.inadimplenciaMensal)),
         `Média: ${formatCurrency(avgInadMensal)}`,
       ],
       [
         'INADIMPLÊNCIA ACUMULADA',
-        ...['jan', 'fev', 'mar', 'abr', 'mai', 'jun'].map((m) => formatCurrency(financialMonths[m]?.inadimplenciaAcumulada)),
+        ...monthKeys.map((m) => formatCurrency(financialMonths[m]?.inadimplenciaAcumulada)),
         `Média: ${formatCurrency(avgInadAcumulada)}`,
       ],
     ];

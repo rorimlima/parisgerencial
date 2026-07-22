@@ -7,7 +7,6 @@
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
-import { ApiIntegrationDocsView } from './components/ApiIntegrationDocsView';
 import { CustomerManagementView } from './components/CustomerManagementView';
 import { DashboardView } from './components/DashboardView';
 import { DelinquencyReportView } from './components/DelinquencyReportView';
@@ -17,7 +16,6 @@ import { ImportDataView } from './components/ImportDataView';
 import { LaunchModal } from './components/LaunchModal';
 import { LoginModal } from './components/LoginModal';
 import { Navbar } from './components/Navbar';
-import { PostgresSettingsView } from './components/PostgresSettingsView';
 import { Sidebar } from './components/Sidebar';
 
 import {
@@ -34,7 +32,6 @@ import {
   logoutFirebase,
   saveBatchCustomers,
   saveBatchDelinquentTitles,
-  saveDelinquentTitlesBatch,
 } from './firebaseService';
 
 import {
@@ -55,6 +52,7 @@ import {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ViewTab>('dashboard');
+  const [importTargetModule, setImportTargetModule] = useState<'financial' | 'economic' | 'customers' | 'delinquency'>('financial');
   const [selectedYear, setSelectedYear] = useState<number>(2026);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -398,11 +396,13 @@ export default function App() {
   const handleCommitDelinquencyImport = async (
     validEntries: DelinquencyValidationRowResult[]
   ) => {
-    const titlesToSave: Omit<DelinquentTitle, 'id'>[] = validEntries
+    const titlesToSave: DelinquentTitle[] = validEntries
       .filter((e) => e.parsedTitle)
-      .map((e) => ({
+      .map((e, i) => ({
+        id: `imported_${Date.now()}_${i}`,
         titleNumber: e.parsedTitle!.titleNumber || `IMP-${Date.now()}`,
         customerId: e.parsedTitle!.customerId || '',
+        customerCode: e.parsedTitle!.customerCode || '',
         customerName: e.parsedTitle!.customerName || e.rawCustomerName,
         cnpjCpf: e.parsedTitle!.cnpjCpf || e.rawCnpjCpf,
         issueDate: e.parsedTitle!.issueDate || '',
@@ -418,16 +418,8 @@ export default function App() {
     if (titlesToSave.length === 0) return;
 
     try {
-      // Salva no Firestore
-      const result = await saveDelinquentTitlesBatch(titlesToSave);
-      console.log(`Inadimplência importada: ${result.saved} salvos, ${result.errors} erros`);
-
-      // Atualiza a lista local com IDs temporários
-      const newTitles: DelinquentTitle[] = titlesToSave.map((t, i) => ({
-        ...t,
-        id: `imported_${Date.now()}_${i}`,
-      }));
-      setDelinquentTitles((prev) => [...newTitles, ...prev]);
+      await saveBatchDelinquentTitles(titlesToSave);
+      setDelinquentTitles((prev) => [...titlesToSave, ...prev]);
     } catch (err: any) {
       console.error('Erro ao importar inadimplência:', err.message);
     }
@@ -505,8 +497,6 @@ export default function App() {
         currentUser={currentUser}
         onOpenLoginModal={() => setIsLoginModalOpen(true)}
         onOpenLaunchModal={() => setIsLaunchModalOpen(true)}
-        onLogout={handleLogout}
-        dbConnected={true}
       />
 
       <div className="flex-1 flex overflow-hidden">
@@ -554,6 +544,7 @@ export default function App() {
               onCommitImport={handleCommitImport}
               onCommitDelinquencyImport={handleCommitDelinquencyImport}
               selectedYear={selectedYear}
+              initialModule={importTargetModule}
             />
           )}
 

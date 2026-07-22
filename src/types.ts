@@ -11,9 +11,7 @@ export type ViewTab =
   | 'financial'
   | 'import'
   | 'customers'
-  | 'delinquency'
-  | 'api-docs'
-  | 'postgres-settings';
+  | 'delinquency';
 
 export interface User {
   id: string;
