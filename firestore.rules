@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Usuarios - controle de acesso
+    match /usuarios/{userId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Clientes
+    match /clientes/{clienteId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Resultado Economico (DRE)
+    match /resultado_economico/{docId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Resultado Financeiro (Fluxo de Caixa)
+    match /resultado_financeiro/{docId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Titulos Inadimplentes
+    match /titulos_inadimplentes/{tituloId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // API Tokens
+    match /api_tokens/{tokenId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+  }
+}

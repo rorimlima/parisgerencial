@@ -1,0 +1,6 @@
+{
+  "name": "Paris Dakar Gerencial",
+  "description": "Sistema gerencial de resultados financeiros e econômicos com DRE, fluxo de caixa, inadimplência, cadastro de clientes, importação Excel/CSV, relatórios PDF/Excel e API REST.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
