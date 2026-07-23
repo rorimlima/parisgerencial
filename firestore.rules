@@ -36,5 +36,15 @@ service cloud.firestore {
       allow read: if true;
       allow write: if request.auth != null;
     }
+
+    // Extrato Financeiro
+    match /extrato_financeiro/{docId} {
+      allow read, write: if true;
+    }
+
+    // Contas a Pagar
+    match /contas_a_pagar/{docId} {
+      allow read, write: if true;
+    }
   }
 }

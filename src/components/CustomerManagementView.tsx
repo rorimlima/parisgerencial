@@ -279,7 +279,8 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
           <table className="w-full text-left border-collapse text-xs">
             <thead className="bg-[#F9F7F2] text-[#8B7D6B] font-bold border-b border-[#EAE6DF]">
               <tr>
-                <th className="p-3 whitespace-nowrap">Código</th>
+                <th className="p-3 whitespace-nowrap">Chave (cod_cliente)</th>
+                <th className="p-3 text-center whitespace-nowrap">Ações</th>
                 <th className="p-3 whitespace-nowrap">Razão Social</th>
                 <th className="p-3 whitespace-nowrap">Nome Fantasia</th>
                 <th className="p-3 whitespace-nowrap">CNPJ / CPF</th>
@@ -292,45 +293,12 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
                 <th className="p-3 text-right whitespace-nowrap">Saldo Devedor</th>
                 <th className="p-3 text-right whitespace-nowrap">Inadimplência</th>
                 <th className="p-3 text-center whitespace-nowrap">Status</th>
-                <th className="p-3 text-center whitespace-nowrap">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#EAE6DF] text-[#433E37]">
               {filteredCustomers.map((c) => (
                 <tr key={c.id} className="hover:bg-[#FDFBF7] transition-colors">
                   <td className="p-3 font-mono text-[#C19A6B] font-bold whitespace-nowrap">{c.code}</td>
-                  <td className="p-3 text-[#2D2A26] font-semibold whitespace-nowrap">{c.name}</td>
-                  <td className="p-3 text-[#433E37] whitespace-nowrap">{c.tradeName}</td>
-                  <td className="p-3 text-[#433E37] text-[10px] whitespace-nowrap">{c.cnpjCpf}</td>
-                  <td className="p-3 text-[#433E37] whitespace-nowrap">{c.contactName}</td>
-                  <td className="p-3 text-[#433E37] text-[10px] whitespace-nowrap">{c.phone}</td>
-                  <td className="p-3 text-[#433E37] text-[10px] whitespace-nowrap">{c.email}</td>
-                  <td className="p-3 text-[#433E37] whitespace-nowrap">{c.city}</td>
-                  <td className="p-3 text-[#433E37] font-bold whitespace-nowrap">{c.state}</td>
-                  <td className="p-3 text-right font-mono font-semibold text-[#2D2A26] whitespace-nowrap">
-                    {formatCurrency(c.creditLimit)}
-                  </td>
-                  <td className="p-3 text-right font-mono font-semibold text-[#C19A6B] whitespace-nowrap">
-                    {formatCurrency(c.currentBalance)}
-                  </td>
-                  <td className="p-3 text-right font-mono font-bold text-rose-700 whitespace-nowrap">
-                    {c.delinquentAmount > 0 ? formatCurrency(c.delinquentAmount) : '-'}
-                  </td>
-                  <td className="p-3 text-center whitespace-nowrap">
-                    {c.status === 'Adimplente' ? (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                        Adimplente
-                      </span>
-                    ) : c.status === 'Inadimplente' ? (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">
-                        Inadimplente
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#C19A6B]/20 text-[#C19A6B] border border-[#C19A6B]/30">
-                        Risco
-                      </span>
-                    )}
-                  </td>
                   <td className="p-3 text-center whitespace-nowrap">
                     <div className="flex items-center justify-center space-x-1.5">
                       <button
@@ -364,6 +332,38 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
                         </button>
                       )}
                     </div>
+                  </td>
+                  <td className="p-3 text-[#2D2A26] font-semibold whitespace-nowrap">{c.name}</td>
+                  <td className="p-3 text-[#433E37] whitespace-nowrap">{c.tradeName}</td>
+                  <td className="p-3 text-[#433E37] text-[10px] whitespace-nowrap">{c.cnpjCpf}</td>
+                  <td className="p-3 text-[#433E37] whitespace-nowrap">{c.contactName}</td>
+                  <td className="p-3 text-[#433E37] text-[10px] whitespace-nowrap">{c.phone}</td>
+                  <td className="p-3 text-[#433E37] text-[10px] whitespace-nowrap">{c.email}</td>
+                  <td className="p-3 text-[#433E37] whitespace-nowrap">{c.city}</td>
+                  <td className="p-3 text-[#433E37] font-bold whitespace-nowrap">{c.state}</td>
+                  <td className="p-3 text-right font-mono font-semibold text-[#2D2A26] whitespace-nowrap">
+                    {formatCurrency(c.creditLimit)}
+                  </td>
+                  <td className="p-3 text-right font-mono font-semibold text-[#C19A6B] whitespace-nowrap">
+                    {formatCurrency(c.currentBalance)}
+                  </td>
+                  <td className="p-3 text-right font-mono font-bold text-rose-700 whitespace-nowrap">
+                    {c.delinquentAmount > 0 ? formatCurrency(c.delinquentAmount) : '-'}
+                  </td>
+                  <td className="p-3 text-center whitespace-nowrap">
+                    {c.status === 'Adimplente' ? (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                        Adimplente
+                      </span>
+                    ) : c.status === 'Inadimplente' ? (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">
+                        Inadimplente
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#C19A6B]/20 text-[#C19A6B] border border-[#C19A6B]/30">
+                        Risco
+                      </span>
+                    )}
                   </td>
                 </tr>
               ))}
