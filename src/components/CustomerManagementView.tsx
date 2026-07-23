@@ -4,14 +4,20 @@ import {
   UserPlus,
   Download,
   FileSpreadsheet,
+  Edit2,
+  Trash2,
+  AlertTriangle,
+  X,
+  Check,
 } from 'lucide-react';
 import { Customer } from '../types';
 import { formatCurrency, exportReportToExcel } from '../utils/exportUtils';
-import * as XLSX from 'xlsx';
 
 interface CustomerManagementViewProps {
   customers: Customer[];
   onAddCustomer: (customerData: Partial<Customer>) => void;
+  onUpdateCustomer?: (id: string, customerData: Partial<Customer>) => void;
+  onDeleteCustomer?: (id: string) => void;
   userRole: string;
   onNavigateToImport?: () => void;
 }
@@ -19,12 +25,16 @@ interface CustomerManagementViewProps {
 export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
   customers,
   onAddCustomer,
+  onUpdateCustomer,
+  onDeleteCustomer,
   userRole,
   onNavigateToImport,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'Adimplente' | 'Inadimplente' | 'Risco'>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   // Form State
   const [code, setCode] = useState('');
@@ -45,7 +55,7 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
     const matchesSearch =
       c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       c.cnpjCpf.includes(searchTerm) ||
-      c.code.toLowerCase().includes(searchTerm.toLowerCase());
+      (c.code && c.code.toLowerCase().includes(searchTerm.toLowerCase()));
     const matchesStatus = statusFilter === 'all' || c.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
@@ -54,9 +64,45 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
   const totalBalance = customers.reduce((acc, c) => acc + c.currentBalance, 0);
   const totalDelinquent = customers.reduce((acc, c) => acc + c.delinquentAmount, 0);
 
-  const handleSubmitNewCustomer = (e: React.FormEvent) => {
+  const handleOpenAddModal = () => {
+    setEditingCustomer(null);
+    setCode(`CLI${String(customers.length + 1).padStart(3, '0')}`);
+    setName('');
+    setTradeName('');
+    setCnpjCpf('');
+    setContactName('');
+    setPhone('');
+    setEmail('');
+    setCity('');
+    setState('');
+    setCreditLimit('0');
+    setCurrentBalance('0');
+    setDelinquentAmount('0');
+    setStatus('Adimplente');
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEditModal = (customer: Customer) => {
+    setEditingCustomer(customer);
+    setCode(customer.code || '');
+    setName(customer.name || '');
+    setTradeName(customer.tradeName || '');
+    setCnpjCpf(customer.cnpjCpf || '');
+    setContactName(customer.contactName || '');
+    setPhone(customer.phone || '');
+    setEmail(customer.email || '');
+    setCity(customer.city || '');
+    setState(customer.state || '');
+    setCreditLimit(String(customer.creditLimit || 0));
+    setCurrentBalance(String(customer.currentBalance || 0));
+    setDelinquentAmount(String(customer.delinquentAmount || 0));
+    setStatus(customer.status || 'Adimplente');
+    setIsModalOpen(true);
+  };
+
+  const handleSubmitCustomer = (e: React.FormEvent) => {
     e.preventDefault();
-    onAddCustomer({
+    const customerData: Partial<Customer> = {
       code,
       name,
       tradeName,
@@ -70,22 +116,22 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
       currentBalance: parseFloat(currentBalance || '0'),
       delinquentAmount: parseFloat(delinquentAmount || '0'),
       status: status as any,
-    });
+    };
+
+    if (editingCustomer && onUpdateCustomer) {
+      onUpdateCustomer(editingCustomer.id, customerData);
+    } else {
+      onAddCustomer(customerData);
+    }
+
     setIsModalOpen(false);
-    // Reset
-    setCode('');
-    setName('');
-    setTradeName('');
-    setCnpjCpf('');
-    setContactName('');
-    setPhone('');
-    setEmail('');
-    setCity('');
-    setState('');
-    setCreditLimit('');
-    setCurrentBalance('');
-    setDelinquentAmount('');
-    setStatus('Adimplente');
+  };
+
+  const handleConfirmDelete = (id: string) => {
+    if (onDeleteCustomer) {
+      onDeleteCustomer(id);
+    }
+    setDeleteConfirmId(null);
   };
 
   const handleExportExcel = () => {
@@ -227,12 +273,13 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
                 <th className="p-3 text-right whitespace-nowrap">Saldo Devedor</th>
                 <th className="p-3 text-right whitespace-nowrap">Inadimplência</th>
                 <th className="p-3 text-center whitespace-nowrap">Status</th>
+                <th className="p-3 text-center whitespace-nowrap">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#EAE6DF] text-[#433E37]">
               {filteredCustomers.map((c) => (
                 <tr key={c.id} className="hover:bg-[#FDFBF7] transition-colors">
-                  <td className="p-3 font-mono text-[#2D2A26] font-bold whitespace-nowrap">{c.code}</td>
+                  <td className="p-3 font-mono text-[#C19A6B] font-bold whitespace-nowrap">{c.code}</td>
                   <td className="p-3 text-[#2D2A26] font-semibold whitespace-nowrap">{c.name}</td>
                   <td className="p-3 text-[#433E37] whitespace-nowrap">{c.tradeName}</td>
                   <td className="p-3 text-[#433E37] text-[10px] whitespace-nowrap">{c.cnpjCpf}</td>
@@ -265,6 +312,26 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
                       </span>
                     )}
                   </td>
+                  <td className="p-3 text-center whitespace-nowrap">
+                    <div className="flex items-center justify-center space-x-1.5">
+                      <button
+                        onClick={() => handleOpenEditModal(c)}
+                        title="Editar Cliente e Limite"
+                        className="p-1.5 rounded-lg bg-[#F3F1ED] hover:bg-[#C19A6B] text-[#433E37] hover:text-white transition-colors"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      {userRole === 'admin' && (
+                        <button
+                          onClick={() => setDeleteConfirmId(c.id)}
+                          title="Excluir Cliente"
+                          className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -276,28 +343,35 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
       {isModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white border border-[#EAE6DF] rounded-xl w-full max-w-2xl shadow-xl flex flex-col text-[#2D2A26]" style={{ maxHeight: '90vh' }}>
-            <div className="p-6 border-b border-[#EAE6DF]">
+            <div className="p-6 border-b border-[#EAE6DF] flex items-center justify-between">
               <h3 className="text-base font-bold flex items-center gap-2">
                 <UserPlus className="w-5 h-5 text-[#C19A6B]" />
-                Cadastrar Novo Cliente
+                {editingCustomer ? 'Editar Cliente & Limites' : 'Cadastrar Novo Cliente'}
               </h3>
+              <button
+                onClick={() => setIsModalOpen(false)}
+                className="text-[#8B7D6B] hover:text-[#2D2A26]"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
 
             <div className="p-6 overflow-y-auto">
-              <form id="new-customer-form" onSubmit={handleSubmitNewCustomer} className="space-y-4">
+              <form id="new-customer-form" onSubmit={handleSubmitCustomer} className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Código</label>
+                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Código (cod_cliente) *</label>
                     <input
                       type="text"
-                      placeholder="Ex: 00100"
+                      required
+                      placeholder="Ex: CLI001"
                       value={code}
                       onChange={(e) => setCode(e.target.value)}
-                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B]"
+                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] font-mono focus:outline-none focus:border-[#C19A6B]"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Razão Social</label>
+                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Razão Social *</label>
                     <input
                       type="text"
                       required
@@ -324,7 +398,6 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
                     <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">CNPJ / CPF</label>
                     <input
                       type="text"
-                      required
                       placeholder="00.000.000/0001-00"
                       value={cnpjCpf}
                       onChange={(e) => setCnpjCpf(e.target.value)}
@@ -392,13 +465,13 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
 
                 <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 pt-2">
                   <div>
-                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Lim. Crédito (R$)</label>
+                    <label className="block text-xs font-bold text-[#C19A6B] mb-1">Lim. Crédito (R$) *</label>
                     <input
                       type="text"
                       placeholder="100000.00"
                       value={creditLimit}
                       onChange={(e) => setCreditLimit(e.target.value)}
-                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] font-mono focus:outline-none focus:border-[#C19A6B]"
+                      className="w-full bg-white border-2 border-[#C19A6B]/50 rounded-lg p-2.5 text-xs text-[#2D2A26] font-mono font-bold focus:outline-none focus:border-[#C19A6B]"
                     />
                   </div>
                   <div>
@@ -426,7 +499,7 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
                     <select
                       value={status}
                       onChange={(e) => setStatus(e.target.value)}
-                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B]"
+                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] font-bold focus:outline-none focus:border-[#C19A6B]"
                     >
                       <option value="Adimplente">Adimplente</option>
                       <option value="Inadimplente">Inadimplente</option>
@@ -448,9 +521,41 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
               <button
                 type="submit"
                 form="new-customer-form"
-                className="px-5 py-2 text-xs font-bold bg-[#2D2A26] hover:bg-[#3F3B35] text-white rounded-lg shadow-xs transition-colors"
+                className="flex items-center space-x-1.5 px-5 py-2 text-xs font-bold bg-[#2D2A26] hover:bg-[#3F3B35] text-white rounded-lg shadow-xs transition-colors"
               >
-                Salvar Cliente
+                <Check className="w-4 h-4 text-[#C19A6B]" />
+                <span>{editingCustomer ? 'Salvar Alterações' : 'Salvar Cliente'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmação de Exclusão */}
+      {deleteConfirmId && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-rose-200 rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4 text-center">
+            <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mx-auto border border-rose-100">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <div>
+              <h4 className="text-base font-black text-[#2D2A26]">Excluir Cliente?</h4>
+              <p className="text-xs text-[#8B7D6B] mt-1">
+                Esta ação excluirá o cliente do cadastro e do banco de dados. Títulos associados não serão removidos.
+              </p>
+            </div>
+            <div className="flex items-center justify-center space-x-3 pt-2">
+              <button
+                onClick={() => setDeleteConfirmId(null)}
+                className="px-4 py-2 text-xs font-bold bg-[#F3F1ED] text-[#433E37] rounded-lg hover:bg-gray-200"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => handleConfirmDelete(deleteConfirmId)}
+                className="px-4 py-2 text-xs font-bold bg-rose-700 text-white rounded-lg hover:bg-rose-800"
+              >
+                Sim, Excluir
               </button>
             </div>
           </div>

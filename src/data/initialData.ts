@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Customer, DelinquentTitle, EconomicMonthData, FinancialMonthData, User } from '../types';
+import { Customer, DelinquentTitle, EconomicMonthData, FinancialMonthData, Seller, User } from '../types';
 
 export const MONTH_NAMES: Record<string, string> = {
   jan: 'Janeiro',
@@ -927,3 +927,31 @@ export const INITIAL_API_TOKENS = [
     status: 'active' as const,
   },
 ];
+
+export const INITIAL_SELLERS: Seller[] = [
+  {
+    id: 'vend-001',
+    code: 'VEND001',
+    name: 'Marcos Vinícius Silva',
+    email: 'marcos.vendedor@parisdakar.com.br',
+    phone: '(11) 97111-2233',
+    status: 'Ativo',
+  },
+  {
+    id: 'vend-002',
+    code: 'VEND002',
+    name: 'Camila Albuquerque',
+    email: 'camila.vendedora@parisdakar.com.br',
+    phone: '(21) 98222-3344',
+    status: 'Ativo',
+  },
+  {
+    id: 'vend-003',
+    code: 'VEND003',
+    name: 'Rodrigo Santoro',
+    email: 'rodrigo.vendedor@parisdakar.com.br',
+    phone: '(31) 99333-4455',
+    status: 'Ativo',
+  },
+];
+

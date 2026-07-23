@@ -331,6 +331,16 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
         row['Cod'] || row['cod'] || ''
       ).toString().trim();
 
+      const rawSellerName = (
+        row['vendedor'] || row['Vendedor'] || row['VENDEDOR'] || row['vendedor_nome'] ||
+        row['Nome Vendedor'] || row['Vendedor Responsável'] || ''
+      ).toString().trim();
+
+      const rawSellerCode = (
+        row['cod_vendedor'] || row['Cod Vendedor'] || row['COD_VENDEDOR'] ||
+        row['codigo_vendedor'] || row['Código Vendedor'] || row['cod_vend'] || ''
+      ).toString().trim();
+
       const rawCnpjCpf = (
         row['cnpj_cpf'] || row['CNPJ'] || row['CPF'] || row['cnpj'] || row['cpf'] ||
         row['CNPJ/CPF'] || row['cnpj_cpf'] || ''
@@ -402,6 +412,8 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
         titleNumber: rawTitleNumber || `IMP-${String(idx + 1).padStart(4, '0')}`,
         customerName: rawCustomerName,
         customerCode: rawCustomerCode,
+        sellerName: rawSellerName,
+        sellerCode: rawSellerCode,
         cnpjCpf: rawCnpjCpf,
         issueDate: rawIssueDate,
         dueDate: rawDueDate,
@@ -418,6 +430,8 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
         rawTitleNumber,
         rawCustomerName,
         rawCustomerCode,
+        rawSellerName,
+        rawSellerCode,
         rawCnpjCpf,
         rawIssueDate,
         rawDueDate,

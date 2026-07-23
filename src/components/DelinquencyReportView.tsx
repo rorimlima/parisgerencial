@@ -22,20 +22,29 @@ interface DelinquencyReportViewProps {
   titles: DelinquentTitle[];
   selectedYear: number;
   onNavigateToImport?: () => void;
+  onClearDelinquency?: () => void;
 }
 
 export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
   titles,
   selectedYear,
   onNavigateToImport,
+  onClearDelinquency,
 }) => {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [agingFilter, setAgingFilter] = useState<string>('all');
+  const [sellerFilter, setSellerFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
 
   const totalDelinquent = titles.reduce((acc, t) => acc + t.updatedAmount, 0);
   const uniqueCustomersCount = new Set(titles.map((t) => t.customerCode)).size;
   const averageTicket = titles.length > 0 ? totalDelinquent / titles.length : 0;
+
+  // Lista de vendedores únicos presentes nos títulos
+  const uniqueSellers = Array.from(
+    new Set(titles.map((t) => t.sellerName).filter(Boolean))
+  );
 
   const agingBuckets = {
     '1-30': titles.filter((t) => t.agingBucket === '1-30').reduce((a, b) => a + b.updatedAmount, 0),
@@ -47,11 +56,13 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
   const filteredTitles = titles.filter((t) => {
     const matchesStatus = statusFilter === 'all' || t.collectionStatus === statusFilter;
     const matchesAging = agingFilter === 'all' || t.agingBucket === agingFilter;
+    const matchesSeller = sellerFilter === 'all' || t.sellerName === sellerFilter;
     const matchesSearch =
       searchQuery === '' ||
       (t.customerCode && t.customerCode.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (t.customerName && t.customerName.toLowerCase().includes(searchQuery.toLowerCase()));
-    return matchesStatus && matchesAging && matchesSearch;
+      (t.customerName && t.customerName.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      (t.sellerName && t.sellerName.toLowerCase().includes(searchQuery.toLowerCase()));
+    return matchesStatus && matchesAging && matchesSeller && matchesSearch;
   });
 
   const handleExportPdf = () => {
@@ -135,6 +146,16 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {onClearDelinquency && (
+            <button
+              onClick={() => setIsClearConfirmOpen(true)}
+              className="px-3.5 py-2 text-xs font-bold bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 rounded-lg shadow-xs transition-all flex items-center gap-1.5"
+            >
+              <AlertCircle className="w-4 h-4 text-rose-600" />
+              <span>Zerar Inadimplência</span>
+            </button>
+          )}
+
           {onNavigateToImport && (
             <button
               onClick={onNavigateToImport}
@@ -226,15 +247,33 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
           </div>
           <input
             type="text"
-            placeholder="Buscar por código ou nome..."
+            placeholder="Buscar por cliente, vendedor ou código..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full bg-[#F9F7F2] border border-[#EAE6DF] text-xs text-[#2D2A26] rounded-lg pl-9 pr-3 py-2.5 font-medium focus:outline-none focus:border-[#C19A6B]"
           />
         </div>
 
-        {/* Status and Aging Filters */}
+        {/* Status, Aging and Seller Filters */}
         <div className="flex flex-col sm:flex-row items-center space-y-3 sm:space-y-0 sm:space-x-4 w-full md:w-auto">
+          {uniqueSellers.length > 0 && (
+            <div className="flex items-center space-x-2 w-full sm:w-auto">
+              <span className="text-xs font-bold text-[#2D2A26] whitespace-nowrap">Vendedor:</span>
+              <select
+                value={sellerFilter}
+                onChange={(e) => setSellerFilter(e.target.value)}
+                className="bg-[#F9F7F2] border border-[#EAE6DF] text-xs text-[#2D2A26] rounded-lg p-2 font-medium focus:outline-none focus:border-[#C19A6B] w-full sm:w-auto"
+              >
+                <option value="all">Todos os Vendedores</option>
+                {uniqueSellers.map((seller) => (
+                  <option key={seller} value={seller}>
+                    {seller}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div className="flex items-center space-x-2 w-full sm:w-auto">
             <Filter className="w-4 h-4 text-[#C19A6B] hidden sm:block" />
             <span className="text-xs font-bold text-[#2D2A26] whitespace-nowrap">Faixa de Atraso:</span>
@@ -274,9 +313,10 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
           <table className="w-full text-left border-collapse text-xs">
             <thead className="bg-[#F9F7F2] text-[#8B7D6B] font-bold border-b border-[#EAE6DF]">
               <tr>
-                <th className="p-3">Código do Cliente</th>
+                <th className="p-3">Código Cliente</th>
                 <th className="p-3">Nº Título</th>
                 <th className="p-3">Cliente / CNPJ</th>
+                <th className="p-3">Vendedor Responsável</th>
                 <th className="p-3">Emissão / Vencimento</th>
                 <th className="p-3 text-center">Dias Atraso</th>
                 <th className="p-3 text-right">Valor Original</th>
@@ -288,11 +328,14 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
             <tbody className="divide-y divide-[#EAE6DF] text-[#433E37]">
               {filteredTitles.map((t) => (
                 <tr key={t.id} className="hover:bg-[#FDFBF7] transition-colors">
-                  <td className="p-3 font-mono font-bold text-[#2D2A26]">{t.customerCode}</td>
-                  <td className="p-3 font-mono font-bold text-[#C19A6B]">{t.titleNumber}</td>
+                  <td className="p-3 font-mono font-bold text-[#C19A6B]">{t.customerCode}</td>
+                  <td className="p-3 font-mono font-bold text-[#2D2A26]">{t.titleNumber}</td>
                   <td className="p-3">
                     <p className="font-bold text-[#2D2A26]">{t.customerName}</p>
                     <p className="text-[10px] text-[#8B7D6B] font-mono">{t.cnpjCpf}</p>
+                  </td>
+                  <td className="p-3 font-semibold text-[#2D2A26]">
+                    {t.sellerName || <span className="text-[#8B7D6B] font-normal">-</span>}
                   </td>
                   <td className="p-3 font-mono">
                     <p className="text-[#433E37]">Venc: {t.dueDate}</p>
@@ -321,6 +364,40 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Modal de Confirmação de Zerar Inadimplência */}
+      {isClearConfirmOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-rose-200 rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4 text-center">
+            <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mx-auto border border-rose-100">
+              <AlertCircle className="w-6 h-6" />
+            </div>
+            <div>
+              <h4 className="text-base font-black text-[#2D2A26]">Zerar Inadimplência?</h4>
+              <p className="text-xs text-[#8B7D6B] mt-1">
+                Esta ação limpará todos os títulos de inadimplência cadastrados para que você possa importar uma nova lista zerada.
+              </p>
+            </div>
+            <div className="flex items-center justify-center space-x-3 pt-2">
+              <button
+                onClick={() => setIsClearConfirmOpen(false)}
+                className="px-4 py-2 text-xs font-bold bg-[#F3F1ED] text-[#433E37] rounded-lg hover:bg-gray-200"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => {
+                  if (onClearDelinquency) onClearDelinquency();
+                  setIsClearConfirmOpen(false);
+                }}
+                className="px-4 py-2 text-xs font-bold bg-rose-700 text-white rounded-lg hover:bg-rose-800"
+              >
+                Sim, Zerar Dados
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -9,16 +9,18 @@ import {
   doc, 
   addDoc, 
   updateDoc,
+  deleteDoc,
   limit 
 } from 'firebase/firestore';
 import { firebaseConfig } from '../firebaseConfig';
-import { INITIAL_ECONOMIC_BY_YEAR, INITIAL_FINANCIAL_BY_YEAR } from '../data/initialData';
+import { INITIAL_ECONOMIC_BY_YEAR, INITIAL_FINANCIAL_BY_YEAR, INITIAL_SELLERS } from '../data/initialData';
 import {
   User,
   EconomicMonthData,
   FinancialMonthData,
   Customer,
   DelinquentTitle,
+  Seller,
   ApiToken
 } from '../types';
 
@@ -319,20 +321,59 @@ export const addCustomer = async (customer: Customer): Promise<void> => {
   }
 };
 
+export const updateCustomer = async (id: string, customer: Partial<Customer>): Promise<void> => {
+  try {
+    const db = getFirestoreDb();
+    const docRef = doc(db, 'clientes', id);
+    const firestoreData: any = {};
+    if (customer.code !== undefined) firestoreData.codigo = customer.code;
+    if (customer.name !== undefined) firestoreData.razao_social = customer.name;
+    if (customer.tradeName !== undefined) firestoreData.nome_fantasia = customer.tradeName;
+    if (customer.cnpjCpf !== undefined) firestoreData.cnpj_cpf = customer.cnpjCpf;
+    if (customer.contactName !== undefined) firestoreData.contato_nome = customer.contactName;
+    if (customer.phone !== undefined) firestoreData.telefone = customer.phone;
+    if (customer.email !== undefined) firestoreData.email = customer.email;
+    if (customer.city !== undefined) firestoreData.cidade = customer.city;
+    if (customer.state !== undefined) firestoreData.estado = customer.state;
+    if (customer.creditLimit !== undefined) firestoreData.limite_credito = customer.creditLimit;
+    if (customer.currentBalance !== undefined) firestoreData.saldo_atual = customer.currentBalance;
+    if (customer.delinquentAmount !== undefined) firestoreData.valor_inadimplente = customer.delinquentAmount;
+    if (customer.status !== undefined) firestoreData.status = customer.status;
+
+    await updateDoc(docRef, firestoreData);
+  } catch (error) {
+    console.error('Error updating customer:', error);
+    throw error;
+  }
+};
+
+export const deleteCustomer = async (id: string): Promise<void> => {
+  try {
+    const db = getFirestoreDb();
+    await deleteDoc(doc(db, 'clientes', id));
+  } catch (error) {
+    console.error('Error deleting customer:', error);
+    throw error;
+  }
+};
+
 // --- Delinquent Titles ---
 export const fetchDelinquentTitles = async (): Promise<DelinquentTitle[]> => {
   try {
     const db = getFirestoreDb();
     const snapshot = await getDocs(collection(db, 'titulos_inadimplentes'));
     
-    return snapshot.docs.map(doc => {
-      const data = doc.data();
+    return snapshot.docs.map(docSnap => {
+      const data = docSnap.data();
       return {
-        id: doc.id,
+        id: docSnap.id,
         titleNumber: data.numero_titulo || '',
         customerId: data.cliente_id || '',
-        customerCode: data.codigo_cliente || '',
+        customerCode: data.codigo_cliente || data.customerCode || '',
         customerName: data.cliente_nome || '',
+        sellerId: data.vendedor_id || data.sellerId || '',
+        sellerCode: data.codigo_vendedor || data.sellerCode || '',
+        sellerName: data.vendedor_nome || data.sellerName || '',
         cnpjCpf: data.cnpj_cpf || '',
         issueDate: data.data_emissao || '',
         dueDate: data.data_vencimento || '',
@@ -347,6 +388,18 @@ export const fetchDelinquentTitles = async (): Promise<DelinquentTitle[]> => {
   } catch (error) {
     console.error('Error fetching delinquent titles:', error);
     return [];
+  }
+};
+
+export const clearAllDelinquentTitles = async (): Promise<void> => {
+  try {
+    const db = getFirestoreDb();
+    const snapshot = await getDocs(collection(db, 'titulos_inadimplentes'));
+    const deletePromises = snapshot.docs.map(d => deleteDoc(doc(db, 'titulos_inadimplentes', d.id)));
+    await Promise.all(deletePromises);
+  } catch (error) {
+    console.error('Error clearing delinquent titles:', error);
+    throw error;
   }
 };
 
@@ -381,7 +434,11 @@ export const saveDelinquentTitle = async (title: Omit<DelinquentTitle, 'id'>): P
     const firestoreData = {
       numero_titulo: title.titleNumber,
       cliente_id: title.customerId || '',
+      codigo_cliente: title.customerCode || '',
       cliente_nome: title.customerName,
+      vendedor_id: title.sellerId || '',
+      codigo_vendedor: title.sellerCode || '',
+      vendedor_nome: title.sellerName || '',
       cnpj_cpf: title.cnpjCpf,
       data_emissao: title.issueDate || '',
       data_vencimento: title.dueDate,
@@ -438,7 +495,11 @@ export const addDelinquentTitle = async (title: DelinquentTitle): Promise<void> 
     const firestoreData = {
       numero_titulo: title.titleNumber,
       cliente_id: title.customerId,
+      codigo_cliente: title.customerCode || '',
       cliente_nome: title.customerName,
+      vendedor_id: title.sellerId || '',
+      codigo_vendedor: title.sellerCode || '',
+      vendedor_nome: title.sellerName || '',
       cnpj_cpf: title.cnpjCpf,
       data_emissao: title.issueDate,
       data_vencimento: title.dueDate,
@@ -490,7 +551,11 @@ export const saveBatchDelinquentTitles = async (titles: DelinquentTitle[]): Prom
       const firestoreData = {
         numero_titulo: title.titleNumber,
         cliente_id: title.customerId,
+        codigo_cliente: title.customerCode || '',
         cliente_nome: title.customerName,
+        vendedor_id: title.sellerId || '',
+        codigo_vendedor: title.sellerCode || '',
+        vendedor_nome: title.sellerName || '',
         cnpj_cpf: title.cnpjCpf,
         data_emissao: title.issueDate,
         data_vencimento: title.dueDate,
@@ -505,6 +570,79 @@ export const saveBatchDelinquentTitles = async (titles: DelinquentTitle[]): Prom
     } catch (error) {
       console.error('Error saving batch title:', title.titleNumber, error);
     }
+  }
+};
+
+// --- Sellers ---
+export const fetchSellers = async (): Promise<Seller[]> => {
+  try {
+    const db = getFirestoreDb();
+    const snapshot = await getDocs(collection(db, 'vendedores'));
+    if (snapshot.empty) {
+      return INITIAL_SELLERS;
+    }
+    return snapshot.docs.map(docSnap => {
+      const data = docSnap.data();
+      return {
+        id: docSnap.id,
+        code: data.codigo || data.code || '',
+        name: data.nome || data.name || '',
+        email: data.email || '',
+        phone: data.telefone || data.phone || '',
+        status: data.status || 'Ativo',
+        totalDelinquentAmount: data.total_inadimplente || 0,
+      };
+    });
+  } catch (error) {
+    console.error('Error fetching sellers:', error);
+    return INITIAL_SELLERS;
+  }
+};
+
+export const addSeller = async (seller: Seller): Promise<string> => {
+  try {
+    const db = getFirestoreDb();
+    const firestoreData = {
+      codigo: seller.code,
+      nome: seller.name,
+      email: seller.email || '',
+      telefone: seller.phone || '',
+      status: seller.status || 'Ativo',
+      criado_em: new Date().toISOString(),
+    };
+    const docRef = await addDoc(collection(db, 'vendedores'), firestoreData);
+    return docRef.id;
+  } catch (error) {
+    console.error('Error adding seller:', error);
+    throw error;
+  }
+};
+
+export const updateSeller = async (id: string, seller: Partial<Seller>): Promise<void> => {
+  try {
+    const db = getFirestoreDb();
+    const docRef = doc(db, 'vendedores', id);
+    const firestoreData: any = {};
+    if (seller.code !== undefined) firestoreData.codigo = seller.code;
+    if (seller.name !== undefined) firestoreData.nome = seller.name;
+    if (seller.email !== undefined) firestoreData.email = seller.email;
+    if (seller.phone !== undefined) firestoreData.telefone = seller.phone;
+    if (seller.status !== undefined) firestoreData.status = seller.status;
+
+    await updateDoc(docRef, firestoreData);
+  } catch (error) {
+    console.error('Error updating seller:', error);
+    throw error;
+  }
+};
+
+export const deleteSeller = async (id: string): Promise<void> => {
+  try {
+    const db = getFirestoreDb();
+    await deleteDoc(doc(db, 'vendedores', id));
+  } catch (error) {
+    console.error('Error deleting seller:', error);
+    throw error;
   }
 };
 

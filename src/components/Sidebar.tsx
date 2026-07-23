@@ -13,6 +13,7 @@ import {
   LayoutDashboard,
   PlusCircle,
   Users,
+  Briefcase,
   AlertTriangle,
   ArrowUpRight,
 } from 'lucide-react';
@@ -71,6 +72,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Cadastro de Clientes',
       icon: Users,
       description: 'Gestão de carteira e limites de crédito',
+    },
+    {
+      id: 'sellers' as ViewTab,
+      label: 'Gestão de Vendedores',
+      icon: Briefcase,
+      description: 'Cadastro de equipe e vinculo de cobrança',
     },
     {
       id: 'delinquency' as ViewTab,

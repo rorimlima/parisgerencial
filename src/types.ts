@@ -11,7 +11,20 @@ export type ViewTab =
   | 'financial'
   | 'import'
   | 'customers'
-  | 'delinquency';
+  | 'delinquency'
+  | 'sellers'
+  | 'api-docs'
+  | 'postgres-settings';
+
+export interface Seller {
+  id: string;
+  code: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  status: 'Ativo' | 'Inativo';
+  totalDelinquentAmount?: number;
+}
 
 export interface User {
   id: string;
@@ -104,6 +117,9 @@ export interface DelinquentTitle {
   customerId: string;
   customerCode: string;
   customerName: string;
+  sellerId?: string;
+  sellerCode?: string;
+  sellerName?: string;
   cnpjCpf: string;
   issueDate: string;
   dueDate: string;
@@ -164,6 +180,8 @@ export interface DelinquencyValidationRowResult {
   rawTitleNumber: string;    // Nº do título
   rawCustomerName: string;  // Nome do cliente (coluna Devedor ou Cliente)
   rawCustomerCode: string;  // Código do cliente para vínculo (coluna cod_cliente)
+  rawSellerName: string;    // Nome do vendedor (coluna Vendedor)
+  rawSellerCode: string;    // Código do vendedor (coluna cod_vendedor)
   rawCnpjCpf: string;       // CNPJ/CPF
   rawIssueDate: string;     // Data de emissão
   rawDueDate: string;       // Data de vencimento

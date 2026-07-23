@@ -8,20 +8,27 @@ import {
   fetchFinancialData,
   fetchCustomers,
   fetchDelinquentTitles,
+  fetchSellers,
   fetchApiTokens,
   fetchUsers,
   saveEconomicLaunch,
   saveFinancialLaunch,
   addCustomer,
+  updateCustomer as _updateCustomer,
+  deleteCustomer as _deleteCustomer,
+  addSeller as _addSeller,
+  updateSeller as _updateSeller,
+  deleteSeller as _deleteSeller,
   addDelinquentTitle,
   addApiToken,
   checkFirestoreConnection,
+  clearAllDelinquentTitles as _clearAllDelinquentTitles,
   saveBatchCustomers as _saveBatchCustomers,
   saveBatchDelinquentTitles as _saveBatchDelinquentTitles,
   saveDelinquentTitlesBatch as _saveDelinquentTitlesBatch,
 } from './services/firebaseService';
 
-import { ApiToken, Customer, DelinquentTitle, EconomicMonthData, FinancialMonthData, User } from './types';
+import { ApiToken, Customer, DelinquentTitle, EconomicMonthData, FinancialMonthData, Seller, User } from './types';
 
 // Inicializa Firebase ao carregar o módulo
 initFirebase();
@@ -31,6 +38,7 @@ export const getEconomicData = fetchEconomicData;
 export const getFinancialData = fetchFinancialData;
 export const getClientes = fetchCustomers;
 export const getTitulosInadimplentes = fetchDelinquentTitles;
+export const getVendedores = fetchSellers;
 export const getApiTokens = fetchApiTokens;
 export const getUsuarios = fetchUsers;
 
@@ -54,6 +62,15 @@ export const saveFinancialMonth = async (
 export const saveCliente = async (customer: Customer): Promise<void> => {
   await addCustomer(customer);
 };
+
+export const updateCliente = _updateCustomer;
+export const deleteCliente = _deleteCustomer;
+
+export const saveVendedor = _addSeller;
+export const updateVendedor = _updateSeller;
+export const deleteVendedor = _deleteSeller;
+
+export const clearInadimplencia = _clearAllDelinquentTitles;
 
 export const createApiToken = async (name: string): Promise<ApiToken> => {
   const newToken: ApiToken = {
@@ -99,3 +116,4 @@ export const saveBatchCustomers = _saveBatchCustomers;
 export const saveBatchDelinquentTitles = _saveBatchDelinquentTitles;
 export const saveDelinquentTitle = addDelinquentTitle;
 export const saveDelinquentTitlesBatch = _saveDelinquentTitlesBatch;
+

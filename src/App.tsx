@@ -18,16 +18,24 @@ import { LoginModal } from './components/LoginModal';
 import { Navbar } from './components/Navbar';
 import { PwaInstallBanner } from './components/PwaBanners';
 import { Sidebar } from './components/Sidebar';
+import { SellersManagementView } from './components/SellersManagementView';
 
 import {
   getEconomicData,
   getFinancialData,
   getClientes,
   getTitulosInadimplentes,
+  getVendedores,
   getApiTokens,
   saveEconomicMonth,
   saveFinancialMonth,
   saveCliente,
+  updateCliente,
+  deleteCliente,
+  saveVendedor,
+  updateVendedor,
+  deleteVendedor,
+  clearInadimplencia,
   createApiToken,
   loginFirebase,
   logoutFirebase,
@@ -43,6 +51,7 @@ import {
   EconomicMonthData,
   FinancialMonthData,
   PostgresConfig,
+  Seller,
   UserRole,
   ValidationRowResult,
   ViewTab,
@@ -73,6 +82,7 @@ export default function App() {
   const [financialData, setFinancialData] = useState<Record<string, FinancialMonthData>>({});
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [delinquentTitles, setDelinquentTitles] = useState<DelinquentTitle[]>([]);
+  const [sellers, setSellers] = useState<Seller[]>([]);
   const [apiTokens, setApiTokens] = useState<ApiToken[]>([]);
   const [loginError, setLoginError] = useState<string>('');
 
@@ -90,17 +100,19 @@ export default function App() {
   const loadAllData = useCallback(async (year: number) => {
     setIsLoading(true);
     try {
-      const [ecoData, finData, cliData, titData, tokData] = await Promise.all([
+      const [ecoData, finData, cliData, titData, vendData, tokData] = await Promise.all([
         getEconomicData(year),
         getFinancialData(year),
         getClientes(),
         getTitulosInadimplentes(),
+        getVendedores(),
         getApiTokens(),
       ]);
       setEconomicData(ecoData);
       setFinancialData(finData);
       setCustomers(cliData);
       setDelinquentTitles(titData);
+      setSellers(vendData);
       setApiTokens(tokData);
     } catch (err: any) {
       console.error('Erro ao carregar dados do Firestore:', err.message);
@@ -450,7 +462,7 @@ export default function App() {
   const handleAddCustomer = async (custData: Partial<Customer>) => {
     const newCust: Customer = {
       id: `cli_${Date.now()}`,
-      code: `CLI-${Math.floor(1000 + Math.random() * 9000)}`,
+      code: custData.code || `CLI-${Math.floor(1000 + Math.random() * 9000)}`,
       name: custData.name || 'Novo Cliente',
       cnpjCpf: custData.cnpjCpf || '00.000.000/0001-00',
       tradeName: custData.tradeName || custData.name || '',
@@ -466,12 +478,57 @@ export default function App() {
       lastPurchaseDate: new Date().toISOString().split('T')[0],
     };
 
-    // Atualiza state local
     setCustomers((prev) => [newCust, ...prev]);
-
-    // Persiste no Firestore
     await saveCliente(newCust).catch((e) =>
       console.error('Erro ao salvar cliente no Firestore:', e)
+    );
+  };
+
+  const handleUpdateCustomer = async (id: string, custData: Partial<Customer>) => {
+    setCustomers((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, ...custData } : c))
+    );
+    await updateCliente(id, custData).catch((e) =>
+      console.error('Erro ao atualizar cliente no Firestore:', e)
+    );
+  };
+
+  const handleDeleteCustomer = async (id: string) => {
+    setCustomers((prev) => prev.filter((c) => c.id !== id));
+    await deleteCliente(id).catch((e) =>
+      console.error('Erro ao excluir cliente no Firestore:', e)
+    );
+  };
+
+  // ── Handlers: Vendedores ──────────────────────────────────────────────────
+  const handleAddSeller = async (seller: Seller) => {
+    setSellers((prev) => [seller, ...prev]);
+    await saveVendedor(seller).catch((e) =>
+      console.error('Erro ao salvar vendedor no Firestore:', e)
+    );
+  };
+
+  const handleUpdateSeller = async (id: string, sellerData: Partial<Seller>) => {
+    setSellers((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, ...sellerData } : s))
+    );
+    await updateVendedor(id, sellerData).catch((e) =>
+      console.error('Erro ao atualizar vendedor no Firestore:', e)
+    );
+  };
+
+  const handleDeleteSeller = async (id: string) => {
+    setSellers((prev) => prev.filter((s) => s.id !== id));
+    await deleteVendedor(id).catch((e) =>
+      console.error('Erro ao excluir vendedor no Firestore:', e)
+    );
+  };
+
+  // ── Handler: Zerar Inadimplência ──────────────────────────────────────────
+  const handleClearDelinquency = async () => {
+    setDelinquentTitles([]);
+    await clearInadimplencia().catch((e) =>
+      console.error('Erro ao zerar títulos no Firestore:', e)
     );
   };
 
@@ -573,12 +630,29 @@ export default function App() {
             <CustomerManagementView
               customers={customers}
               onAddCustomer={handleAddCustomer}
+              onUpdateCustomer={handleUpdateCustomer}
+              onDeleteCustomer={handleDeleteCustomer}
+              userRole={currentUser.role}
+            />
+          )}
+
+          {activeTab === 'sellers' && (
+            <SellersManagementView
+              sellers={sellers}
+              delinquentTitles={delinquentTitles}
+              onAddSeller={handleAddSeller}
+              onUpdateSeller={handleUpdateSeller}
+              onDeleteSeller={handleDeleteSeller}
               userRole={currentUser.role}
             />
           )}
 
           {activeTab === 'delinquency' && (
-            <DelinquencyReportView titles={delinquentTitles} selectedYear={selectedYear} />
+            <DelinquencyReportView
+              titles={delinquentTitles}
+              selectedYear={selectedYear}
+              onClearDelinquency={handleClearDelinquency}
+            />
           )}
 
           {activeTab === 'api-docs' && (
