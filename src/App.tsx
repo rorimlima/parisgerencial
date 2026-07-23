@@ -22,6 +22,7 @@ import { SellersManagementView } from './components/SellersManagementView';
 import { ApiIntegrationDocsView } from './components/ApiIntegrationDocsView';
 import { PostgresSettingsView } from './components/PostgresSettingsView';
 import { FinancialStatementView } from './components/FinancialStatementView';
+import { PayablesView, RawPayableRow } from './components/PayablesView';
 
 import {
   getEconomicData,
@@ -54,6 +55,12 @@ import {
   upsertExtratoFinanceiro,
   deleteExtratoFinanceiro,
   clearExtratoFinanceiro,
+  getContasPagar,
+  upsertContasPagar,
+  updateContaPagar,
+  applyBaixaAutomatica,
+  deleteContaPagar,
+  clearContasPagar,
 } from './firebaseService';
 
 import {
@@ -64,6 +71,7 @@ import {
   EconomicMonthData,
   FinancialMonthData,
   FinancialStatementEntry,
+  PayableTitle,
   PostgresConfig,
   Seller,
   StatementSource,
@@ -100,6 +108,7 @@ export default function App() {
   const [sellers, setSellers] = useState<Seller[]>([]);
   const [apiTokens, setApiTokens] = useState<ApiToken[]>([]);
   const [statementEntries, setStatementEntries] = useState<FinancialStatementEntry[]>([]);
+  const [payables, setPayables] = useState<PayableTitle[]>([]);
   const [loginError, setLoginError] = useState<string>('');
 
   // Config Postgres mantida apenas para exibição da tela de configurações
@@ -116,7 +125,7 @@ export default function App() {
   const loadAllData = useCallback(async (year: number) => {
     setIsLoading(true);
     try {
-      const [ecoData, finData, cliData, titData, vendData, tokData, stmtData] = await Promise.all([
+      const [ecoData, finData, cliData, titData, vendData, tokData, stmtData, payData] = await Promise.all([
         getEconomicData(year),
         getFinancialData(year),
         getClientes(),
@@ -124,6 +133,7 @@ export default function App() {
         getVendedores(),
         getApiTokens(),
         getExtratoFinanceiro(year),
+        getContasPagar(year),
       ]);
       setEconomicData(ecoData);
       setFinancialData(finData);
@@ -132,6 +142,7 @@ export default function App() {
       setSellers(vendData);
       setApiTokens(tokData);
       setStatementEntries(stmtData);
+      setPayables(payData);
     } catch (err: any) {
       console.error('Erro ao carregar dados do Firestore:', err.message);
     } finally {
@@ -734,6 +745,176 @@ export default function App() {
     }
   };
 
+  // ── Contas a Pagar (RFN006) ──────────────────────────────────────────────
+  const monthKeyFromIso = (iso: string): string => {
+    const monthKeys = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+    const m = parseInt(iso.slice(5, 7), 10);
+    return monthKeys[m - 1] || '';
+  };
+
+  // Concilia (baixa automática) títulos "Em Aberto" contra lançamentos de saída
+  // do Extrato Financeiro (banco + caixa/tesouraria) ainda não utilizados em
+  // nenhuma outra baixa. Critério: mesmo valor (tolerância de R$0,01) e data de
+  // pagamento dentro de uma janela de ±5 dias da data do lançamento no extrato
+  // (cobre o intervalo típico entre o registro no ERP e a compensação bancária).
+  // Casamento é 1-para-1 (guloso, por menor diferença de dias) para nunca
+  // vincular o mesmo lançamento de extrato a dois títulos diferentes.
+  const computeAutoReconciliation = (
+    payablesList: PayableTitle[],
+    entriesList: FinancialStatementEntry[]
+  ): { id: string; statementId: string; source: string }[] => {
+    const DATE_WINDOW_DAYS = 5;
+    const AMOUNT_TOLERANCE = 0.01;
+
+    const openPayables = payablesList.filter((p) => p.status === 'Em Aberto');
+    const usedStatementIds = new Set(payablesList.filter((p) => p.reconciledStatementId).map((p) => p.reconciledStatementId));
+    const availableExits = entriesList.filter((e) => e.exitAmount > 0 && !usedStatementIds.has(e.id));
+
+    const toTime = (iso: string) => new Date(iso).getTime();
+
+    const candidates: { payableId: string; entryId: string; sourceLabel: string; diffDays: number }[] = [];
+    for (const p of openPayables) {
+      const pTime = toTime(p.paymentDate);
+      if (isNaN(pTime)) continue;
+      for (const e of availableExits) {
+        if (Math.abs(p.amount - e.exitAmount) > AMOUNT_TOLERANCE) continue;
+        const eTime = toTime(e.date);
+        if (isNaN(eTime)) continue;
+        const diffDays = Math.abs(pTime - eTime) / (1000 * 60 * 60 * 24);
+        if (diffDays > DATE_WINDOW_DAYS) continue;
+        candidates.push({ payableId: p.id, entryId: e.id, sourceLabel: e.sourceLabel, diffDays });
+      }
+    }
+    candidates.sort((a, b) => a.diffDays - b.diffDays);
+
+    const matchedPayables = new Set<string>();
+    const matchedEntries = new Set<string>();
+    const results: { id: string; statementId: string; source: string }[] = [];
+    for (const c of candidates) {
+      if (matchedPayables.has(c.payableId) || matchedEntries.has(c.entryId)) continue;
+      matchedPayables.add(c.payableId);
+      matchedEntries.add(c.entryId);
+      results.push({ id: c.payableId, statementId: c.entryId, source: c.sourceLabel });
+    }
+    return results;
+  };
+
+  const handleImportPayables = async (rows: RawPayableRow[]) => {
+    if (rows.length === 0) return;
+
+    const toSave = rows.map((r) => {
+      const matched = customers.find(
+        (c) => c.code && c.code.toLowerCase() === r.supplierCode.toLowerCase()
+      );
+      return {
+        movCode: r.movCode,
+        companyName: r.companyName,
+        supplierCode: r.supplierCode,
+        supplierName: r.supplierName,
+        supplierCustomerId: matched?.id || '',
+        titleCode: r.titleCode,
+        parcela: r.parcela,
+        dueDate: r.dueDate,
+        paymentDate: r.paymentDate,
+        year: parseInt(r.paymentDate.slice(0, 4), 10),
+        monthKey: monthKeyFromIso(r.paymentDate),
+        description: r.description,
+        payingAgent: r.payingAgent,
+        department: r.department,
+        amount: r.amount,
+      };
+    });
+
+    try {
+      const result = await upsertContasPagar(toSave);
+      console.log(`Contas a pagar importadas: ${result.count} processado(s), ${result.errors} erro(s).`);
+      let fresh = await getContasPagar(selectedYear);
+      setPayables(fresh);
+
+      // Conciliação automática imediata após a importação
+      const matches = computeAutoReconciliation(fresh, statementEntries);
+      if (matches.length > 0) {
+        await applyBaixaAutomatica(matches);
+        fresh = await getContasPagar(selectedYear);
+        setPayables(fresh);
+      }
+    } catch (err: any) {
+      console.error('Erro ao importar contas a pagar:', err?.message || err);
+    }
+  };
+
+  const handleReconcileNow = async () => {
+    try {
+      const matches = computeAutoReconciliation(payables, statementEntries);
+      if (matches.length === 0) {
+        alert('Nenhuma nova baixa automática encontrada. Os títulos em aberto não têm correspondência exata (valor + data) com lançamentos de saída ainda não utilizados no Extrato Financeiro.');
+        return;
+      }
+      await applyBaixaAutomatica(matches);
+      const fresh = await getContasPagar(selectedYear);
+      setPayables(fresh);
+      alert(`${matches.length} título(s) baixado(s) automaticamente com sucesso.`);
+    } catch (e: any) {
+      console.error('Erro na conciliação automática:', e?.message || e);
+    }
+  };
+
+  const handleManualBaixa = async (id: string, notes?: string) => {
+    try {
+      await updateContaPagar(id, { status: 'Baixado Manual', notes, reconciledAt: new Date().toISOString() });
+      setPayables((prev) =>
+        prev.map((p) => (p.id === id ? { ...p, status: 'Baixado Manual', notes: notes || p.notes } : p))
+      );
+    } catch (e) {
+      console.error('Erro ao dar baixa manual:', e);
+    }
+  };
+
+  const handleRevertBaixa = async (id: string) => {
+    try {
+      await updateContaPagar(id, {
+        status: 'Em Aberto',
+        reconciledStatementId: '',
+        reconciledSource: '',
+        reconciledAt: '',
+      });
+      setPayables((prev) =>
+        prev.map((p) =>
+          p.id === id ? { ...p, status: 'Em Aberto', reconciledStatementId: '', reconciledSource: '', reconciledAt: '' } : p
+        )
+      );
+    } catch (e) {
+      console.error('Erro ao estornar baixa:', e);
+    }
+  };
+
+  const handleLinkSupplier = async (payableId: string, customerId: string, customerCode: string) => {
+    try {
+      await updateContaPagar(payableId, { supplierCustomerId: customerId });
+      setPayables((prev) => prev.map((p) => (p.id === payableId ? { ...p, supplierCustomerId: customerId } : p)));
+    } catch (e) {
+      console.error('Erro ao vincular credor ao cliente:', e);
+    }
+  };
+
+  const handleDeletePayable = async (id: string) => {
+    try {
+      await deleteContaPagar(id);
+      setPayables((prev) => prev.filter((p) => p.id !== id));
+    } catch (e) {
+      console.error('Erro ao excluir título de contas a pagar:', e);
+    }
+  };
+
+  const handleClearPayables = async () => {
+    try {
+      await clearContasPagar(selectedYear);
+      setPayables([]);
+    } catch (e) {
+      console.error('Erro ao zerar contas a pagar:', e);
+    }
+  };
+
   // ── Handler: Gerar Token API ──────────────────────────────────────────────
   const handleGenerateApiToken = async (name: string) => {
     try {
@@ -826,6 +1007,23 @@ export default function App() {
               onCommitEntries={handleCommitStatementImport}
               onDeleteEntry={handleDeleteStatementEntry}
               onClearEntries={handleClearStatementEntries}
+              userRole={currentUser.role}
+            />
+          )}
+
+          {activeTab === 'payables' && (
+            <PayablesView
+              payables={payables}
+              statementEntries={statementEntries}
+              customers={customers}
+              selectedYear={selectedYear}
+              onImportPayables={handleImportPayables}
+              onReconcileNow={handleReconcileNow}
+              onManualBaixa={handleManualBaixa}
+              onRevertBaixa={handleRevertBaixa}
+              onLinkSupplier={handleLinkSupplier}
+              onDeletePayable={handleDeletePayable}
+              onClearPayables={handleClearPayables}
               userRole={currentUser.role}
             />
           )}

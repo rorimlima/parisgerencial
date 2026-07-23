@@ -222,10 +222,15 @@ const parsePagSeguroRows = (aoa: any[][]): RawStatementRow[] => {
 
 // ── Parser Caixa/Tesouraria (RFN019 .xlsx) ──────────────────────────────────
 // Lê pelas colunas nomeadas: Tesouraria_DataCaixa (data), Tesouraria_Valor
-// (valor recebido em dinheiro), Tesouraria_TipoDocumentoDes ("DINHEIRO"),
-// ClienteBeneficiario (cliente). Usa Credito/Debito quando disponíveis para
-// determinar corretamente entrada x saída de caixa; Tesouraria_Codigo vira a
-// referência de documento (chave única da planilha).
+// (valor movimentado em dinheiro), Tesouraria_TipoDocumentoDes ("DINHEIRO"),
+// ClienteBeneficiario (cliente/credor). Este mesmo parser cobre dois cenários:
+//   1) Recebimentos de caixa (RFN019 padrão): Credito preenchido, Debito = 0.
+//   2) Saídas de caixa / pagamentos em dinheiro (planilha futura de tesouraria
+//      de saída): identificadas por Debito preenchido OU por
+//      Tesouraria_Multiplicador = -1 (convenção do ERP para lançamentos a
+//      débito, igual à usada em RFN006 de contas a pagar).
+// Prioridade de decisão: Debito explícito > Credito explícito >
+// Tesouraria_Multiplicador (-1 = saída) > default (entrada, valor recebido).
 const parseTesourariaRows = (rows: any[]): RawStatementRow[] => {
   const out: RawStatementRow[] = [];
   for (const row of rows) {
@@ -233,9 +238,23 @@ const parseTesourariaRows = (rows: any[]): RawStatementRow[] => {
     const date = normalizeDate(rawDate);
     if (!date) continue;
 
-    const valor = parseNumberPtBr(row['Tesouraria_Valor'] ?? 0);
-    const credito = row['Credito'] !== undefined && row['Credito'] !== '' ? Number(row['Credito']) || 0 : valor;
-    const debito = row['Debito'] !== undefined && row['Debito'] !== '' ? Math.abs(Number(row['Debito']) || 0) : 0;
+    const valor = Math.abs(parseNumberPtBr(row['Tesouraria_Valor'] ?? 0));
+    const hasCredito = row['Credito'] !== undefined && row['Credito'] !== '';
+    const hasDebito = row['Debito'] !== undefined && row['Debito'] !== '';
+    const multiplicador = row['Tesouraria_Multiplicador'];
+
+    let credito = 0;
+    let debito = 0;
+    if (hasDebito && Math.abs(Number(row['Debito']) || 0) > 0) {
+      debito = Math.abs(Number(row['Debito']) || 0);
+    } else if (hasCredito && Math.abs(Number(row['Credito']) || 0) > 0) {
+      credito = Math.abs(Number(row['Credito']) || 0);
+    } else if (multiplicador !== undefined && multiplicador !== '') {
+      if (Number(multiplicador) < 0) debito = valor;
+      else credito = valor;
+    } else {
+      credito = valor;
+    }
     if (credito === 0 && debito === 0) continue;
 
     const tipoDoc = (row['Tesouraria_TipoDocumentoDes'] || row['Tesouraria_TipoCDDes'] || 'DINHEIRO').toString().trim();

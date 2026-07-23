@@ -17,6 +17,7 @@ import {
   AlertTriangle,
   ArrowUpRight,
   Landmark,
+  Receipt,
 } from 'lucide-react';
 import { ViewTab } from '../types';
 
@@ -66,6 +67,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Extrato Financeiro',
       icon: Landmark,
       description: 'Conciliação bancária (Bradesco/PagSeguro) e caixa/tesouraria',
+    },
+    {
+      id: 'payables' as ViewTab,
+      label: 'Contas a Pagar',
+      icon: Receipt,
+      description: 'Títulos pagos (RFN006), vínculo com credores e baixa automática',
     },
     {
       id: 'import' as ViewTab,
