@@ -44,7 +44,7 @@ interface PayablesViewProps {
   customers: Customer[];
   selectedYear: number;
   onImportPayables: (rows: RawPayableRow[]) => void;
-  onReconcileNow: () => void;
+  onReconcileNow: () => void | Promise<void>;
   onManualBaixa: (id: string, notes?: string, statementEntryId?: string, statementSource?: string) => void;
   onRevertBaixa: (id: string) => void;
   onLinkSupplier: (payableId: string, customerId: string, customerCode: string) => void;
@@ -189,6 +189,8 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
   const [isBaixaLoading, setIsBaixaLoading] = useState(false);
+  const [isReconciling, setIsReconciling] = useState(false);
+  const [reconcileError, setReconcileError] = useState<string | null>(null);
 
   // Estado do modal "Encontrar no Extrato"
   const [extratoSearchTarget, setExtratoSearchTarget] = useState<PayableTitle | null>(null);
@@ -412,11 +414,30 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
 
         <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={onReconcileNow}
-            className="px-3.5 py-2.5 text-xs font-bold bg-[#2D2A26] text-white hover:bg-[#3F3B35] rounded-lg shadow-xs transition-all flex items-center gap-1.5"
+            disabled={isReconciling}
+            onClick={async () => {
+              if (isReconciling) return;
+              setIsReconciling(true);
+              setReconcileError(null);
+              try {
+                await withClientTimeout(Promise.resolve(onReconcileNow()), 30000);
+              } catch (err) {
+                setReconcileError(err instanceof Error ? err.message : 'Falha ao conciliar automaticamente. Tente novamente.');
+              } finally {
+                setIsReconciling(false);
+              }
+            }}
+            className="px-3.5 py-2.5 text-xs font-bold bg-[#2D2A26] text-white hover:bg-[#3F3B35] rounded-lg shadow-xs transition-all flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            <RefreshCcw className="w-4 h-4 text-[#C19A6B]" />
-            <span>Conciliar Automaticamente</span>
+            {isReconciling ? (
+              <svg className="animate-spin w-4 h-4 text-[#C19A6B]" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
+                <path d="M4 12a8 8 0 018-8V0C5.37 0 0 5.37 0 12h4z" fill="currentColor" className="opacity-75" />
+              </svg>
+            ) : (
+              <RefreshCcw className="w-4 h-4 text-[#C19A6B]" />
+            )}
+            <span>{isReconciling ? 'Conciliando...' : 'Conciliar Automaticamente'}</span>
           </button>
           <button
             onClick={handleExportExcel}
@@ -436,6 +457,13 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
           )}
         </div>
       </div>
+
+      {reconcileError && (
+        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-rose-600 flex-shrink-0" />
+          <p className="text-xs font-bold">{reconcileError}</p>
+        </div>
+      )}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
