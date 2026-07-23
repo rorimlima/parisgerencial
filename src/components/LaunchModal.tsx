@@ -145,6 +145,7 @@ export const LaunchModal: React.FC<LaunchModalProps> = ({
                 onChange={(e) => setYear(parseInt(e.target.value, 10))}
                 className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B]"
               >
+                <option value={2024}>2024</option>
                 <option value={2025}>2025</option>
                 <option value={2026}>2026</option>
                 <option value={2027}>2027</option>

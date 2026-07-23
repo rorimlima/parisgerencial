@@ -162,7 +162,8 @@ export interface ValidationRowResult {
 export interface DelinquencyValidationRowResult {
   rowNumber: number;
   rawTitleNumber: string;    // Nº do título
-  rawCustomerName: string;  // Nome do cliente
+  rawCustomerName: string;  // Nome do cliente (coluna Devedor ou Cliente)
+  rawCustomerCode: string;  // Código do cliente para vínculo (coluna cod_cliente)
   rawCnpjCpf: string;       // CNPJ/CPF
   rawIssueDate: string;     // Data de emissão
   rawDueDate: string;       // Data de vencimento

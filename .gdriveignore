@@ -1,0 +1,5 @@
+# ── Google Drive — arquivos a não sincronizar ─────────────────────────────────
+# node_modules é gerenciado localmente via junction link (fora do Google Drive)
+node_modules/
+dist/
+.env

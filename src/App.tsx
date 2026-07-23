@@ -16,6 +16,7 @@ import { ImportDataView } from './components/ImportDataView';
 import { LaunchModal } from './components/LaunchModal';
 import { LoginModal } from './components/LoginModal';
 import { Navbar } from './components/Navbar';
+import { PwaInstallBanner } from './components/PwaBanners';
 import { Sidebar } from './components/Sidebar';
 
 import {
@@ -261,24 +262,30 @@ export default function App() {
   ) => {
     if (targetModule === 'customers') {
       // Importação em lote de clientes
+      // validateCustomerRows mapeia: rawDate=código, rawType=nome, rawDescription=fantasia,
+      // rawValue=limite, rawCustomer=cnpj, + extras em rawContact/rawPhone/rawEmail/rawCity/rawState
       const newCustomers: Customer[] = validEntries.map((entry, idx) => {
         const row = entry as any;
-        const code = (row.rawDate || '').trim(); // mapped from 'codigo' column
-        const name = (row.rawType || '').trim(); // mapped from 'razao_social'
-        const rawVal = entry.rawValue || '0';
-        const creditLimit = parseFloat(rawVal.replace('R$', '').replace(/\./g, '').replace(',', '.').trim()) || 0;
+        const code = (row.rawDate || '').trim();       // código do cliente
+        const name = (row.rawType || '').trim();       // razão social
+        const fantasia = (row.rawDescription || '').trim(); // nome fantasia
+        const cnpjCpf = (row.rawCustomer || '').trim();     // cnpj/cpf
+        const rawLimitStr = (row.rawValue || '0').toString();
+        const creditLimit = parseFloat(
+          rawLimitStr.replace('R$', '').replace(/\./g, '').replace(',', '.').trim()
+        ) || 0;
 
         return {
           id: `cli_import_${Date.now()}_${idx}`,
-          code: code || `IMP-${idx + 1}`,
+          code: code || `IMP-${String(idx + 1).padStart(4, '0')}`,
           name: name || 'Cliente Importado',
-          cnpjCpf: (row.rawCustomer || '').trim() || '',
-          tradeName: (row.rawDescription || '').trim() || '',
-          contactName: '',
-          phone: '',
-          email: '',
-          city: '',
-          state: '',
+          cnpjCpf,
+          tradeName: fantasia,
+          contactName: (row.rawContact || '').trim(),
+          phone: (row.rawPhone || '').trim(),
+          email: (row.rawEmail || '').trim(),
+          city: (row.rawCity || '').trim(),
+          state: (row.rawState || '').trim(),
           creditLimit,
           currentBalance: 0,
           delinquentAmount: 0,
@@ -295,7 +302,8 @@ export default function App() {
     }
 
     if (targetModule === 'delinquency') {
-      // Importação de títulos inadimplentes
+      // Importação de títulos inadimplentes via validateFinancialRows (caminho legado)
+      // O caminho principal é handleCommitDelinquencyImport (via validateDelinquencyRows)
       const newTitles: DelinquentTitle[] = validEntries.map((entry, idx) => {
         const rawVal = entry.rawValue || '0';
         const numVal = parseFloat(rawVal.replace('R$', '').replace(/\./g, '').replace(',', '.').trim()) || 0;
@@ -303,9 +311,11 @@ export default function App() {
         const dueDate = (entry.rawDate || '').trim();
         const titleNumber = (entry.rawType || '').trim() || `TIT-${Date.now()}-${idx}`;
 
-        // Buscar cliente pelo código
+        // Buscar cliente pelo código ou pelo nome
         const matchedCustomer = customers.find(
-          (c) => c.code.toLowerCase() === customerCode.toLowerCase()
+          (c) =>
+            c.code.toLowerCase() === customerCode.toLowerCase() ||
+            c.name.toLowerCase() === customerCode.toLowerCase()
         );
 
         // Calcular dias em atraso
@@ -325,7 +335,7 @@ export default function App() {
           id: `tit_import_${Date.now()}_${idx}`,
           titleNumber,
           customerId: matchedCustomer?.id || '',
-          customerCode,
+          customerCode: matchedCustomer?.code || customerCode,
           customerName: matchedCustomer?.name || customerCode,
           cnpjCpf: matchedCustomer?.cnpjCpf || '',
           issueDate: '',
@@ -345,7 +355,7 @@ export default function App() {
       const updatedCustomers = [...customers];
       newTitles.forEach((title) => {
         const custIdx = updatedCustomers.findIndex(
-          (c) => c.code.toLowerCase() === title.customerCode.toLowerCase()
+          (c) => c.id === title.customerId || c.code.toLowerCase() === title.customerCode.toLowerCase()
         );
         if (custIdx >= 0) {
           updatedCustomers[custIdx] = {
@@ -392,28 +402,39 @@ export default function App() {
     });
   };
 
-  // ── Handler: Importação de Inadimplência ──────────────────────────────────
+  // ── Handler: Importação de Inadimplência ────────────────────────────────────
   const handleCommitDelinquencyImport = async (
     validEntries: DelinquencyValidationRowResult[]
   ) => {
     const titlesToSave: DelinquentTitle[] = validEntries
       .filter((e) => e.parsedTitle)
-      .map((e, i) => ({
-        id: `imported_${Date.now()}_${i}`,
-        titleNumber: e.parsedTitle!.titleNumber || `IMP-${Date.now()}`,
-        customerId: e.parsedTitle!.customerId || '',
-        customerCode: e.parsedTitle!.customerCode || '',
-        customerName: e.parsedTitle!.customerName || e.rawCustomerName,
-        cnpjCpf: e.parsedTitle!.cnpjCpf || e.rawCnpjCpf,
-        issueDate: e.parsedTitle!.issueDate || '',
-        dueDate: e.parsedTitle!.dueDate || e.rawDueDate,
-        originalAmount: e.parsedTitle!.originalAmount || 0,
-        updatedAmount: e.parsedTitle!.updatedAmount || e.parsedTitle!.originalAmount || 0,
-        daysOverdue: e.parsedTitle!.daysOverdue || 0,
-        agingBucket: (e.parsedTitle!.agingBucket as DelinquentTitle['agingBucket']) || '1-30',
-        collectionStatus: (e.parsedTitle!.collectionStatus as DelinquentTitle['collectionStatus']) || 'Aguardando',
-        notes: e.parsedTitle!.notes || '',
-      }));
+      .map((e, i) => {
+        const customerCode = (e.parsedTitle!.customerCode as string) || (e as any).rawCustomerCode || '';
+
+        // Tenta vincular cliente por código, depois por nome
+        const matchedCustomer = customers.find(
+          (c) =>
+            (customerCode && c.code.toLowerCase() === customerCode.toLowerCase()) ||
+            c.name.toLowerCase() === e.rawCustomerName.toLowerCase()
+        );
+
+        return {
+          id: `imported_${Date.now()}_${i}`,
+          titleNumber: e.parsedTitle!.titleNumber || `IMP-${Date.now()}`,
+          customerId: matchedCustomer?.id || e.parsedTitle!.customerId || '',
+          customerCode: matchedCustomer?.code || customerCode,
+          customerName: matchedCustomer?.name || e.rawCustomerName,
+          cnpjCpf: e.parsedTitle!.cnpjCpf || e.rawCnpjCpf || matchedCustomer?.cnpjCpf || '',
+          issueDate: e.parsedTitle!.issueDate || '',
+          dueDate: e.parsedTitle!.dueDate || e.rawDueDate,
+          originalAmount: e.parsedTitle!.originalAmount || 0,
+          updatedAmount: e.parsedTitle!.updatedAmount || e.parsedTitle!.originalAmount || 0,
+          daysOverdue: e.parsedTitle!.daysOverdue || 0,
+          agingBucket: (e.parsedTitle!.agingBucket as DelinquentTitle['agingBucket']) || '1-30',
+          collectionStatus: (e.parsedTitle!.collectionStatus as DelinquentTitle['collectionStatus']) || 'Aguardando',
+          notes: e.parsedTitle!.notes || '',
+        };
+      });
 
     if (titlesToSave.length === 0) return;
 
@@ -587,6 +608,9 @@ export default function App() {
         onLoginSuccess={handleLoginSuccess}
         loginError={loginError}
       />
+
+      {/* PWA — Banner de Instalação */}
+      <PwaInstallBanner />
     </div>
   );
 }

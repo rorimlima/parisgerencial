@@ -388,9 +388,39 @@ export const INITIAL_ECONOMIC_2025: Record<string, EconomicMonthData> = {
   },
 };
 
+// DADOS OFICIAIS: Resultado Econômico 2026
+export const INITIAL_ECONOMIC_2026: Record<string, EconomicMonthData> = {
+  jan: {
+    monthKey: 'jan',
+    monthLabel: 'Jan/26',
+    receitaBruta: 0,
+    cmv: 0,
+    cmvPercent: 0,
+    margemBruta: 0,
+    margemPercent: 0,
+    despesasFixas: 0,
+    despesasPercent: 0,
+    resultadoEconomico: 0,
+    resultadoPercent: 0,
+    pontoEquilibrio: 0,
+  },
+  fev: { monthKey: 'fev', monthLabel: 'Fev/26', receitaBruta: 0, cmv: 0, cmvPercent: 0, margemBruta: 0, margemPercent: 0, despesasFixas: 0, despesasPercent: 0, resultadoEconomico: 0, resultadoPercent: 0, pontoEquilibrio: 0 },
+  mar: { monthKey: 'mar', monthLabel: 'Mar/26', receitaBruta: 0, cmv: 0, cmvPercent: 0, margemBruta: 0, margemPercent: 0, despesasFixas: 0, despesasPercent: 0, resultadoEconomico: 0, resultadoPercent: 0, pontoEquilibrio: 0 },
+  abr: { monthKey: 'abr', monthLabel: 'Abr/26', receitaBruta: 0, cmv: 0, cmvPercent: 0, margemBruta: 0, margemPercent: 0, despesasFixas: 0, despesasPercent: 0, resultadoEconomico: 0, resultadoPercent: 0, pontoEquilibrio: 0 },
+  mai: { monthKey: 'mai', monthLabel: 'Mai/26', receitaBruta: 0, cmv: 0, cmvPercent: 0, margemBruta: 0, margemPercent: 0, despesasFixas: 0, despesasPercent: 0, resultadoEconomico: 0, resultadoPercent: 0, pontoEquilibrio: 0 },
+  jun: { monthKey: 'jun', monthLabel: 'Jun/26', receitaBruta: 0, cmv: 0, cmvPercent: 0, margemBruta: 0, margemPercent: 0, despesasFixas: 0, despesasPercent: 0, resultadoEconomico: 0, resultadoPercent: 0, pontoEquilibrio: 0 },
+  jul: { monthKey: 'jul', monthLabel: 'Jul/26', receitaBruta: 0, cmv: 0, cmvPercent: 0, margemBruta: 0, margemPercent: 0, despesasFixas: 0, despesasPercent: 0, resultadoEconomico: 0, resultadoPercent: 0, pontoEquilibrio: 0 },
+  ago: { monthKey: 'ago', monthLabel: 'Ago/26', receitaBruta: 0, cmv: 0, cmvPercent: 0, margemBruta: 0, margemPercent: 0, despesasFixas: 0, despesasPercent: 0, resultadoEconomico: 0, resultadoPercent: 0, pontoEquilibrio: 0 },
+  set: { monthKey: 'set', monthLabel: 'Set/26', receitaBruta: 0, cmv: 0, cmvPercent: 0, margemBruta: 0, margemPercent: 0, despesasFixas: 0, despesasPercent: 0, resultadoEconomico: 0, resultadoPercent: 0, pontoEquilibrio: 0 },
+  out: { monthKey: 'out', monthLabel: 'Out/26', receitaBruta: 0, cmv: 0, cmvPercent: 0, margemBruta: 0, margemPercent: 0, despesasFixas: 0, despesasPercent: 0, resultadoEconomico: 0, resultadoPercent: 0, pontoEquilibrio: 0 },
+  nov: { monthKey: 'nov', monthLabel: 'Nov/26', receitaBruta: 0, cmv: 0, cmvPercent: 0, margemBruta: 0, margemPercent: 0, despesasFixas: 0, despesasPercent: 0, resultadoEconomico: 0, resultadoPercent: 0, pontoEquilibrio: 0 },
+  dez: { monthKey: 'dez', monthLabel: 'Dez/26', receitaBruta: 0, cmv: 0, cmvPercent: 0, margemBruta: 0, margemPercent: 0, despesasFixas: 0, despesasPercent: 0, resultadoEconomico: 0, resultadoPercent: 0, pontoEquilibrio: 0 },
+};
+
 export const INITIAL_ECONOMIC_BY_YEAR: Record<number, Record<string, EconomicMonthData>> = {
   2024: INITIAL_ECONOMIC_2024,
   2025: INITIAL_ECONOMIC_2025,
+  2026: INITIAL_ECONOMIC_2026,
 };
 
 // PDF 2 DATA: Resultado Financeiro 2026
@@ -473,12 +503,12 @@ export const INITIAL_FINANCIAL_2026: Record<string, FinancialMonthData> = {
     inadimplenciaMensal: 98381.11,
     inadimplenciaAcumulada: 410206.24,
   },
-  jul: createEmptyFinancialMonth('jul', 'Jul/26'),
-  ago: createEmptyFinancialMonth('ago', 'Ago/26'),
-  set: createEmptyFinancialMonth('set', 'Set/26'),
-  out: createEmptyFinancialMonth('out', 'Out/26'),
-  nov: createEmptyFinancialMonth('nov', 'Nov/26'),
-  dez: createEmptyFinancialMonth('dez', 'Dez/26'),
+  jul: { monthKey: 'jul', monthLabel: 'Jul/26', entradasBancos: 0, entradasTesouraria: 0, totalEntradas: 0, totalSaidas: 0, resultadoFinanceiro: 0, resultadoPercent: 0, estoque: 0, inadimplenciaMensal: 0, inadimplenciaAcumulada: 0 },
+  ago: { monthKey: 'ago', monthLabel: 'Ago/26', entradasBancos: 0, entradasTesouraria: 0, totalEntradas: 0, totalSaidas: 0, resultadoFinanceiro: 0, resultadoPercent: 0, estoque: 0, inadimplenciaMensal: 0, inadimplenciaAcumulada: 0 },
+  set: { monthKey: 'set', monthLabel: 'Set/26', entradasBancos: 0, entradasTesouraria: 0, totalEntradas: 0, totalSaidas: 0, resultadoFinanceiro: 0, resultadoPercent: 0, estoque: 0, inadimplenciaMensal: 0, inadimplenciaAcumulada: 0 },
+  out: { monthKey: 'out', monthLabel: 'Out/26', entradasBancos: 0, entradasTesouraria: 0, totalEntradas: 0, totalSaidas: 0, resultadoFinanceiro: 0, resultadoPercent: 0, estoque: 0, inadimplenciaMensal: 0, inadimplenciaAcumulada: 0 },
+  nov: { monthKey: 'nov', monthLabel: 'Nov/26', entradasBancos: 0, entradasTesouraria: 0, totalEntradas: 0, totalSaidas: 0, resultadoFinanceiro: 0, resultadoPercent: 0, estoque: 0, inadimplenciaMensal: 0, inadimplenciaAcumulada: 0 },
+  dez: { monthKey: 'dez', monthLabel: 'Dez/26', entradasBancos: 0, entradasTesouraria: 0, totalEntradas: 0, totalSaidas: 0, resultadoFinanceiro: 0, resultadoPercent: 0, estoque: 0, inadimplenciaMensal: 0, inadimplenciaAcumulada: 0 },
 };
 
 // DADOS OFICIAIS: Resultado Financeiro 2025 (PDF)
@@ -641,43 +671,29 @@ export const INITIAL_FINANCIAL_2025: Record<string, FinancialMonthData> = {
   },
 };
 
+// DADOS OFICIAIS: Resultado Financeiro 2024
+export const INITIAL_FINANCIAL_2024: Record<string, FinancialMonthData> = {
+  jan: { monthKey: 'jan', monthLabel: 'Jan/24', entradasBancos: 0, entradasTesouraria: 0, totalEntradas: 0, totalSaidas: 0, resultadoFinanceiro: 0, resultadoPercent: 0, estoque: 0, inadimplenciaMensal: 0, inadimplenciaAcumulada: 0 },
+  fev: { monthKey: 'fev', monthLabel: 'Fev/24', entradasBancos: 0, entradasTesouraria: 0, totalEntradas: 0, totalSaidas: 0, resultadoFinanceiro: 0, resultadoPercent: 0, estoque: 0, inadimplenciaMensal: 0, inadimplenciaAcumulada: 0 },
+  mar: { monthKey: 'mar', monthLabel: 'Mar/24', entradasBancos: 0, entradasTesouraria: 0, totalEntradas: 0, totalSaidas: 0, resultadoFinanceiro: 0, resultadoPercent: 0, estoque: 0, inadimplenciaMensal: 0, inadimplenciaAcumulada: 0 },
+  abr: { monthKey: 'abr', monthLabel: 'Abr/24', entradasBancos: 0, entradasTesouraria: 0, totalEntradas: 0, totalSaidas: 0, resultadoFinanceiro: 0, resultadoPercent: 0, estoque: 0, inadimplenciaMensal: 0, inadimplenciaAcumulada: 0 },
+  mai: { monthKey: 'mai', monthLabel: 'Mai/24', entradasBancos: 0, entradasTesouraria: 0, totalEntradas: 0, totalSaidas: 0, resultadoFinanceiro: 0, resultadoPercent: 0, estoque: 0, inadimplenciaMensal: 0, inadimplenciaAcumulada: 0 },
+  jun: { monthKey: 'jun', monthLabel: 'Jun/24', entradasBancos: 0, entradasTesouraria: 0, totalEntradas: 0, totalSaidas: 0, resultadoFinanceiro: 0, resultadoPercent: 0, estoque: 0, inadimplenciaMensal: 0, inadimplenciaAcumulada: 0 },
+  jul: { monthKey: 'jul', monthLabel: 'Jul/24', entradasBancos: 0, entradasTesouraria: 0, totalEntradas: 0, totalSaidas: 0, resultadoFinanceiro: 0, resultadoPercent: 0, estoque: 0, inadimplenciaMensal: 0, inadimplenciaAcumulada: 0 },
+  ago: { monthKey: 'ago', monthLabel: 'Ago/24', entradasBancos: 0, entradasTesouraria: 0, totalEntradas: 0, totalSaidas: 0, resultadoFinanceiro: 0, resultadoPercent: 0, estoque: 0, inadimplenciaMensal: 0, inadimplenciaAcumulada: 0 },
+  set: { monthKey: 'set', monthLabel: 'Set/24', entradasBancos: 0, entradasTesouraria: 0, totalEntradas: 0, totalSaidas: 0, resultadoFinanceiro: 0, resultadoPercent: 0, estoque: 0, inadimplenciaMensal: 0, inadimplenciaAcumulada: 0 },
+  out: { monthKey: 'out', monthLabel: 'Out/24', entradasBancos: 0, entradasTesouraria: 0, totalEntradas: 0, totalSaidas: 0, resultadoFinanceiro: 0, resultadoPercent: 0, estoque: 0, inadimplenciaMensal: 0, inadimplenciaAcumulada: 0 },
+  nov: { monthKey: 'nov', monthLabel: 'Nov/24', entradasBancos: 0, entradasTesouraria: 0, totalEntradas: 0, totalSaidas: 0, resultadoFinanceiro: 0, resultadoPercent: 0, estoque: 0, inadimplenciaMensal: 0, inadimplenciaAcumulada: 0 },
+  dez: { monthKey: 'dez', monthLabel: 'Dez/24', entradasBancos: 0, entradasTesouraria: 0, totalEntradas: 0, totalSaidas: 0, resultadoFinanceiro: 0, resultadoPercent: 0, estoque: 0, inadimplenciaMensal: 0, inadimplenciaAcumulada: 0 },
+};
+
 export const INITIAL_FINANCIAL_BY_YEAR: Record<number, Record<string, FinancialMonthData>> = {
+  2024: INITIAL_FINANCIAL_2024,
   2025: INITIAL_FINANCIAL_2025,
   2026: INITIAL_FINANCIAL_2026,
 };
 
-function createEmptyEconomicMonth(key: string, label: string): EconomicMonthData {
-  return {
-    monthKey: key,
-    monthLabel: label,
-    receitaBruta: 0,
-    cmv: 0,
-    cmvPercent: 0,
-    margemBruta: 0,
-    margemPercent: 0,
-    despesasFixas: 0,
-    despesasPercent: 0,
-    resultadoEconomico: 0,
-    resultadoPercent: 0,
-    pontoEquilibrio: 0,
-  };
-}
-
-function createEmptyFinancialMonth(key: string, label: string): FinancialMonthData {
-  return {
-    monthKey: key,
-    monthLabel: label,
-    entradasBancos: 0,
-    entradasTesouraria: 0,
-    totalEntradas: 0,
-    totalSaidas: 0,
-    resultadoFinanceiro: 0,
-    resultadoPercent: 0,
-    estoque: 0,
-    inadimplenciaMensal: 0,
-    inadimplenciaAcumulada: 0,
-  };
-}
+// Funções auxiliares removidas — os meses vazios agora são declarados inline nos objetos acima.
 
 export const INITIAL_CUSTOMERS: Customer[] = [
   {

@@ -158,6 +158,8 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
   const handleRows = (rawRows: any[]) => {
     if (targetModule === 'delinquency') {
       validateDelinquencyRows(rawRows);
+    } else if (targetModule === 'customers') {
+      validateCustomerRows(rawRows);
     } else {
       validateFinancialRows(rawRows);
     }
@@ -206,6 +208,98 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
     setValidationResults(validated);
   };
 
+  // ── Validação de clientes ──────────────────────────────────────────────────
+
+  const validateCustomerRows = (rawRows: any[]) => {
+    if (!rawRows || rawRows.length === 0) {
+      setValidationResults([]);
+      return;
+    }
+
+    const validated: ValidationRowResult[] = rawRows.map((row: any, idx: number) => {
+      const errors: string[] = [];
+
+      // Código do cliente
+      const rawCode = (
+        row['codigo'] || row['Código'] || row['Codigo'] || row['CODIGO'] ||
+        row['cod'] || row['Cod'] || row['COD'] || row['id'] || ''
+      ).toString().trim();
+
+      // Razão social / nome — obrigatório
+      const rawName = (
+        row['razao_social'] || row['Razao Social'] || row['Razão Social'] ||
+        row['RAZAO SOCIAL'] || row['razaosocial'] || row['nome'] || row['Nome'] ||
+        row['NOME'] || row['cliente'] || row['Cliente'] || row['CLIENTE'] ||
+        row['name'] || row['Name'] || ''
+      ).toString().trim();
+
+      // CNPJ / CPF
+      const rawCnpj = (
+        row['cnpj_cpf'] || row['cnpj'] || row['CNPJ'] || row['cpf'] || row['CPF'] ||
+        row['CNPJ/CPF'] || row['cnpj/cpf'] || row['documento'] || ''
+      ).toString().trim();
+
+      // Nome fantasia
+      const rawFantasia = (
+        row['nome_fantasia'] || row['fantasia'] || row['Fantasia'] ||
+        row['Nome Fantasia'] || row['FANTASIA'] || ''
+      ).toString().trim();
+
+      // Limite de crédito
+      const rawLimit = (
+        row['limite_credito'] || row['Limite'] || row['limite'] ||
+        row['LIMITE'] || row['Limite Crédito'] || row['limite credito'] || '0'
+      ).toString().trim();
+
+      // Contato
+      const rawContact = (
+        row['contato'] || row['Contato'] || row['CONTATO'] ||
+        row['responsavel'] || row['Responsável'] || ''
+      ).toString().trim();
+
+      // Telefone
+      const rawPhone = (
+        row['telefone'] || row['Telefone'] || row['TELEFONE'] ||
+        row['fone'] || row['cel'] || row['Celular'] || ''
+      ).toString().trim();
+
+      // E-mail
+      const rawEmail = (
+        row['email'] || row['Email'] || row['E-mail'] ||
+        row['e-mail'] || row['EMAIL'] || ''
+      ).toString().trim();
+
+      // Cidade
+      const rawCity = (
+        row['cidade'] || row['Cidade'] || row['CIDADE'] ||
+        row['city'] || ''
+      ).toString().trim();
+
+      // Estado / UF
+      const rawState = (
+        row['estado'] || row['Estado'] || row['UF'] || row['uf'] || ''
+      ).toString().trim();
+
+      // Validação obrigatória
+      if (!rawName) errors.push('Razão Social / Nome do cliente é obrigatório');
+
+      return {
+        rowNumber: idx + 1,
+        rawDate: rawCode,          // reutilizando campo rawDate para código
+        rawType: rawName,          // reutilizando campo rawType para nome
+        rawDescription: rawFantasia,
+        rawValue: rawLimit,
+        rawCustomer: rawCnpj,
+        // dados extras preservados como propriedades adicionais
+        ...({ rawContact, rawPhone, rawEmail, rawCity, rawState } as any),
+        status: errors.length === 0 ? 'valid' : 'invalid',
+        errors,
+      };
+    });
+
+    setValidationResults(validated);
+  };
+
   // ── Validação de inadimplência ────────────────────────────────────────────
 
   const validateDelinquencyRows = (rawRows: any[]) => {
@@ -223,9 +317,18 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
         row['TITULO'] || row['titulo'] || row['number'] || row['Number'] || ''
       ).toString().trim();
 
+      // Nome do cliente — aceita também coluna 'Devedor'
       const rawCustomerName = (
+        row['Devedor'] || row['devedor'] || row['DEVEDOR'] ||
         row['cliente'] || row['Cliente'] || row['CLIENTE'] || row['cliente_nome'] ||
         row['Nome'] || row['nome'] || row['customer'] || ''
+      ).toString().trim();
+
+      // Código do cliente para vínculo — aceita 'cod_cliente'
+      const rawCustomerCode = (
+        row['cod_cliente'] || row['Cod_Cliente'] || row['COD_CLIENTE'] ||
+        row['codigo_cliente'] || row['Código Cliente'] || row['codigo'] ||
+        row['Cod'] || row['cod'] || ''
       ).toString().trim();
 
       const rawCnpjCpf = (
@@ -298,6 +401,7 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
       const parsedTitle = errors.length === 0 ? {
         titleNumber: rawTitleNumber || `IMP-${String(idx + 1).padStart(4, '0')}`,
         customerName: rawCustomerName,
+        customerCode: rawCustomerCode,
         cnpjCpf: rawCnpjCpf,
         issueDate: rawIssueDate,
         dueDate: rawDueDate,
@@ -313,6 +417,7 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
         rowNumber: idx + 1,
         rawTitleNumber,
         rawCustomerName,
+        rawCustomerCode,
         rawCnpjCpf,
         rawIssueDate,
         rawDueDate,
@@ -507,7 +612,8 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 text-[10px]">
             {[
               { col: 'numero_titulo / Nº Título', label: 'Nº do Título', req: false },
-              { col: 'cliente / Cliente', label: 'Nome do Cliente', req: true },
+              { col: 'Devedor / cliente / Nome', label: 'Nome do Devedor/Cliente', req: true },
+              { col: 'cod_cliente / codigo_cliente', label: 'Código do Cliente (vínculo)', req: false },
               { col: 'cnpj_cpf / CNPJ / CPF', label: 'CNPJ ou CPF', req: false },
               { col: 'data_emissao / Emissão', label: 'Data Emissão', req: false },
               { col: 'data_vencimento / Vencimento', label: 'Data Vencimento', req: true },
