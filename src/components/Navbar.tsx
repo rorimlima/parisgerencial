@@ -142,6 +142,27 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Right Info & User Profile */}
         <div className="flex items-center space-x-3">
+          {/* Seletor Rápido de Abas para Celular/Tablet */}
+          {setActiveTab && (
+            <div className="md:hidden">
+              <select
+                value={activeTab || 'dashboard'}
+                onChange={(e) => setActiveTab(e.target.value as ViewTab)}
+                className="bg-[#F9F7F2] border border-[#EAE6DF] text-xs text-[#2D2A26] rounded-lg p-1.5 font-bold focus:outline-none focus:border-[#C19A6B]"
+              >
+                <option value="dashboard">📊 Visão Geral & KPIs</option>
+                <option value="economic">📈 Resultado Econômico (DRE)</option>
+                <option value="financial">💵 Resultado Financeiro</option>
+                <option value="statement">🏛️ Extrato Financeiro (Bancos)</option>
+                <option value="payables">🧾 Contas a Pagar (RFN006)</option>
+                <option value="import">📁 Importação Excel / CSV</option>
+                <option value="customers">👥 Cadastro de Clientes</option>
+                <option value="sellers">💼 Gestão de Vendedores</option>
+                <option value="delinquency">⚠️ Relatório de Inadimplência</option>
+              </select>
+            </div>
+          )}
+
           {/* DB Indicator */}
           <button
             onClick={handleOpenPostgres}

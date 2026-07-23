@@ -603,12 +603,14 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
             >
               <option value="financial">Resultado Financeiro (Caixa)</option>
               <option value="economic">Resultado Econômico (DRE)</option>
+              <option value="payables">Contas a Pagar (Planilha RFN006)</option>
+              <option value="statement">Extrato Financeiro (Bancos / Tesouraria)</option>
               <option value="customers">Carteira de Clientes</option>
               <option value="delinquency">Inadimplência (Títulos Vencidos)</option>
             </select>
           </div>
 
-          {targetModule !== 'delinquency' && targetModule !== 'customers' && (
+          {targetModule !== 'delinquency' && targetModule !== 'customers' && targetModule !== 'payables' && targetModule !== 'statement' && (
             <div>
               <label className="block text-[10px] font-bold text-[#8B7D6B] uppercase">Ano Base</label>
               <select
@@ -624,6 +626,38 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
           )}
         </div>
       </div>
+
+      {/* Guia de colunas para Contas a Pagar (RFN006) */}
+      {targetModule === 'payables' && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+          <div className="flex items-start gap-2">
+            <Info className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-xs font-bold text-amber-900">Importação de Contas a Pagar (Relatório RFN006)</p>
+              <p className="text-[11px] text-amber-800 mt-0.5">
+                Envie o arquivo <strong>RFN006 (Totais Pagos por Credor)</strong> em formato Excel (.xlsx/.xls).
+                O sistema efetuará o mapeamento dos credores (`TituloPessoaCod`) para o `cod_cliente` e executará a conciliação automática contra o Extrato Financeiro.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Guia de colunas para Extrato Financeiro (Bancos e Tesouraria) */}
+      {targetModule === 'statement' && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-3">
+          <div className="flex items-start gap-2">
+            <Info className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-xs font-bold text-blue-900">Importação do Extrato Financeiro (Bancos & Caixa/Tesouraria)</p>
+              <p className="text-[11px] text-blue-800 mt-0.5">
+                Envie arquivos do <strong>Bradesco</strong> (.xlsx/.csv), <strong>PagSeguro</strong> (.xlsx) ou relatórios de caixa/tesouraria <strong>RFN019</strong>.
+                Estes extratos servem de base para a conciliação bancária e baixa de contas a pagar.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Guia de colunas para clientes */}
       {targetModule === 'customers' && (
