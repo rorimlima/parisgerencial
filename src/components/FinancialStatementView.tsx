@@ -97,8 +97,14 @@ interface RawStatementRow {
   notes: string;
 }
 
-const monthKeyFromIso = (iso: string): string => {
-  const m = parseInt(iso.slice(5, 7), 10);
+const monthKeyFromIso = (dateStr: string): string => {
+  if (!dateStr) return '';
+  const mStr = dateStr.includes('-')
+    ? dateStr.split('-')[1]
+    : dateStr.includes('/')
+    ? dateStr.split('/')[1]
+    : '';
+  const m = parseInt(mStr, 10);
   return MONTH_KEYS[m - 1] || '';
 };
 

@@ -583,6 +583,8 @@ export default function App() {
       delinquentAmount: custData.delinquentAmount || 0,
       status: (custData.delinquentAmount || 0) > 0 ? 'Inadimplente' : 'Adimplente',
       lastPurchaseDate: new Date().toISOString().split('T')[0],
+      relationshipType: custData.relationshipType || 'Nenhum',
+      expenseClassification: custData.expenseClassification || 'Nenhuma',
     };
 
     setCustomers((prev) => [newCust, ...prev]);
@@ -746,9 +748,15 @@ export default function App() {
   };
 
   // ── Contas a Pagar (RFN006) ──────────────────────────────────────────────
-  const monthKeyFromIso = (iso: string): string => {
+  const monthKeyFromIso = (dateStr: string): string => {
+    if (!dateStr) return '';
     const monthKeys = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
-    const m = parseInt(iso.slice(5, 7), 10);
+    const mStr = dateStr.includes('-')
+      ? dateStr.split('-')[1]
+      : dateStr.includes('/')
+      ? dateStr.split('/')[1]
+      : '';
+    const m = parseInt(mStr, 10);
     return monthKeys[m - 1] || '';
   };
 
@@ -762,17 +770,22 @@ export default function App() {
   const computeAutoReconciliation = (
     payablesList: PayableTitle[],
     entriesList: FinancialStatementEntry[]
-  ): { id: string; statementId: string; source: string }[] => {
-    const DATE_WINDOW_DAYS = 5;
+  ): { id: string; statementId: string; source: string; notes?: string }[] => {
+    // Janela ampliada para 15 dias para encontrar o máximo de correspondências automáticas
+    const DATE_WINDOW_DAYS = 15;
     const AMOUNT_TOLERANCE = 0.01;
 
     const openPayables = payablesList.filter((p) => p.status === 'Em Aberto');
     const usedStatementIds = new Set(payablesList.filter((p) => p.reconciledStatementId).map((p) => p.reconciledStatementId));
     const availableExits = entriesList.filter((e) => e.exitAmount > 0 && !usedStatementIds.has(e.id));
 
-    const toTime = (iso: string) => new Date(iso).getTime();
+    const toTime = (iso: string) => {
+      if (!iso) return NaN;
+      // Garante conversão sem efeito de fuso horário
+      return new Date(iso.slice(0, 10) + 'T00:00:00').getTime();
+    };
 
-    const candidates: { payableId: string; entryId: string; sourceLabel: string; diffDays: number }[] = [];
+    const candidates: { payableId: string; entryId: string; sourceLabel: string; diffDays: number; notes: string }[] = [];
     for (const p of openPayables) {
       const pTime = toTime(p.paymentDate);
       if (isNaN(pTime)) continue;
@@ -782,19 +795,29 @@ export default function App() {
         if (isNaN(eTime)) continue;
         const diffDays = Math.abs(pTime - eTime) / (1000 * 60 * 60 * 24);
         if (diffDays > DATE_WINDOW_DAYS) continue;
-        candidates.push({ payableId: p.id, entryId: e.id, sourceLabel: e.sourceLabel, diffDays });
+
+        // Se houver texto contendo borderô, capturamos para justificar a baixa
+        let notes = '';
+        const desc = (p.description || '').trim();
+        if (desc.toLowerCase().includes('borderô') || desc.toLowerCase().includes('bordero')) {
+          notes = desc;
+        } else {
+          notes = `Baixa automática com base em lançamento de ${e.sourceLabel}`;
+        }
+
+        candidates.push({ payableId: p.id, entryId: e.id, sourceLabel: e.sourceLabel, diffDays, notes });
       }
     }
     candidates.sort((a, b) => a.diffDays - b.diffDays);
 
     const matchedPayables = new Set<string>();
     const matchedEntries = new Set<string>();
-    const results: { id: string; statementId: string; source: string }[] = [];
+    const results: { id: string; statementId: string; source: string; notes?: string }[] = [];
     for (const c of candidates) {
       if (matchedPayables.has(c.payableId) || matchedEntries.has(c.entryId)) continue;
       matchedPayables.add(c.payableId);
       matchedEntries.add(c.entryId);
-      results.push({ id: c.payableId, statementId: c.entryId, source: c.sourceLabel });
+      results.push({ id: c.payableId, statementId: c.entryId, source: c.sourceLabel, notes: c.notes });
     }
     return results;
   };
@@ -806,6 +829,12 @@ export default function App() {
       const matched = customers.find(
         (c) => c.code && c.code.toLowerCase() === r.supplierCode.toLowerCase()
       );
+      
+      const desc = r.description || '';
+      const isBorderou = desc.toLowerCase().includes('originado pelo borderô') || desc.toLowerCase().includes('originado pelo bordero');
+      const status = isBorderou ? 'Baixado Manual' : 'Em Aberto';
+      const notes = isBorderou ? desc : '';
+
       return {
         movCode: r.movCode,
         companyName: r.companyName,
@@ -822,6 +851,9 @@ export default function App() {
         payingAgent: r.payingAgent,
         department: r.department,
         amount: r.amount,
+        status,
+        notes,
+        reconciledAt: isBorderou ? new Date().toISOString() : '',
       };
     });
 

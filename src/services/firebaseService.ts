@@ -297,6 +297,8 @@ export const fetchCustomers = async (): Promise<Customer[]> => {
         neighborhood: data.bairro || '',
         zipCode: data.cep || '',
         sellerResponsible: data.vendedor_responsavel || '',
+        relationshipType: data.tipo_relacionamento || 'Nenhum',
+        expenseClassification: data.classificacao_despesa || 'Nenhuma',
       };
     });
   } catch (error) {
@@ -333,6 +335,8 @@ const customerToFirestore = (customer: Partial<Customer>): Record<string, any> =
   if (customer.neighborhood !== undefined) data.bairro = customer.neighborhood || '';
   if (customer.zipCode !== undefined) data.cep = customer.zipCode || '';
   if (customer.sellerResponsible !== undefined) data.vendedor_responsavel = customer.sellerResponsible || '';
+  if (customer.relationshipType !== undefined) data.tipo_relacionamento = customer.relationshipType || 'Nenhum';
+  if (customer.expenseClassification !== undefined) data.classificacao_despesa = customer.expenseClassification || 'Nenhuma';
   return data;
 };
 
@@ -935,7 +939,11 @@ export const fetchPayables = async (year?: number): Promise<PayableTitle[]> => {
  * (os campos de baixa não são incluídos no payload de importação).
  */
 export const upsertPayablesBatch = async (
-  payables: Omit<PayableTitle, 'id' | 'status' | 'reconciledStatementId' | 'reconciledSource' | 'reconciledAt'>[]
+  payables: (Omit<PayableTitle, 'id' | 'status' | 'reconciledStatementId' | 'reconciledSource' | 'reconciledAt'> & {
+    status?: PayableStatus;
+    notes?: string;
+    reconciledAt?: string;
+  })[]
 ): Promise<{ count: number; errors: number }> => {
   const db = getFirestoreDb();
   let count = 0, errors = 0;
@@ -947,28 +955,32 @@ export const upsertPayablesBatch = async (
       const batch = writeBatch(db);
       for (const p of chunk) {
         const docId = `mov_${sanitizeDocId(p.movCode)}`;
+        const payload: Record<string, any> = {
+          mov_codigo: p.movCode,
+          empresa_nome: p.companyName || '',
+          credor_codigo: p.supplierCode || '',
+          credor_nome: p.supplierName || '',
+          credor_cliente_id: p.supplierCustomerId || '',
+          titulo_codigo: p.titleCode || '',
+          parcela: p.parcela || '',
+          data_vencimento: p.dueDate || '',
+          data_pagamento: p.paymentDate || '',
+          ano: p.year,
+          mes_chave: p.monthKey,
+          historico: p.description || '',
+          agente_pagador: p.payingAgent || '',
+          departamento: p.department || '',
+          valor: p.amount,
+          importado_em: new Date().toISOString(),
+        };
+
+        if (p.status) payload.status_baixa = p.status;
+        if (p.notes) payload.observacoes = p.notes;
+        if (p.reconciledAt) payload.baixa_em = p.reconciledAt;
+
         batch.set(
           doc(db, PAYABLES_COLLECTION, docId),
-          {
-            mov_codigo: p.movCode,
-            empresa_nome: p.companyName || '',
-            credor_codigo: p.supplierCode || '',
-            credor_nome: p.supplierName || '',
-            credor_cliente_id: p.supplierCustomerId || '',
-            titulo_codigo: p.titleCode || '',
-            parcela: p.parcela || '',
-            data_vencimento: p.dueDate || '',
-            data_pagamento: p.paymentDate || '',
-            ano: p.year,
-            mes_chave: p.monthKey,
-            historico: p.description || '',
-            agente_pagador: p.payingAgent || '',
-            departamento: p.department || '',
-            valor: p.amount,
-            importado_em: new Date().toISOString(),
-            // status_baixa intencionalmente omitido: novos docs ficam sem o campo
-            // (lidos como 'Em Aberto'); docs existentes preservam a baixa aplicada.
-          },
+          payload,
           { merge: true }
         );
       }
@@ -1002,7 +1014,7 @@ export const updatePayable = async (id: string, fields: Partial<PayableTitle>): 
 
 // Aplica um conjunto de baixas (automáticas) em lote via writeBatch
 export const applyPayablesReconciliation = async (
-  updates: { id: string; statementId: string; source: string }[]
+  updates: { id: string; statementId: string; source: string; notes?: string }[]
 ): Promise<void> => {
   const db = getFirestoreDb();
   const CHUNK = 400;
@@ -1011,9 +1023,18 @@ export const applyPayablesReconciliation = async (
     const chunk = updates.slice(i, i + CHUNK);
     const batch = writeBatch(db);
     for (const u of chunk) {
+      const data: Record<string, any> = {
+        status_baixa: 'Baixado Automático',
+        extrato_id: u.statementId,
+        extrato_fonte: u.source,
+        baixa_em: now,
+      };
+      if (u.notes) {
+        data.observacoes = u.notes;
+      }
       batch.set(
         doc(db, PAYABLES_COLLECTION, u.id),
-        { status_baixa: 'Baixado Automático', extrato_id: u.statementId, extrato_fonte: u.source, baixa_em: now },
+        data,
         { merge: true }
       );
     }

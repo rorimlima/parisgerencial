@@ -119,6 +119,8 @@ export interface Customer {
   neighborhood?: string;          // bairro
   zipCode?: string;               // cep
   sellerResponsible?: string;     // vendedor_responsavel
+  relationshipType?: 'Cliente' | 'Fornecedor' | 'Ambos' | 'Nenhum' | string; // tipo_relacionamento
+  expenseClassification?: 'Despesa Fixa' | 'Despesa Variável' | 'Nenhuma' | string; // classificacao_despesa
 }
 
 export interface DelinquentTitle {
