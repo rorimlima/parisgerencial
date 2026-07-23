@@ -66,6 +66,7 @@ export const fetchEconomicData = async (year: number): Promise<Record<string, Ec
     
     const initialForYear = INITIAL_ECONOMIC_BY_YEAR[year];
     const result: Record<string, EconomicMonthData> = {};
+    
     ALL_MONTHS.forEach(m => {
       if (initialForYear && initialForYear[m]) {
         result[m] = { ...initialForYear[m] };
@@ -73,13 +74,22 @@ export const fetchEconomicData = async (year: number): Promise<Record<string, Ec
         result[m] = createEmptyEconomicMonth(m, year);
       }
     });
-    
-    // Se o Firestore tiver registros para este ano, mescla com os dados do Firestore
+
+    // Se o Firestore tiver registros para este ano
     if (!snapshot.empty) {
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
         const mes_chave = data.mes_chave || '';
         if (!mes_chave) return;
+
+        // Se para este ano temos uma definição oficial mestre (como 2026 onde jul-dez são zerados),
+        // e o mês em initialForYear é zerado oficialmente, limpa/reseta o documento do Firestore
+        if (initialForYear && initialForYear[mes_chave]) {
+          if (initialForYear[mes_chave].receitaBruta === 0 && data.receita_bruta > 0) {
+            saveEconomicLaunch(year, mes_chave, initialForYear[mes_chave]).catch(() => {});
+            return;
+          }
+        }
 
         const receitaBruta = data.receita_bruta !== undefined ? data.receita_bruta : (result[mes_chave]?.receitaBruta || 0);
         const cmv = data.cmv !== undefined ? data.cmv : (result[mes_chave]?.cmv || 0);
@@ -110,9 +120,18 @@ export const fetchEconomicData = async (year: number): Promise<Record<string, Ec
         };
       });
     } else if (initialForYear) {
-      // Se não há dados no Firestore ainda para 2024/2025, salva os dados de initialData em background
       Object.entries(initialForYear).forEach(([mKey, mData]) => {
         saveEconomicLaunch(year, mKey, mData).catch((err) => console.warn('Erro ao salvar lote inicial:', err));
+      });
+    }
+
+    // Para o ano de 2026, forçamos a sincronização dos dados mestres oficiais (Jan-Jun preenchidos, Jul-Dez zerados) no Firestore
+    if (year === 2026 && initialForYear) {
+      ALL_MONTHS.forEach((mKey) => {
+        if (initialForYear[mKey]) {
+          result[mKey] = { ...initialForYear[mKey] };
+          saveEconomicLaunch(year, mKey, initialForYear[mKey]).catch(() => {});
+        }
       });
     }
     
