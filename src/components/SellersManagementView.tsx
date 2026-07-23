@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { Briefcase, Edit2, Plus, Search, Trash2, UserCheck, AlertTriangle, X, Check } from 'lucide-react';
-import { DelinquentTitle, Seller, UserRole } from '../types';
+import { Customer, DelinquentTitle, Seller, UserRole } from '../types';
 
 interface SellersManagementViewProps {
   sellers: Seller[];
   delinquentTitles: DelinquentTitle[];
+  customers: Customer[];
   onAddSeller: (seller: Seller) => void;
   onUpdateSeller: (id: string, seller: Partial<Seller>) => void;
   onDeleteSeller: (id: string) => void;
@@ -14,6 +15,7 @@ interface SellersManagementViewProps {
 export const SellersManagementView: React.FC<SellersManagementViewProps> = ({
   sellers,
   delinquentTitles,
+  customers,
   onAddSeller,
   onUpdateSeller,
   onDeleteSeller,
@@ -90,14 +92,41 @@ export const SellersManagementView: React.FC<SellersManagementViewProps> = ({
     setDeleteConfirmId(null);
   };
 
+  // Normaliza string para remoção de acentos e case-insensitivity
+  const normalizeText = (str: string) =>
+    str
+      ? str
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .trim()
+      : '';
+
   // Calcula total inadimplente por vendedor
   const getSellerDelinquentAmount = (seller: Seller) => {
+    const normSellerName = normalizeText(seller.name);
+    const normSellerCode = normalizeText(seller.code);
+
     return delinquentTitles
-      .filter((t) => 
-        (t.sellerId && t.sellerId === seller.id) ||
-        (t.sellerCode && t.sellerCode.toLowerCase() === seller.code.toLowerCase()) ||
-        (t.sellerName && t.sellerName.toLowerCase() === seller.name.toLowerCase())
-      )
+      .filter((t) => {
+        // Vínculo direto pelos campos do título
+        if (t.sellerId && t.sellerId === seller.id) return true;
+        if (t.sellerCode && normalizeText(t.sellerCode) === normSellerCode) return true;
+        if (t.sellerName && normalizeText(t.sellerName) === normSellerName) return true;
+
+        // Fallback: Vínculo através do Vendedor Responsável cadastrado no Cliente do título
+        const titleCustomer = customers.find(
+          (c) =>
+            c.id === t.customerId ||
+            (t.customerCode && c.code.toLowerCase() === t.customerCode.toLowerCase())
+        );
+        if (titleCustomer && titleCustomer.sellerResponsible) {
+          const normCustSeller = normalizeText(titleCustomer.sellerResponsible);
+          if (normCustSeller === normSellerName || normCustSeller === normSellerCode) return true;
+        }
+
+        return false;
+      })
       .reduce((acc, t) => acc + (t.updatedAmount || t.originalAmount || 0), 0);
   };
 

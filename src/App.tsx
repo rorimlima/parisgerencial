@@ -620,12 +620,92 @@ export default function App() {
   };
 
   const handleUpdateSeller = async (id: string, sellerData: Partial<Seller>) => {
+    const oldSeller = sellers.find((s) => s.id === id);
+    if (!oldSeller) return;
+
+    // 1. Atualiza estado local de vendedores
     setSellers((prev) =>
       prev.map((s) => (s.id === id ? { ...s, ...sellerData } : s))
     );
-    await updateVendedor(id, sellerData).catch((e) =>
-      console.error('Erro ao atualizar vendedor no Firestore:', e)
-    );
+
+    try {
+      // 2. Atualiza o vendedor no Firestore
+      await updateVendedor(id, sellerData);
+
+      // 3. Se alterou o nome ou código, cascateia para clientes e títulos inadimplentes
+      const nameChanged = sellerData.name !== undefined && sellerData.name !== oldSeller.name;
+      const codeChanged = sellerData.code !== undefined && sellerData.code !== oldSeller.code;
+
+      if (nameChanged || codeChanged) {
+        const newName = sellerData.name || oldSeller.name;
+        const newCode = sellerData.code || oldSeller.code;
+
+        // Cascatear Clientes (vendedor_responsavel)
+        if (nameChanged) {
+          const customersToUpdate = customers.filter(
+            (c) => c.sellerResponsible === oldSeller.name
+          );
+
+          if (customersToUpdate.length > 0) {
+            setCustomers((prev) =>
+              prev.map((c) =>
+                c.sellerResponsible === oldSeller.name
+                  ? { ...c, sellerResponsible: newName }
+                  : c
+              )
+            );
+
+            for (const c of customersToUpdate) {
+              await updateCliente(c.id, { sellerResponsible: newName }).catch((err) =>
+                console.error(`Erro ao atualizar vendedor responsável para cliente ${c.id}:`, err)
+              );
+            }
+          }
+        }
+
+        // Cascatear Títulos Inadimplentes (sellerName, sellerCode, sellerId)
+        const titlesToUpdate = delinquentTitles.filter(
+          (t) =>
+            t.sellerId === id ||
+            (oldSeller.code && t.sellerCode && t.sellerCode.toLowerCase() === oldSeller.code.toLowerCase()) ||
+            (oldSeller.name && t.sellerName && t.sellerName.toLowerCase() === oldSeller.name.toLowerCase())
+        );
+
+        if (titlesToUpdate.length > 0) {
+          setDelinquentTitles((prev) =>
+            prev.map((t) => {
+              const matchesId = t.sellerId === id;
+              const matchesCode = oldSeller.code && t.sellerCode && t.sellerCode.toLowerCase() === oldSeller.code.toLowerCase();
+              const matchesName = oldSeller.name && t.sellerName && t.sellerName.toLowerCase() === oldSeller.name.toLowerCase();
+
+              if (matchesId || matchesCode || matchesName) {
+                return {
+                  ...t,
+                  sellerId: id,
+                  sellerName: newName,
+                  sellerCode: newCode,
+                };
+              }
+              return t;
+            })
+          );
+
+          for (const t of titlesToUpdate) {
+            await updateTitulo(t.id, {
+              sellerId: id,
+              sellerName: newName,
+              sellerCode: newCode,
+            }).catch((err) =>
+              console.error(`Erro ao atualizar vendedor para o título ${t.id}:`, err)
+            );
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Erro ao atualizar vendedor no Firestore:', e);
+      // Reverte estado local de vendedores em caso de erro
+      setSellers(sellers);
+    }
   };
 
   const handleDeleteSeller = async (id: string) => {
@@ -854,7 +934,7 @@ export default function App() {
       
       const desc = r.description || '';
       const isBorderou = desc.toLowerCase().includes('originado pelo borderô') || desc.toLowerCase().includes('originado pelo bordero');
-      const status = isBorderou ? 'Baixado Manual' : 'Em Aberto';
+      const status = (isBorderou ? 'Baixado Manual' : 'Em Aberto') as PayableTitle['status'];
       const notes = isBorderou ? desc : '';
 
       return {
@@ -1157,6 +1237,7 @@ export default function App() {
             <SellersManagementView
               sellers={sellers}
               delinquentTitles={delinquentTitles}
+              customers={customers}
               onAddSeller={handleAddSeller}
               onUpdateSeller={handleUpdateSeller}
               onDeleteSeller={handleDeleteSeller}

@@ -1100,6 +1100,18 @@ export const fetchSellers = async (): Promise<Seller[]> => {
     const db = getFirestoreDb();
     const snapshot = await getDocs(collection(db, 'vendedores'));
     if (snapshot.empty) {
+      // Seed initial sellers into Firestore so they exist as documents
+      for (const seller of INITIAL_SELLERS) {
+        const docRef = doc(db, 'vendedores', seller.id);
+        await setDoc(docRef, {
+          codigo: seller.code,
+          nome: seller.name,
+          email: seller.email || '',
+          telefone: seller.phone || '',
+          status: seller.status || 'Ativo',
+          criado_em: new Date().toISOString(),
+        });
+      }
       return INITIAL_SELLERS;
     }
     return snapshot.docs.map(docSnap => {
@@ -1150,7 +1162,7 @@ export const updateSeller = async (id: string, seller: Partial<Seller>): Promise
     if (seller.phone !== undefined) firestoreData.telefone = seller.phone;
     if (seller.status !== undefined) firestoreData.status = seller.status;
 
-    await updateDoc(docRef, firestoreData);
+    await setDoc(docRef, firestoreData, { merge: true });
   } catch (error) {
     console.error('Error updating seller:', error);
     throw error;
