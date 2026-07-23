@@ -87,7 +87,9 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ViewTab>('dashboard');
   const [importTargetModule, setImportTargetModule] = useState<'financial' | 'economic' | 'customers' | 'delinquency'>('financial');
   const [selectedYear, setSelectedYear] = useState<number>(2026);
-  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
+    return typeof window !== 'undefined' ? window.innerWidth >= 768 : true;
+  });
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   // ── Autenticação ──────────────────────────────────────────────────────────
@@ -891,14 +893,60 @@ export default function App() {
     }
   };
 
-  const handleManualBaixa = async (id: string, notes?: string) => {
+  // Gera código técnico sequencial para baixa: BX-AAAA-NNNNN
+  const generateBaixaCode = (): string => {
+    const year = new Date().getFullYear();
+    const prefix = `BX-${year}-`;
+    // Conta baixas existentes do mesmo ano para gerar sequencial
+    const existingCodes = payables
+      .filter((p) => p.baixaCode && p.baixaCode.startsWith(prefix))
+      .map((p) => {
+        const num = parseInt(p.baixaCode!.replace(prefix, ''), 10);
+        return isNaN(num) ? 0 : num;
+      });
+    const nextSeq = existingCodes.length > 0 ? Math.max(...existingCodes) + 1 : 1;
+    return `${prefix}${String(nextSeq).padStart(5, '0')}`;
+  };
+
+  const handleManualBaixa = async (
+    id: string,
+    notes?: string,
+    statementEntryId?: string,
+    statementSource?: string
+  ) => {
     try {
-      await updateContaPagar(id, { status: 'Baixado Manual', notes, reconciledAt: new Date().toISOString() });
+      const baixaCode = generateBaixaCode();
+      const now = new Date().toISOString();
+      const updateFields: Partial<PayableTitle> = {
+        status: 'Baixado Manual',
+        notes: notes || '',
+        reconciledAt: now,
+        baixaCode,
+      };
+      // Se vier do "Encontrar no Extrato", salva o vínculo com o lançamento
+      if (statementEntryId) {
+        updateFields.reconciledStatementId = statementEntryId;
+        updateFields.reconciledSource = statementSource || '';
+      }
+      await updateContaPagar(id, updateFields);
       setPayables((prev) =>
-        prev.map((p) => (p.id === id ? { ...p, status: 'Baixado Manual', notes: notes || p.notes } : p))
+        prev.map((p) =>
+          p.id === id
+            ? {
+                ...p,
+                status: 'Baixado Manual' as const,
+                notes: notes || p.notes,
+                reconciledAt: now,
+                baixaCode,
+                reconciledStatementId: statementEntryId || p.reconciledStatementId,
+                reconciledSource: statementSource || p.reconciledSource,
+              }
+            : p
+        )
       );
     } catch (e) {
       console.error('Erro ao dar baixa manual:', e);
+      alert('Erro ao dar baixa manual. Verifique o console.');
     }
   };
 
@@ -990,6 +1038,8 @@ export default function App() {
         currentUser={currentUser}
         onOpenLoginModal={() => setIsLoginModalOpen(true)}
         onOpenLaunchModal={() => setIsLaunchModalOpen(true)}
+        isSidebarOpen={isSidebarOpen}
+        onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
       />
 
       <div className="flex-1 flex overflow-hidden">

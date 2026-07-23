@@ -238,6 +238,7 @@ export interface PayableTitle {
   reconciledStatementId?: string; // id do lançamento de extrato conciliado (baixa automática)
   reconciledSource?: string;      // fonte do extrato (Bradesco/PagSeguro/Caixa)
   reconciledAt?: string;
+  baixaCode?: string;            // Código técnico da baixa (ex: BX-2026-00001)
   notes?: string;
 }
 

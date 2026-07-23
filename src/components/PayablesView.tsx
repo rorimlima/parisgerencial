@@ -17,7 +17,7 @@
  * casado permanece "Em Aberto" para baixa manual pelo gestor.
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import {
   AlertCircle,
@@ -45,7 +45,7 @@ interface PayablesViewProps {
   selectedYear: number;
   onImportPayables: (rows: RawPayableRow[]) => void;
   onReconcileNow: () => void;
-  onManualBaixa: (id: string, notes?: string) => void;
+  onManualBaixa: (id: string, notes?: string, statementEntryId?: string, statementSource?: string) => void;
   onRevertBaixa: (id: string) => void;
   onLinkSupplier: (payableId: string, customerId: string, customerCode: string) => void;
   onDeletePayable?: (id: string) => void;
@@ -148,6 +148,15 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
   const [monthFilter, setMonthFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Paginação
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 50;
+
+  // Resetar página quando os filtros mudam
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [statusFilter, monthFilter, searchQuery]);
+
   const [detailsPayable, setDetailsPayable] = useState<PayableTitle | null>(null);
   const [baixaTarget, setBaixaTarget] = useState<PayableTitle | null>(null);
   const [baixaNotes, setBaixaNotes] = useState('');
@@ -155,8 +164,61 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
   const [linkCode, setLinkCode] = useState('');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
+  const [isBaixaLoading, setIsBaixaLoading] = useState(false);
+
+  // Estado do modal "Encontrar no Extrato"
+  const [extratoSearchTarget, setExtratoSearchTarget] = useState<PayableTitle | null>(null);
+  const [extratoSearchResults, setExtratoSearchResults] = useState<FinancialStatementEntry[]>([]);
+  const [extratoSearchLoading, setExtratoSearchLoading] = useState(false);
 
   const canEdit = userRole !== 'analista';
+
+  // ── Função: Encontrar no Extrato (±2 dias, valor exato na saída) ────────
+  const searchExtratoForPayable = (target: PayableTitle) => {
+    setExtratoSearchTarget(target);
+    setExtratoSearchLoading(true);
+    try {
+      const payDate = new Date(target.paymentDate + 'T00:00:00');
+      if (isNaN(payDate.getTime())) {
+        setExtratoSearchResults([]);
+        setExtratoSearchLoading(false);
+        return;
+      }
+      // Janela: 2 dias antes até o dia presente (ou dia do pagamento, o que for maior)
+      const today = new Date();
+      today.setHours(23, 59, 59, 999);
+      const startWindow = new Date(payDate);
+      startWindow.setDate(startWindow.getDate() - 2);
+      startWindow.setHours(0, 0, 0, 0);
+      const endWindow = today > payDate ? today : payDate;
+
+      const targetAmount = Math.round(target.amount * 100); // centavos para comparação exata
+
+      const matches = statementEntries.filter((e) => {
+        // Só entradas de saída (exit > 0)
+        if (e.exitAmount <= 0) return false;
+        // Comparar valor exato em centavos
+        if (Math.round(e.exitAmount * 100) !== targetAmount) return false;
+        // Verificar janela de data
+        const entryDate = new Date(e.date + 'T00:00:00');
+        if (isNaN(entryDate.getTime())) return false;
+        return entryDate >= startWindow && entryDate <= endWindow;
+      });
+
+      // Ordena por proximidade de data ao pagamento
+      matches.sort((a, b) => {
+        const da = Math.abs(new Date(a.date).getTime() - payDate.getTime());
+        const db = Math.abs(new Date(b.date).getTime() - payDate.getTime());
+        return da - db;
+      });
+
+      setExtratoSearchResults(matches);
+    } catch {
+      setExtratoSearchResults([]);
+    } finally {
+      setExtratoSearchLoading(false);
+    }
+  };
 
   // ── Upload / Parse ────────────────────────────────────────────────────────
 
@@ -242,6 +304,13 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
       return matchesStatus && matchesMonth && matchesSearch;
     });
   }, [payables, statusFilter, monthFilter, searchQuery]);
+
+  const paginatedPayables = useMemo(() => {
+    const start = (currentPage - 1) * itemsPerPage;
+    return filteredPayables.slice(start, start + itemsPerPage);
+  }, [filteredPayables, currentPage, itemsPerPage]);
+
+  const totalPages = Math.ceil(filteredPayables.length / itemsPerPage);
 
   const totalPago = payables.reduce((a, p) => a + p.amount, 0);
   const emAberto = payables.filter((p) => p.status === 'Em Aberto');
@@ -545,7 +614,7 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-[#EAE6DF] text-[#433E37]">
-              {filteredPayables.slice(0, 300).map((p) => (
+              {paginatedPayables.map((p) => (
                 <tr key={p.id} className="hover:bg-[#FDFBF7] transition-colors">
                   <td className="p-3 font-mono whitespace-nowrap">{p.movCode}</td>
                   <td className="p-3 max-w-xs truncate" title={p.supplierName}>
@@ -566,7 +635,14 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                   <td className="p-3 font-mono whitespace-nowrap">{p.parcela || '-'}</td>
                   <td className="p-3 font-mono whitespace-nowrap">{p.paymentDate}</td>
                   <td className="p-3 text-right font-mono font-bold text-[#2D2A26] whitespace-nowrap">{formatCurrency(p.amount)}</td>
-                  <td className="p-3 text-center whitespace-nowrap">{statusBadge(p.status)}</td>
+                  <td className="p-3 text-center whitespace-nowrap">
+                    <div className="flex flex-col items-center gap-0.5">
+                      {statusBadge(p.status)}
+                      {p.baixaCode && (
+                        <span className="text-[9px] font-mono text-blue-600">{p.baixaCode}</span>
+                      )}
+                    </div>
+                  </td>
                   <td className="p-3 text-center whitespace-nowrap">
                     <div className="flex items-center justify-center space-x-1.5">
                       <button
@@ -577,13 +653,22 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                         <Eye className="w-3.5 h-3.5" />
                       </button>
                       {canEdit && p.status === 'Em Aberto' && (
-                        <button
-                          onClick={() => { setBaixaTarget(p); setBaixaNotes(''); }}
-                          title="Dar Baixa Manual"
-                          className="p-1.5 rounded-lg bg-blue-50 hover:bg-blue-600 text-blue-700 hover:text-white transition-colors"
-                        >
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                        </button>
+                        <>
+                          <button
+                            onClick={() => { setBaixaTarget(p); setBaixaNotes(''); }}
+                            title="Dar Baixa Manual"
+                            className="p-1.5 rounded-lg bg-blue-50 hover:bg-blue-600 text-blue-700 hover:text-white transition-colors"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => { setBaixaTarget(p); setBaixaNotes(''); searchExtratoForPayable(p); }}
+                            title="Encontrar no Extrato (±2 dias)"
+                            className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white transition-colors"
+                          >
+                            <Search className="w-3.5 h-3.5" />
+                          </button>
+                        </>
                       )}
                       {canEdit && p.status !== 'Em Aberto' && (
                         <button
@@ -616,12 +701,53 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
               )}
             </tbody>
           </table>
-          {filteredPayables.length > 300 && (
-            <p className="text-[10px] text-[#8B7D6B] p-3 text-center">
-              Exibindo os primeiros 300 de {filteredPayables.length} títulos. Use os filtros para refinar.
-            </p>
-          )}
         </div>
+
+        {/* Controles de Paginação */}
+        {totalPages > 1 && (
+          <div className="p-4 border-t border-[#EAE6DF] flex flex-col sm:flex-row items-center justify-between gap-3 bg-[#F9F7F2]">
+            <span className="text-xs font-semibold text-[#8B7D6B]">
+              Mostrando {Math.min(filteredPayables.length, (currentPage - 1) * itemsPerPage + 1)} a{' '}
+              {Math.min(filteredPayables.length, currentPage * itemsPerPage)} de {filteredPayables.length} títulos
+            </span>
+            <div className="flex items-center space-x-1.5">
+              <button
+                disabled={currentPage === 1}
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                className="px-3 py-1.5 text-xs font-bold rounded-lg border border-[#EAE6DF] bg-white text-[#433E37] hover:bg-[#F3F1ED] disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+              >
+                Anterior
+              </button>
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                let pNum = currentPage - 2 + i;
+                if (currentPage <= 2) pNum = i + 1;
+                else if (currentPage >= totalPages - 1) pNum = totalPages - 4 + i;
+
+                if (pNum < 1 || pNum > totalPages) return null;
+                return (
+                  <button
+                    key={pNum}
+                    onClick={() => setCurrentPage(pNum)}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
+                      currentPage === pNum
+                        ? 'bg-[#C19A6B] text-white'
+                        : 'border border-[#EAE6DF] bg-white text-[#433E37] hover:bg-[#F3F1ED]'
+                    }`}
+                  >
+                    {pNum}
+                  </button>
+                );
+              })}
+              <button
+                disabled={currentPage === totalPages}
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                className="px-3 py-1.5 text-xs font-bold rounded-lg border border-[#EAE6DF] bg-white text-[#433E37] hover:bg-[#F3F1ED] disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+              >
+                Próximo
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Modal: Detalhes do Título */}
@@ -688,6 +814,12 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                   <p className="text-xs text-[#433E37] bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-3 mt-1">{detailsPayable.notes}</p>
                 </div>
               )}
+              {detailsPayable.baixaCode && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                  <p className="text-[10px] font-bold text-blue-700 uppercase mb-1">Código de Baixa</p>
+                  <p className="text-sm font-mono font-black text-blue-900">{detailsPayable.baixaCode}</p>
+                </div>
+              )}
             </div>
             <div className="p-6 border-t border-[#EAE6DF] flex items-center justify-end bg-[#F9F7F2] rounded-b-xl">
               <button onClick={() => setDetailsPayable(null)} className="px-4 py-2 text-xs font-bold text-[#8B7D6B] hover:text-[#2D2A26]">
@@ -699,9 +831,9 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
       )}
 
       {/* Modal: Baixa Manual */}
-      {baixaTarget && (
+      {baixaTarget && !extratoSearchTarget && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-blue-200 rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4">
+          <div className="bg-white border border-blue-200 rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4">
             <div className="text-center">
               <div className="w-12 h-12 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mx-auto border border-blue-100">
                 <CheckCircle2 className="w-6 h-6" />
@@ -710,6 +842,9 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
               <p className="text-xs text-[#8B7D6B] mt-1">
                 {baixaTarget.supplierName} — {formatCurrency(baixaTarget.amount)}
               </p>
+              <p className="text-[10px] font-mono text-[#C19A6B] mt-0.5">
+                Mov: {baixaTarget.movCode} • Pagto: {baixaTarget.paymentDate}
+              </p>
             </div>
             <textarea
               value={baixaNotes}
@@ -717,20 +852,182 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
               placeholder="Observação da baixa (opcional): ex. pago em dinheiro, comprovante nº..."
               rows={2}
               className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs focus:outline-none focus:border-[#C19A6B]"
+              disabled={isBaixaLoading}
             />
+            {/* Botão: Encontrar no Extrato */}
+            <button
+              onClick={() => searchExtratoForPayable(baixaTarget)}
+              disabled={isBaixaLoading}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg hover:bg-emerald-100 transition-colors disabled:opacity-50"
+            >
+              <Search className="w-4 h-4" />
+              Encontrar no Extrato (±2 dias)
+            </button>
             <div className="flex items-center justify-center space-x-3">
-              <button onClick={() => setBaixaTarget(null)} className="px-4 py-2 text-xs font-bold bg-[#F3F1ED] text-[#433E37] rounded-lg hover:bg-gray-200">
+              <button
+                onClick={() => { setBaixaTarget(null); setIsBaixaLoading(false); }}
+                disabled={isBaixaLoading}
+                className="px-4 py-2 text-xs font-bold bg-[#F3F1ED] text-[#433E37] rounded-lg hover:bg-gray-200 disabled:opacity-50"
+              >
                 Cancelar
               </button>
               <button
-                onClick={() => {
-                  onManualBaixa(baixaTarget.id, baixaNotes.trim() || undefined);
-                  setBaixaTarget(null);
+                disabled={isBaixaLoading}
+                onClick={async () => {
+                  setIsBaixaLoading(true);
+                  try {
+                    await onManualBaixa(baixaTarget.id, baixaNotes.trim() || undefined);
+                    setBaixaTarget(null);
+                  } catch {
+                    // Erro tratado no handler
+                  } finally {
+                    setIsBaixaLoading(false);
+                  }
                 }}
-                className="px-4 py-2 text-xs font-bold bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                className="px-4 py-2 text-xs font-bold bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
               >
-                Confirmar Baixa
+                {isBaixaLoading && (
+                  <svg className="animate-spin w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
+                    <path d="M4 12a8 8 0 018-8V0C5.37 0 0 5.37 0 12h4z" fill="currentColor" className="opacity-75" />
+                  </svg>
+                )}
+                Confirmar Baixa Manual
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Encontrar no Extrato — resultados */}
+      {extratoSearchTarget && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-emerald-200 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[80vh] flex flex-col">
+            {/* Header */}
+            <div className="p-5 border-b border-[#EAE6DF]">
+              <div className="flex items-start justify-between">
+                <div>
+                  <h4 className="text-base font-black text-[#2D2A26] flex items-center gap-2">
+                    <Search className="w-5 h-5 text-emerald-600" /> Encontrar no Extrato
+                  </h4>
+                  <p className="text-xs text-[#8B7D6B] mt-1">
+                    Buscando saída de <span className="font-bold text-[#2D2A26]">{formatCurrency(extratoSearchTarget.amount)}</span>{' '}
+                    para <span className="font-bold">{extratoSearchTarget.supplierName}</span>
+                  </p>
+                  <p className="text-[10px] font-mono text-[#C19A6B] mt-0.5">
+                    Janela: 2 dias antes de {extratoSearchTarget.paymentDate} até hoje
+                  </p>
+                </div>
+                <button
+                  onClick={() => { setExtratoSearchTarget(null); setExtratoSearchResults([]); }}
+                  className="p-1 rounded-lg hover:bg-gray-100"
+                >
+                  <X className="w-4 h-4 text-[#8B7D6B]" />
+                </button>
+              </div>
+            </div>
+
+            {/* Resultados */}
+            <div className="p-5 overflow-y-auto flex-1">
+              {extratoSearchLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <svg className="animate-spin w-6 h-6 text-emerald-600" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
+                    <path d="M4 12a8 8 0 018-8V0C5.37 0 0 5.37 0 12h4z" fill="currentColor" className="opacity-75" />
+                  </svg>
+                  <span className="ml-2 text-sm text-[#8B7D6B]">Buscando...</span>
+                </div>
+              ) : extratoSearchResults.length === 0 ? (
+                <div className="text-center py-8">
+                  <AlertCircle className="w-10 h-10 text-amber-400 mx-auto mb-2" />
+                  <p className="text-sm font-bold text-[#2D2A26]">Nenhum lançamento encontrado</p>
+                  <p className="text-xs text-[#8B7D6B] mt-1">
+                    Não foi encontrada nenhuma saída de {formatCurrency(extratoSearchTarget.amount)} no extrato
+                    dentro da janela de ±2 dias.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-xs font-bold text-emerald-700 mb-3">
+                    {extratoSearchResults.length} lançamento(s) encontrado(s) — clique para confirmar a baixa:
+                  </p>
+                  {extratoSearchResults.map((entry) => (
+                    <div
+                      key={entry.id}
+                      className="border border-[#EAE6DF] rounded-xl p-4 hover:border-emerald-400 hover:bg-emerald-50/40 transition-all cursor-pointer group"
+                      onClick={async () => {
+                        if (isBaixaLoading) return;
+                        setIsBaixaLoading(true);
+                        const justificativa = [
+                          baixaNotes.trim(),
+                          `Conciliado c/ extrato ${entry.sourceLabel} em ${entry.date}`,
+                          extratoSearchTarget.description?.includes('Borderô')
+                            ? extratoSearchTarget.description
+                            : '',
+                        ].filter(Boolean).join(' | ');
+                        try {
+                          await onManualBaixa(
+                            extratoSearchTarget.id,
+                            justificativa,
+                            entry.id,
+                            entry.source
+                          );
+                          setExtratoSearchTarget(null);
+                          setExtratoSearchResults([]);
+                          setBaixaTarget(null);
+                        } catch {
+                          // Erro tratado no handler
+                        } finally {
+                          setIsBaixaLoading(false);
+                        }
+                      }}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                              {entry.sourceLabel}
+                            </span>
+                            <span className="text-xs font-mono text-[#8B7D6B]">{entry.date}</span>
+                          </div>
+                          <p className="text-xs text-[#433E37] mt-1 truncate">{entry.description}</p>
+                          {entry.clientName && (
+                            <p className="text-[10px] text-[#8B7D6B] mt-0.5">Cliente: {entry.clientName}</p>
+                          )}
+                        </div>
+                        <div className="text-right flex-shrink-0 ml-4">
+                          <p className="text-sm font-black text-rose-600">{formatCurrency(entry.exitAmount)}</p>
+                          <p className="text-[10px] text-[#8B7D6B]">Saída</p>
+                        </div>
+                      </div>
+                      <div className="mt-2 flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-full">
+                          <CheckCircle2 className="w-3 h-3" /> Confirmar Baixa com este lançamento
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-[#EAE6DF] flex items-center justify-between bg-[#F9F7F2] rounded-b-2xl">
+              <button
+                onClick={() => { setExtratoSearchTarget(null); setExtratoSearchResults([]); }}
+                className="px-4 py-2 text-xs font-bold text-[#8B7D6B] hover:text-[#2D2A26]"
+              >
+                ← Voltar para Baixa Manual
+              </button>
+              {isBaixaLoading && (
+                <span className="text-xs text-emerald-600 flex items-center gap-1">
+                  <svg className="animate-spin w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
+                    <path d="M4 12a8 8 0 018-8V0C5.37 0 0 5.37 0 12h4z" fill="currentColor" className="opacity-75" />
+                  </svg>
+                  Processando baixa...
+                </span>
+              )}
             </div>
           </div>
         </div>

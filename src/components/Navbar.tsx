@@ -12,6 +12,7 @@ import {
   LogOut,
   PlusCircle,
   UserCheck,
+  Menu,
 } from 'lucide-react';
 import { User, ViewTab } from '../types';
 
@@ -29,6 +30,8 @@ interface NavbarProps {
   onExportExcelCurrent?: () => void;
   activeTab?: ViewTab;
   setActiveTab?: (tab: ViewTab) => void;
+  isSidebarOpen?: boolean;
+  onToggleSidebar?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -45,6 +48,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onExportExcelCurrent,
   activeTab,
   setActiveTab,
+  isSidebarOpen,
+  onToggleSidebar,
 }) => {
   const handleYearSelect = (y: number) => {
     if (onYearChange) onYearChange(y);
@@ -71,6 +76,15 @@ export const Navbar: React.FC<NavbarProps> = ({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         {/* Brand Logo */}
         <div className="flex items-center space-x-3">
+          {onToggleSidebar && (
+            <button
+              onClick={onToggleSidebar}
+              className="p-1.5 rounded-lg text-[#8B7D6B] hover:text-[#2D2A26] hover:bg-[#F3F1ED] transition-colors focus:outline-none"
+              title={isSidebarOpen ? 'Recolher Menu' : 'Expandir Menu'}
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+          )}
           <div className="w-10 h-10 rounded-xl bg-[#2D2A26] flex items-center justify-center shadow-xs border border-[#3F3B35]">
             <Building2 className="w-5 h-5 text-[#C19A6B]" />
           </div>

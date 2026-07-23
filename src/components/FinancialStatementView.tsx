@@ -20,7 +20,7 @@
  * Entradas Bancos / Entradas Tesouraria do Resultado Financeiro do mês.
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import {
   AlertCircle,
@@ -309,6 +309,15 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [clearTarget, setClearTarget] = useState<'all' | StatementSource | null>(null);
 
+  // Paginação
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 50;
+
+  // Resetar página quando os filtros mudam
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [sourceFilter, monthFilter, searchQuery]);
+
   const canEdit = userRole !== 'analista';
   const meta = SOURCE_META[sourceType];
 
@@ -476,6 +485,13 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
       return matchesSource && matchesMonth && matchesSearch;
     });
   }, [entries, sourceFilter, monthFilter, searchQuery]);
+
+  const paginatedEntries = useMemo(() => {
+    const start = (currentPage - 1) * itemsPerPage;
+    return filteredEntries.slice(start, start + itemsPerPage);
+  }, [filteredEntries, currentPage, itemsPerPage]);
+
+  const totalPages = Math.ceil(filteredEntries.length / itemsPerPage);
 
   const totalEntradasPeriodo = filteredEntries.reduce((a, e) => a + e.entryAmount, 0);
   const totalSaidasPeriodo = filteredEntries.reduce((a, e) => a + e.exitAmount, 0);
@@ -833,7 +849,7 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-[#EAE6DF] text-[#433E37]">
-              {filteredEntries.slice(0, 300).map((e) => (
+              {paginatedEntries.map((e) => (
                 <tr key={e.id} className="hover:bg-[#FDFBF7] transition-colors">
                   <td className="p-3 font-mono whitespace-nowrap">{e.date}</td>
                   <td className="p-3 whitespace-nowrap">
@@ -881,12 +897,53 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
               )}
             </tbody>
           </table>
-          {filteredEntries.length > 300 && (
-            <p className="text-[10px] text-[#8B7D6B] p-3 text-center">
-              Exibindo os primeiros 300 de {filteredEntries.length} lançamentos. Use os filtros para refinar.
-            </p>
-          )}
         </div>
+
+        {/* Controles de Paginação */}
+        {totalPages > 1 && (
+          <div className="p-4 border-t border-[#EAE6DF] flex flex-col sm:flex-row items-center justify-between gap-3 bg-[#F9F7F2]">
+            <span className="text-xs font-semibold text-[#8B7D6B]">
+              Mostrando {Math.min(filteredEntries.length, (currentPage - 1) * itemsPerPage + 1)} a{' '}
+              {Math.min(filteredEntries.length, currentPage * itemsPerPage)} de {filteredEntries.length} lançamentos
+            </span>
+            <div className="flex items-center space-x-1.5">
+              <button
+                disabled={currentPage === 1}
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                className="px-3 py-1.5 text-xs font-bold rounded-lg border border-[#EAE6DF] bg-white text-[#433E37] hover:bg-[#F3F1ED] disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+              >
+                Anterior
+              </button>
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                let pNum = currentPage - 2 + i;
+                if (currentPage <= 2) pNum = i + 1;
+                else if (currentPage >= totalPages - 1) pNum = totalPages - 4 + i;
+
+                if (pNum < 1 || pNum > totalPages) return null;
+                return (
+                  <button
+                    key={pNum}
+                    onClick={() => setCurrentPage(pNum)}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
+                      currentPage === pNum
+                        ? 'bg-[#C19A6B] text-white'
+                        : 'border border-[#EAE6DF] bg-white text-[#433E37] hover:bg-[#F3F1ED]'
+                    }`}
+                  >
+                    {pNum}
+                  </button>
+                );
+              })}
+              <button
+                disabled={currentPage === totalPages}
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                className="px-3 py-1.5 text-xs font-bold rounded-lg border border-[#EAE6DF] bg-white text-[#433E37] hover:bg-[#F3F1ED] disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+              >
+                Próximo
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Modal: Detalhes do Lançamento */}

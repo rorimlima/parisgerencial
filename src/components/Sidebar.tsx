@@ -36,11 +36,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activeTab,
   onTabChange,
   setActiveTab,
+  isOpen = true,
+  setIsOpen,
   userRole,
 }) => {
   const handleSelect = (tab: ViewTab) => {
     if (onTabChange) onTabChange(tab);
     if (setActiveTab) setActiveTab(tab);
+    if (setIsOpen && typeof window !== 'undefined' && window.innerWidth < 768) {
+      setIsOpen(false);
+    }
   };
 
   const menuItems = [
@@ -103,8 +108,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ];
 
   return (
-    <aside className="w-full md:w-64 bg-[#2D2A26] text-[#EAE6DF] border-r border-[#3F3B35] flex-shrink-0 min-h-screen p-4 flex flex-col justify-between shadow-xs">
-      <div className="space-y-6">
+    <>
+      {/* Backdrop para celular */}
+      {isOpen && setIsOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-30 md:hidden transition-opacity"
+          onClick={() => setIsOpen(false)}
+        />
+      )}
+
+      <aside
+        className={`bg-[#2D2A26] text-[#EAE6DF] border-r border-[#3F3B35] flex-shrink-0 p-4 flex flex-col justify-between shadow-xs transition-all duration-300 overflow-y-auto z-40
+          ${isOpen ? 'translate-x-0 w-64' : '-translate-x-full w-0 p-0 border-r-0 md:-translate-x-0 md:hidden'}
+          fixed inset-y-0 left-0 md:relative md:translate-x-0 md:h-[calc(100vh-4rem)]
+        `}
+      >
+        <div className="space-y-6">
         <div>
           <p className="px-3 text-[10px] font-bold text-[#C19A6B] uppercase tracking-[0.2em] mb-3">
             Módulos Gerenciais
@@ -166,6 +185,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <p>Sistema Corporativo Multi-função</p>
       </div>
     </aside>
+    </>
   );
 };
 

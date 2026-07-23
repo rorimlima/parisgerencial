@@ -24,7 +24,8 @@ import {
   Seller,
   ApiToken,
   FinancialStatementEntry,
-  PayableTitle
+  PayableTitle,
+  PayableStatus
 } from '../types';
 
 let firestoreDb: ReturnType<typeof getFirestore>;
@@ -912,6 +913,7 @@ const payableFromFirestore = (id: string, data: any): PayableTitle => ({
   reconciledStatementId: data.extrato_id || '',
   reconciledSource: data.extrato_fonte || '',
   reconciledAt: data.baixa_em || '',
+  baixaCode: data.baixa_code || '',
   notes: data.observacoes || '',
 });
 
@@ -1004,6 +1006,7 @@ export const updatePayable = async (id: string, fields: Partial<PayableTitle>): 
     if (fields.reconciledSource !== undefined) data.extrato_fonte = fields.reconciledSource;
     if (fields.reconciledAt !== undefined) data.baixa_em = fields.reconciledAt;
     if (fields.notes !== undefined) data.observacoes = fields.notes;
+    if (fields.baixaCode !== undefined) data.baixa_code = fields.baixaCode;
     if (fields.supplierCustomerId !== undefined) data.credor_cliente_id = fields.supplierCustomerId;
     await setDoc(doc(db, PAYABLES_COLLECTION, id), data, { merge: true });
   } catch (error) {

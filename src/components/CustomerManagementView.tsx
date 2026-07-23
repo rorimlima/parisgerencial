@@ -69,6 +69,11 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
   const [currentBalance, setCurrentBalance] = useState('');
   const [delinquentAmount, setDelinquentAmount] = useState('');
   const [status, setStatus] = useState('Adimplente');
+  // Novos campos para classificação financeira
+  const [relationshipType, setRelationshipType] = useState('Nenhum');
+  const [expenseClassification, setExpenseClassification] = useState('Nenhuma');
+  const [activeTab, setActiveTab] = useState<'geral' | 'financeiro' | 'classificacao'>('geral');
+  const [activeDetailTab, setActiveDetailTab] = useState<'geral' | 'financeiro' | 'classificacao'>('geral');
 
   const filteredCustomers = customers.filter((c) => {
     const matchesSearch =
@@ -98,6 +103,9 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
     setCurrentBalance('0');
     setDelinquentAmount('0');
     setStatus('Adimplente');
+    setRelationshipType('Nenhum');
+    setExpenseClassification('Nenhuma');
+    setActiveTab('geral');
     setIsModalOpen(true);
   };
 
@@ -116,6 +124,9 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
     setCurrentBalance(String(customer.currentBalance || 0));
     setDelinquentAmount(String(customer.delinquentAmount || 0));
     setStatus(customer.status || 'Adimplente');
+    setRelationshipType(customer.relationshipType || 'Nenhum');
+    setExpenseClassification(customer.expenseClassification || 'Nenhuma');
+    setActiveTab('geral');
     setIsModalOpen(true);
   };
 
@@ -135,6 +146,8 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
       currentBalance: parseFloat(currentBalance || '0'),
       delinquentAmount: parseFloat(delinquentAmount || '0'),
       status: status as any,
+      relationshipType,
+      expenseClassification,
     };
 
     if (editingCustomer && onUpdateCustomer) {
@@ -168,6 +181,8 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
       'Saldo Devedor': c.currentBalance,
       'Inadimplência': c.delinquentAmount,
       'Status': c.status,
+      'Tipo de Relacionamento': c.relationshipType || 'Nenhum',
+      'Classificação de Despesa': c.expenseClassification || 'Nenhuma',
     }));
 
     exportReportToExcel(exportData, 'Clientes', `Clientes_${Date.now()}.xlsx`);
@@ -276,93 +291,118 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
       {/* Customer Directory Table */}
       <div className="bg-white border border-[#EAE6DF] rounded-xl shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
+          <table className="w-full text-left border-collapse text-[10.5px]">
             <thead className="bg-[#F9F7F2] text-[#8B7D6B] font-bold border-b border-[#EAE6DF]">
               <tr>
-                <th className="p-3 whitespace-nowrap">Chave (cod_cliente)</th>
-                <th className="p-3 text-center whitespace-nowrap">Ações</th>
-                <th className="p-3 whitespace-nowrap">Razão Social</th>
-                <th className="p-3 whitespace-nowrap">Nome Fantasia</th>
-                <th className="p-3 whitespace-nowrap">CNPJ / CPF</th>
-                <th className="p-3 whitespace-nowrap">Contato</th>
-                <th className="p-3 whitespace-nowrap">Telefone</th>
-                <th className="p-3 whitespace-nowrap">E-mail</th>
-                <th className="p-3 whitespace-nowrap">Cidade</th>
-                <th className="p-3 whitespace-nowrap">UF</th>
-                <th className="p-3 text-right whitespace-nowrap">Limite de Crédito</th>
-                <th className="p-3 text-right whitespace-nowrap">Saldo Devedor</th>
-                <th className="p-3 text-right whitespace-nowrap">Inadimplência</th>
-                <th className="p-3 text-center whitespace-nowrap">Status</th>
+                <th className="px-2 py-1.5 whitespace-nowrap">Chave (cod_cliente)</th>
+                <th className="px-2 py-1.5 text-center whitespace-nowrap">Ações</th>
+                <th className="px-2 py-1.5 whitespace-nowrap">Razão Social</th>
+                <th className="px-2 py-1.5 whitespace-nowrap">CNPJ / CPF</th>
+                <th className="px-2 py-1.5 whitespace-nowrap">Contato</th>
+                <th className="px-2 py-1.5 whitespace-nowrap">Telefone</th>
+                <th className="px-2 py-1.5 whitespace-nowrap">E-mail</th>
+                <th className="px-2 py-1.5 whitespace-nowrap">Cidade</th>
+                <th className="px-2 py-1.5 whitespace-nowrap">UF</th>
+                <th className="px-2 py-1.5 text-right whitespace-nowrap">Limite de Crédito</th>
+                <th className="px-2 py-1.5 text-right whitespace-nowrap">Saldo Devedor</th>
+                <th className="px-2 py-1.5 text-right whitespace-nowrap">Inadimplência</th>
+                <th className="px-2 py-1.5 text-center whitespace-nowrap">Status</th>
+                <th className="px-2 py-1.5 whitespace-nowrap">Relacionamento</th>
+                <th className="px-2 py-1.5 whitespace-nowrap">Classif. Despesa</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#EAE6DF] text-[#433E37]">
               {filteredCustomers.map((c) => (
                 <tr key={c.id} className="hover:bg-[#FDFBF7] transition-colors">
-                  <td className="p-3 font-mono text-[#C19A6B] font-bold whitespace-nowrap">{c.code}</td>
-                  <td className="p-3 text-center whitespace-nowrap">
-                    <div className="flex items-center justify-center space-x-1.5">
+                  <td className="px-2 py-1 font-mono text-[#C19A6B] font-bold whitespace-nowrap">{c.code}</td>
+                  <td className="px-2 py-1 text-center whitespace-nowrap">
+                    <div className="flex items-center justify-center space-x-1">
                       <button
-                        onClick={() => setDetailsCustomer(c)}
+                        onClick={() => {
+                          setActiveDetailTab('geral');
+                          setDetailsCustomer(c);
+                        }}
                         title="Ver Detalhes do Cliente"
-                        className="p-1.5 rounded-lg bg-[#F3F1ED] hover:bg-[#2D2A26] text-[#433E37] hover:text-white transition-colors"
+                        className="p-1 rounded-lg bg-[#F3F1ED] hover:bg-[#2D2A26] text-[#433E37] hover:text-white transition-colors"
                       >
-                        <Eye className="w-3.5 h-3.5" />
+                        <Eye className="w-3 h-3" />
                       </button>
                       <button
                         onClick={() => openWhatsApp(c)}
                         title="Enviar WhatsApp para o celular do cliente"
-                        className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white transition-colors"
+                        className="p-1 rounded-lg bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white transition-colors"
                       >
-                        <MessageCircle className="w-3.5 h-3.5" />
+                        <MessageCircle className="w-3 h-3" />
                       </button>
                       <button
                         onClick={() => handleOpenEditModal(c)}
                         title="Editar Cliente e Limite"
-                        className="p-1.5 rounded-lg bg-[#F3F1ED] hover:bg-[#C19A6B] text-[#433E37] hover:text-white transition-colors"
+                        className="p-1 rounded-lg bg-[#F3F1ED] hover:bg-[#C19A6B] text-[#433E37] hover:text-white transition-colors"
                       >
-                        <Edit2 className="w-3.5 h-3.5" />
+                        <Edit2 className="w-3 h-3" />
                       </button>
                       {userRole === 'admin' && (
                         <button
                           onClick={() => setDeleteConfirmId(c.id)}
                           title="Excluir Cliente"
-                          className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white transition-colors"
+                          className="p-1 rounded-lg bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white transition-colors"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="w-3 h-3" />
                         </button>
                       )}
                     </div>
                   </td>
-                  <td className="p-3 text-[#2D2A26] font-semibold whitespace-nowrap">{c.name}</td>
-                  <td className="p-3 text-[#433E37] whitespace-nowrap">{c.tradeName}</td>
-                  <td className="p-3 text-[#433E37] text-[10px] whitespace-nowrap">{c.cnpjCpf}</td>
-                  <td className="p-3 text-[#433E37] whitespace-nowrap">{c.contactName}</td>
-                  <td className="p-3 text-[#433E37] text-[10px] whitespace-nowrap">{c.phone}</td>
-                  <td className="p-3 text-[#433E37] text-[10px] whitespace-nowrap">{c.email}</td>
-                  <td className="p-3 text-[#433E37] whitespace-nowrap">{c.city}</td>
-                  <td className="p-3 text-[#433E37] font-bold whitespace-nowrap">{c.state}</td>
-                  <td className="p-3 text-right font-mono font-semibold text-[#2D2A26] whitespace-nowrap">
+                  <td className="px-2 py-1 text-[#2D2A26] font-semibold whitespace-nowrap">{c.name}</td>
+                  <td className="px-2 py-1 text-[#433E37] text-[9.5px] whitespace-nowrap">{c.cnpjCpf}</td>
+                  <td className="px-2 py-1 text-[#433E37] whitespace-nowrap">{c.contactName}</td>
+                  <td className="px-2 py-1 text-[#433E37] text-[9.5px] whitespace-nowrap">{c.phone}</td>
+                  <td className="px-2 py-1 text-[#433E37] text-[9.5px] whitespace-nowrap">{c.email}</td>
+                  <td className="px-2 py-1 text-[#433E37] whitespace-nowrap">{c.city}</td>
+                  <td className="px-2 py-1 text-[#433E37] font-bold whitespace-nowrap">{c.state}</td>
+                  <td className="px-2 py-1 text-right font-mono font-semibold text-[#2D2A26] whitespace-nowrap">
                     {formatCurrency(c.creditLimit)}
                   </td>
-                  <td className="p-3 text-right font-mono font-semibold text-[#C19A6B] whitespace-nowrap">
+                  <td className="px-2 py-1 text-right font-mono font-semibold text-[#C19A6B] whitespace-nowrap">
                     {formatCurrency(c.currentBalance)}
                   </td>
-                  <td className="p-3 text-right font-mono font-bold text-rose-700 whitespace-nowrap">
+                  <td className="px-2 py-1 text-right font-mono font-bold text-rose-700 whitespace-nowrap">
                     {c.delinquentAmount > 0 ? formatCurrency(c.delinquentAmount) : '-'}
                   </td>
-                  <td className="p-3 text-center whitespace-nowrap">
+                  <td className="px-2 py-1 text-center whitespace-nowrap">
                     {c.status === 'Adimplente' ? (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                      <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
                         Adimplente
                       </span>
                     ) : c.status === 'Inadimplente' ? (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">
+                      <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-rose-50 text-rose-800 border border-rose-200">
                         Inadimplente
                       </span>
                     ) : (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#C19A6B]/20 text-[#C19A6B] border border-[#C19A6B]/30">
+                      <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-[#C19A6B]/20 text-[#C19A6B] border border-[#C19A6B]/30">
                         Risco
                       </span>
+                    )}
+                  </td>
+                  <td className="px-2 py-1 whitespace-nowrap">
+                    {c.relationshipType && c.relationshipType !== 'Nenhum' ? (
+                      <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-[#C19A6B]/15 text-[#C19A6B] border border-[#C19A6B]/30">
+                        {c.relationshipType}
+                      </span>
+                    ) : (
+                      <span className="text-gray-400">—</span>
+                    )}
+                  </td>
+                  <td className="px-2 py-1 whitespace-nowrap">
+                    {c.expenseClassification && c.expenseClassification !== 'Nenhuma' ? (
+                      <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                        c.expenseClassification === 'Despesa Fixa'
+                          ? 'bg-blue-50 text-blue-800 border border-blue-200'
+                          : 'bg-amber-50 text-amber-800 border border-amber-200'
+                      }`}>
+                        {c.expenseClassification}
+                      </span>
+                    ) : (
+                      <span className="text-gray-400">—</span>
                     )}
                   </td>
                 </tr>
@@ -389,157 +429,237 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
               </button>
             </div>
 
+            {/* Modal Tabs */}
+            <div className="flex border-b border-[#EAE6DF] bg-[#F9F7F2]">
+              <button
+                type="button"
+                onClick={() => setActiveTab('geral')}
+                className={`flex-1 py-3 text-xs font-bold transition-all border-b-2 text-center ${
+                  activeTab === 'geral'
+                    ? 'border-[#C19A6B] text-[#C19A6B] bg-white'
+                    : 'border-transparent text-[#8B7D6B] hover:text-[#2D2A26]'
+                }`}
+              >
+                Dados Gerais
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('financeiro')}
+                className={`flex-1 py-3 text-xs font-bold transition-all border-b-2 text-center ${
+                  activeTab === 'financeiro'
+                    ? 'border-[#C19A6B] text-[#C19A6B] bg-white'
+                    : 'border-transparent text-[#8B7D6B] hover:text-[#2D2A26]'
+                }`}
+              >
+                Limites e Status
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('classificacao')}
+                className={`flex-1 py-3 text-xs font-bold transition-all border-b-2 text-center ${
+                  activeTab === 'classificacao'
+                    ? 'border-[#C19A6B] text-[#C19A6B] bg-white'
+                    : 'border-transparent text-[#8B7D6B] hover:text-[#2D2A26]'
+                }`}
+              >
+                Classificação DRE / Financeira
+              </button>
+            </div>
+
             <div className="p-6 overflow-y-auto">
               <form id="new-customer-form" onSubmit={handleSubmitCustomer} className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Código (cod_cliente) *</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="Ex: CLI001"
-                      value={code}
-                      onChange={(e) => setCode(e.target.value)}
-                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] font-mono focus:outline-none focus:border-[#C19A6B]"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Razão Social *</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="Ex: Transportadora Rally Dakar Ltda"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B]"
-                    />
-                  </div>
-                </div>
+                {activeTab === 'geral' && (
+                  <>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Código (cod_cliente) *</label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="Ex: CLI001"
+                          value={code}
+                          onChange={(e) => setCode(e.target.value)}
+                          className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] font-mono focus:outline-none focus:border-[#C19A6B]"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Razão Social *</label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="Ex: Transportadora Rally Dakar Ltda"
+                          value={name}
+                          onChange={(e) => setName(e.target.value)}
+                          className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B]"
+                        />
+                      </div>
+                    </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Nome Fantasia</label>
-                    <input
-                      type="text"
-                      placeholder="Ex: Rally Dakar Logística"
-                      value={tradeName}
-                      onChange={(e) => setTradeName(e.target.value)}
-                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B]"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">CNPJ / CPF</label>
-                    <input
-                      type="text"
-                      placeholder="00.000.000/0001-00"
-                      value={cnpjCpf}
-                      onChange={(e) => setCnpjCpf(e.target.value)}
-                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B]"
-                    />
-                  </div>
-                </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Nome Fantasia</label>
+                        <input
+                          type="text"
+                          placeholder="Ex: Rally Dakar Logística"
+                          value={tradeName}
+                          onChange={(e) => setTradeName(e.target.value)}
+                          className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B]"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">CNPJ / CPF</label>
+                        <input
+                          type="text"
+                          placeholder="00.000.000/0001-00"
+                          value={cnpjCpf}
+                          onChange={(e) => setCnpjCpf(e.target.value)}
+                          className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B]"
+                        />
+                      </div>
+                    </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Contato</label>
-                    <input
-                      type="text"
-                      placeholder="Ex: Carlos Silva"
-                      value={contactName}
-                      onChange={(e) => setContactName(e.target.value)}
-                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B]"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Telefone</label>
-                    <input
-                      type="text"
-                      placeholder="(11) 99999-9999"
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B]"
-                    />
-                  </div>
-                </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Contato</label>
+                        <input
+                          type="text"
+                          placeholder="Ex: Carlos Silva"
+                          value={contactName}
+                          onChange={(e) => setContactName(e.target.value)}
+                          className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B]"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Telefone</label>
+                        <input
+                          type="text"
+                          placeholder="(11) 99999-9999"
+                          value={phone}
+                          onChange={(e) => setPhone(e.target.value)}
+                          className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B]"
+                        />
+                      </div>
+                    </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div className="sm:col-span-1">
-                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">E-mail</label>
-                    <input
-                      type="email"
-                      placeholder="financeiro@cliente.com"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B]"
-                    />
-                  </div>
-                  <div className="sm:col-span-1">
-                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Cidade</label>
-                    <input
-                      type="text"
-                      placeholder="Ex: São Paulo"
-                      value={city}
-                      onChange={(e) => setCity(e.target.value)}
-                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B]"
-                    />
-                  </div>
-                  <div className="sm:col-span-1">
-                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">UF</label>
-                    <input
-                      type="text"
-                      placeholder="SP"
-                      maxLength={2}
-                      value={state}
-                      onChange={(e) => setState(e.target.value)}
-                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B]"
-                    />
-                  </div>
-                </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div className="sm:col-span-1">
+                        <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">E-mail</label>
+                        <input
+                          type="email"
+                          placeholder="financeiro@cliente.com"
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B]"
+                        />
+                      </div>
+                      <div className="sm:col-span-1">
+                        <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Cidade</label>
+                        <input
+                          type="text"
+                          placeholder="Ex: São Paulo"
+                          value={city}
+                          onChange={(e) => setCity(e.target.value)}
+                          className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B]"
+                        />
+                      </div>
+                      <div className="sm:col-span-1">
+                        <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">UF</label>
+                        <input
+                          type="text"
+                          placeholder="SP"
+                          maxLength={2}
+                          value={state}
+                          onChange={(e) => setState(e.target.value)}
+                          className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B]"
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 pt-2">
-                  <div>
-                    <label className="block text-xs font-bold text-[#C19A6B] mb-1">Lim. Crédito (R$) *</label>
-                    <input
-                      type="text"
-                      placeholder="100000.00"
-                      value={creditLimit}
-                      onChange={(e) => setCreditLimit(e.target.value)}
-                      className="w-full bg-white border-2 border-[#C19A6B]/50 rounded-lg p-2.5 text-xs text-[#2D2A26] font-mono font-bold focus:outline-none focus:border-[#C19A6B]"
-                    />
+                {activeTab === 'financeiro' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                    <div>
+                      <label className="block text-xs font-bold text-[#C19A6B] mb-1">Lim. Crédito (R$) *</label>
+                      <input
+                        type="text"
+                        placeholder="100000.00"
+                        value={creditLimit}
+                        onChange={(e) => setCreditLimit(e.target.value)}
+                        className="w-full bg-white border-2 border-[#C19A6B]/50 rounded-lg p-2.5 text-xs text-[#2D2A26] font-mono font-bold focus:outline-none focus:border-[#C19A6B]"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Saldo Devedor (R$)</label>
+                      <input
+                        type="text"
+                        placeholder="0.00"
+                        value={currentBalance}
+                        onChange={(e) => setCurrentBalance(e.target.value)}
+                        className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] font-mono focus:outline-none focus:border-[#C19A6B]"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Inadimplente (R$)</label>
+                      <input
+                        type="text"
+                        placeholder="0.00"
+                        value={delinquentAmount}
+                        onChange={(e) => setDelinquentAmount(e.target.value)}
+                        className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] font-mono focus:outline-none focus:border-[#C19A6B]"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Status</label>
+                      <select
+                        value={status}
+                        onChange={(e) => setStatus(e.target.value)}
+                        className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] font-bold focus:outline-none focus:border-[#C19A6B]"
+                      >
+                        <option value="Adimplente">Adimplente</option>
+                        <option value="Inadimplente">Inadimplente</option>
+                        <option value="Risco">Risco</option>
+                      </select>
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Saldo Devedor (R$)</label>
-                    <input
-                      type="text"
-                      placeholder="0.00"
-                      value={currentBalance}
-                      onChange={(e) => setCurrentBalance(e.target.value)}
-                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] font-mono focus:outline-none focus:border-[#C19A6B]"
-                    />
+                )}
+
+                {activeTab === 'classificacao' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                    <div>
+                      <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Tipo de Relacionamento</label>
+                      <select
+                        value={relationshipType}
+                        onChange={(e) => setRelationshipType(e.target.value)}
+                        className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] font-bold focus:outline-none focus:border-[#C19A6B]"
+                      >
+                        <option value="Nenhum">Nenhum</option>
+                        <option value="Cliente">Cliente</option>
+                        <option value="Fornecedor">Fornecedor</option>
+                        <option value="Ambos">Ambos</option>
+                      </select>
+                      <span className="text-[10px] text-[#8B7D6B] mt-1 block">
+                        Define se esta empresa/pessoa é cliente, fornecedor ou atua nas duas pontas.
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Classificação de Despesa</label>
+                      <select
+                        value={expenseClassification}
+                        onChange={(e) => setExpenseClassification(e.target.value)}
+                        className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] font-bold focus:outline-none focus:border-[#C19A6B]"
+                      >
+                        <option value="Nenhuma">Nenhuma / Não se aplica</option>
+                        <option value="Despesa Fixa">Despesa Fixa</option>
+                        <option value="Despesa Variável">Despesa Variável</option>
+                      </select>
+                      <span className="text-[10px] text-[#8B7D6B] mt-1 block">
+                        Classifica os lançamentos a pagar para apurações futuras de Resultado Econômico/Financeiro.
+                      </span>
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Inadimplente (R$)</label>
-                    <input
-                      type="text"
-                      placeholder="0.00"
-                      value={delinquentAmount}
-                      onChange={(e) => setDelinquentAmount(e.target.value)}
-                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] font-mono focus:outline-none focus:border-[#C19A6B]"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Status</label>
-                    <select
-                      value={status}
-                      onChange={(e) => setStatus(e.target.value)}
-                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] font-bold focus:outline-none focus:border-[#C19A6B]"
-                    >
-                      <option value="Adimplente">Adimplente</option>
-                      <option value="Inadimplente">Inadimplente</option>
-                      <option value="Risco">Risco</option>
-                    </select>
-                  </div>
-                </div>
+                )}
               </form>
             </div>
 
@@ -578,8 +698,46 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
               </button>
             </div>
 
+            {/* Modal Tabs */}
+            <div className="flex border-b border-[#EAE6DF] bg-[#F9F7F2]">
+              <button
+                type="button"
+                onClick={() => setActiveDetailTab('geral')}
+                className={`flex-1 py-3 text-xs font-bold transition-all border-b-2 text-center ${
+                  activeDetailTab === 'geral'
+                    ? 'border-[#C19A6B] text-[#C19A6B] bg-white'
+                    : 'border-transparent text-[#8B7D6B] hover:text-[#2D2A26]'
+                }`}
+              >
+                Dados Cadastrais
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveDetailTab('financeiro')}
+                className={`flex-1 py-3 text-xs font-bold transition-all border-b-2 text-center ${
+                  activeDetailTab === 'financeiro'
+                    ? 'border-[#C19A6B] text-[#C19A6B] bg-white'
+                    : 'border-transparent text-[#8B7D6B] hover:text-[#2D2A26]'
+                }`}
+              >
+                Financeiro & Limites
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveDetailTab('classificacao')}
+                className={`flex-1 py-3 text-xs font-bold transition-all border-b-2 text-center ${
+                  activeDetailTab === 'classificacao'
+                    ? 'border-[#C19A6B] text-[#C19A6B] bg-white'
+                    : 'border-transparent text-[#8B7D6B] hover:text-[#2D2A26]'
+                }`}
+              >
+                Classificação Financeira
+              </button>
+            </div>
+
             <div className="p-6 overflow-y-auto space-y-5">
-              <div className="flex items-start justify-between gap-4">
+              {/* Header fixo do cliente em todas as abas */}
+              <div className="flex items-start justify-between gap-4 border-b border-[#EAE6DF] pb-4">
                 <div>
                   <p className="text-lg font-black text-[#2D2A26]">{detailsCustomer.name}</p>
                   <p className="text-xs text-[#8B7D6B]">{detailsCustomer.tradeName}</p>
@@ -590,61 +748,124 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
                 </div>
                 <button
                   onClick={() => openWhatsApp(detailsCustomer)}
-                  className="px-3 py-2 text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 rounded-lg flex items-center gap-1.5 shrink-0"
+                  className="px-3 py-2 text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 rounded-lg flex items-center gap-1.5 shrink-0 transition-colors"
                 >
                   <MessageCircle className="w-4 h-4" />
                   WhatsApp
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-3">
-                  <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Limite de Crédito</p>
-                  <p className="text-sm font-black text-[#2D2A26]">{formatCurrency(detailsCustomer.creditLimit)}</p>
+              {activeDetailTab === 'geral' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-xs">
+                  {[
+                    ['CNPJ / CPF', detailsCustomer.cnpjCpf],
+                    ['Contato', detailsCustomer.contactName],
+                    ['Vendedor Responsável', detailsCustomer.sellerResponsible],
+                    ['Telefone', detailsCustomer.phone],
+                    ['Celular', detailsCustomer.cellphone],
+                    ['E-mail', detailsCustomer.email],
+                    ['Endereço', [detailsCustomer.address, detailsCustomer.addressNumber].filter(Boolean).join(', ')],
+                    ['Bairro', detailsCustomer.neighborhood],
+                    ['CEP', detailsCustomer.zipCode],
+                    ['Cidade', detailsCustomer.city],
+                    ['UF', detailsCustomer.state],
+                  ].map(([label, value]) => (
+                    <div key={label as string} className="flex flex-col border-b border-dashed border-[#EAE6DF] pb-1">
+                      <span className="text-[10px] font-bold text-[#8B7D6B] uppercase">{label}</span>
+                      <span className="text-[#2D2A26] font-medium">{(value as string) || '—'}</span>
+                    </div>
+                  ))}
                 </div>
-                <div className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-3">
-                  <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Saldo Devedor</p>
-                  <p className="text-sm font-black text-[#C19A6B]">{formatCurrency(detailsCustomer.currentBalance)}</p>
-                </div>
-                <div className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-3">
-                  <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Inadimplência</p>
-                  <p className="text-sm font-black text-rose-700">{formatCurrency(detailsCustomer.delinquentAmount)}</p>
-                </div>
-              </div>
+              )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-xs">
-                {[
-                  ['CNPJ / CPF', detailsCustomer.cnpjCpf],
-                  ['Status', detailsCustomer.status],
-                  ['Contato', detailsCustomer.contactName],
-                  ['Vendedor Responsável', detailsCustomer.sellerResponsible],
-                  ['Telefone', detailsCustomer.phone],
-                  ['Celular', detailsCustomer.cellphone],
-                  ['E-mail', detailsCustomer.email],
-                  ['Endereço', [detailsCustomer.address, detailsCustomer.addressNumber].filter(Boolean).join(', ')],
-                  ['Bairro', detailsCustomer.neighborhood],
-                  ['CEP', detailsCustomer.zipCode],
-                  ['Cidade', detailsCustomer.city],
-                  ['UF', detailsCustomer.state],
-                ].map(([label, value]) => (
-                  <div key={label as string} className="flex flex-col border-b border-dashed border-[#EAE6DF] pb-1">
-                    <span className="text-[10px] font-bold text-[#8B7D6B] uppercase">{label}</span>
-                    <span className="text-[#2D2A26] font-medium">{(value as string) || '—'}</span>
+              {activeDetailTab === 'financeiro' && (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-3">
+                      <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Limite de Crédito</p>
+                      <p className="text-sm font-black text-[#2D2A26]">{formatCurrency(detailsCustomer.creditLimit)}</p>
+                    </div>
+                    <div className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-3">
+                      <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Saldo Devedor</p>
+                      <p className="text-sm font-black text-[#C19A6B]">{formatCurrency(detailsCustomer.currentBalance)}</p>
+                    </div>
+                    <div className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-3">
+                      <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Inadimplência</p>
+                      <p className="text-sm font-black text-rose-700">{formatCurrency(detailsCustomer.delinquentAmount)}</p>
+                    </div>
                   </div>
-                ))}
-              </div>
+                  <div className="flex flex-col border-b border-dashed border-[#EAE6DF] pb-1 text-xs">
+                    <span className="text-[10px] font-bold text-[#8B7D6B] uppercase">Status da Conta</span>
+                    <span className="mt-1">
+                      {detailsCustomer.status === 'Adimplente' ? (
+                        <span className="inline-block px-2.5 py-1 rounded-md text-[10px] font-extrabold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                          Adimplente
+                        </span>
+                      ) : detailsCustomer.status === 'Inadimplente' ? (
+                        <span className="inline-block px-2.5 py-1 rounded-md text-[10px] font-extrabold bg-rose-50 text-rose-800 border border-rose-200">
+                          Inadimplente
+                        </span>
+                      ) : (
+                        <span className="inline-block px-2.5 py-1 rounded-md text-[10px] font-extrabold bg-[#C19A6B]/20 text-[#C19A6B] border border-[#C19A6B]/30">
+                          Risco
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {activeDetailTab === 'classificacao' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                  <div className="flex flex-col border border-[#EAE6DF] p-4 bg-[#F9F7F2] rounded-xl space-y-2">
+                    <span className="text-[10px] font-bold text-[#8B7D6B] uppercase tracking-wider">Tipo de Relacionamento</span>
+                    <span className="mt-1">
+                      {detailsCustomer.relationshipType && detailsCustomer.relationshipType !== 'Nenhum' ? (
+                        <span className="inline-block px-3 py-1 rounded-md text-xs font-extrabold bg-[#C19A6B]/15 text-[#C19A6B] border border-[#C19A6B]/30">
+                          {detailsCustomer.relationshipType}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400 text-xs italic">Não definido (Padrão)</span>
+                      )}
+                    </span>
+                    <p className="text-[10px] text-[#8B7D6B] pt-2">
+                      Indica se esta pessoa ou organização atua como cliente ou fornecedor no sistema gerencial.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col border border-[#EAE6DF] p-4 bg-[#F9F7F2] rounded-xl space-y-2">
+                    <span className="text-[10px] font-bold text-[#8B7D6B] uppercase tracking-wider">Classificação de Despesa</span>
+                    <span className="mt-1">
+                      {detailsCustomer.expenseClassification && detailsCustomer.expenseClassification !== 'Nenhuma' ? (
+                        <span className={`inline-block px-3 py-1 rounded-md text-xs font-extrabold ${
+                          detailsCustomer.expenseClassification === 'Despesa Fixa'
+                            ? 'bg-blue-50 text-blue-800 border border-blue-200'
+                            : 'bg-amber-50 text-amber-800 border border-amber-200'
+                        }`}>
+                          {detailsCustomer.expenseClassification}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400 text-xs italic">Nenhuma / Não se aplica</span>
+                      )}
+                    </span>
+                    <p className="text-[10px] text-[#8B7D6B] pt-2">
+                      Usado na apuração de dados para separar custos operacionais (Despesa Fixa / Despesa Variável) no DRE.
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="p-6 border-t border-[#EAE6DF] flex items-center justify-end gap-3 bg-[#F9F7F2] rounded-b-xl">
               <button
                 onClick={() => { const c = detailsCustomer; setDetailsCustomer(null); handleOpenEditModal(c); }}
-                className="px-4 py-2 text-xs font-bold bg-[#2D2A26] hover:bg-[#3F3B35] text-white rounded-lg flex items-center gap-1.5"
+                className="px-4 py-2 text-xs font-bold bg-[#2D2A26] hover:bg-[#3F3B35] text-white rounded-lg flex items-center gap-1.5 transition-colors"
               >
                 <Edit2 className="w-4 h-4 text-[#C19A6B]" /> Editar
               </button>
               <button
                 onClick={() => setDetailsCustomer(null)}
-                className="px-4 py-2 text-xs font-bold text-[#8B7D6B] hover:text-[#2D2A26]"
+                className="px-4 py-2 text-xs font-bold text-[#8B7D6B] hover:text-[#2D2A26] transition-colors"
               >
                 Fechar
               </button>
