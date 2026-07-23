@@ -43,6 +43,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   dbConnected = true,
   onExportPdfCurrent,
   onExportExcelCurrent,
+  activeTab,
   setActiveTab,
 }) => {
   const handleYearSelect = (y: number) => {
