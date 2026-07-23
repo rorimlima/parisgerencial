@@ -19,6 +19,9 @@ import { Navbar } from './components/Navbar';
 import { PwaInstallBanner } from './components/PwaBanners';
 import { Sidebar } from './components/Sidebar';
 import { SellersManagementView } from './components/SellersManagementView';
+import { ApiIntegrationDocsView } from './components/ApiIntegrationDocsView';
+import { PostgresSettingsView } from './components/PostgresSettingsView';
+import { FinancialStatementView } from './components/FinancialStatementView';
 
 import {
   getEconomicData,
@@ -41,6 +44,16 @@ import {
   logoutFirebase,
   saveBatchCustomers,
   saveBatchDelinquentTitles,
+  upsertClientes,
+  upsertTitulos,
+  updateClienteInadimplencia,
+  addTitulo,
+  updateTitulo,
+  deleteTitulo,
+  getExtratoFinanceiro,
+  upsertExtratoFinanceiro,
+  deleteExtratoFinanceiro,
+  clearExtratoFinanceiro,
 } from './firebaseService';
 
 import {
@@ -50,8 +63,10 @@ import {
   DelinquencyValidationRowResult,
   EconomicMonthData,
   FinancialMonthData,
+  FinancialStatementEntry,
   PostgresConfig,
   Seller,
+  StatementSource,
   UserRole,
   ValidationRowResult,
   ViewTab,
@@ -84,6 +99,7 @@ export default function App() {
   const [delinquentTitles, setDelinquentTitles] = useState<DelinquentTitle[]>([]);
   const [sellers, setSellers] = useState<Seller[]>([]);
   const [apiTokens, setApiTokens] = useState<ApiToken[]>([]);
+  const [statementEntries, setStatementEntries] = useState<FinancialStatementEntry[]>([]);
   const [loginError, setLoginError] = useState<string>('');
 
   // Config Postgres mantida apenas para exibição da tela de configurações
@@ -100,13 +116,14 @@ export default function App() {
   const loadAllData = useCallback(async (year: number) => {
     setIsLoading(true);
     try {
-      const [ecoData, finData, cliData, titData, vendData, tokData] = await Promise.all([
+      const [ecoData, finData, cliData, titData, vendData, tokData, stmtData] = await Promise.all([
         getEconomicData(year),
         getFinancialData(year),
         getClientes(),
         getTitulosInadimplentes(),
         getVendedores(),
         getApiTokens(),
+        getExtratoFinanceiro(year),
       ]);
       setEconomicData(ecoData);
       setFinancialData(finData);
@@ -114,6 +131,7 @@ export default function App() {
       setDelinquentTitles(titData);
       setSellers(vendData);
       setApiTokens(tokData);
+      setStatementEntries(stmtData);
     } catch (err: any) {
       console.error('Erro ao carregar dados do Firestore:', err.message);
     } finally {
@@ -273,43 +291,23 @@ export default function App() {
     targetModule: 'economic' | 'financial' | 'customers' | 'delinquency'
   ) => {
     if (targetModule === 'customers') {
-      // Importação em lote de clientes
-      // validateCustomerRows mapeia: rawDate=código, rawType=nome, rawDescription=fantasia,
-      // rawValue=limite, rawCustomer=cnpj, + extras em rawContact/rawPhone/rawEmail/rawCity/rawState
-      const newCustomers: Customer[] = validEntries.map((entry, idx) => {
-        const row = entry as any;
-        const code = (row.rawDate || '').trim();       // código do cliente
-        const name = (row.rawType || '').trim();       // razão social
-        const fantasia = (row.rawDescription || '').trim(); // nome fantasia
-        const cnpjCpf = (row.rawCustomer || '').trim();     // cnpj/cpf
-        const rawLimitStr = (row.rawValue || '0').toString();
-        const creditLimit = parseFloat(
-          rawLimitStr.replace('R$', '').replace(/\./g, '').replace(',', '.').trim()
-        ) || 0;
+      // Importação em lote de clientes com UPSERT usando cod_cliente como chave.
+      // Cada linha válida traz um parsedCustomer completo com todos os campos da planilha.
+      const parsedCustomers: Partial<Customer>[] = validEntries
+        .map((entry) => (entry as any).parsedCustomer as Partial<Customer> | undefined)
+        .filter((c): c is Partial<Customer> => !!c && !!(c.name));
 
-        return {
-          id: `cli_import_${Date.now()}_${idx}`,
-          code: code || `IMP-${String(idx + 1).padStart(4, '0')}`,
-          name: name || 'Cliente Importado',
-          cnpjCpf,
-          tradeName: fantasia,
-          contactName: (row.rawContact || '').trim(),
-          phone: (row.rawPhone || '').trim(),
-          email: (row.rawEmail || '').trim(),
-          city: (row.rawCity || '').trim(),
-          state: (row.rawState || '').trim(),
-          creditLimit,
-          currentBalance: 0,
-          delinquentAmount: 0,
-          status: 'Adimplente' as const,
-          lastPurchaseDate: new Date().toISOString().split('T')[0],
-        };
-      });
+      if (parsedCustomers.length === 0) return;
 
-      setCustomers((prev) => [...newCustomers, ...prev]);
-      await saveBatchCustomers(newCustomers).catch((e) =>
-        console.error('Erro ao salvar clientes em lote:', e)
-      );
+      try {
+        const result = await upsertClientes(parsedCustomers);
+        console.log(`Clientes importados: ${result.added} novos, ${result.updated} atualizados.`);
+        // Recarrega do Firestore para refletir IDs/estado reais (sem duplicar)
+        const fresh = await getClientes();
+        setCustomers(fresh);
+      } catch (e) {
+        console.error('Erro ao importar clientes (upsert):', e);
+      }
       return;
     }
 
@@ -414,16 +412,61 @@ export default function App() {
     });
   };
 
-  // ── Handler: Importação de Inadimplência ────────────────────────────────────
+  // Recalcula a inadimplência (dívida) de cada cliente a partir dos títulos, vinculando por
+  // cod_cliente (customerCode) ou por id. Atualiza state local e persiste os clientes alterados.
+  const applyDelinquencyToCustomers = async (
+    titlesList: DelinquentTitle[],
+    customersList: Customer[]
+  ): Promise<Customer[]> => {
+    const sumByCode = new Map<string, number>();
+    const sumById = new Map<string, number>();
+    titlesList.forEach((t) => {
+      const amt = t.updatedAmount || 0;
+      if (t.customerCode) {
+        const k = t.customerCode.toLowerCase();
+        sumByCode.set(k, (sumByCode.get(k) || 0) + amt);
+      }
+      if (t.customerId) {
+        sumById.set(t.customerId, (sumById.get(t.customerId) || 0) + amt);
+      }
+    });
+
+    const updated = customersList.map((c) => {
+      const amount =
+        (c.id ? sumById.get(c.id) : undefined) ??
+        (c.code ? sumByCode.get(c.code.toLowerCase()) : undefined) ??
+        0;
+      const status: Customer['status'] =
+        amount > 0 ? 'Inadimplente' : c.status === 'Risco' ? 'Risco' : 'Adimplente';
+      return { ...c, delinquentAmount: amount, status };
+    });
+
+    // Persiste apenas os clientes cujo valor/status mudou
+    await Promise.all(
+      updated
+        .filter(
+          (c, i) =>
+            c.delinquentAmount !== customersList[i].delinquentAmount ||
+            c.status !== customersList[i].status
+        )
+        .map((c) => updateClienteInadimplencia(c.id, c.delinquentAmount, c.status))
+    ).catch((e) => console.error('Erro ao atualizar inadimplência dos clientes:', e));
+
+    setCustomers(updated);
+    return updated;
+  };
+
+  // ── Handler: Importação de Inadimplência (UPSERT + recálculo por cod_cliente) ─
   const handleCommitDelinquencyImport = async (
     validEntries: DelinquencyValidationRowResult[]
   ) => {
-    const titlesToSave: DelinquentTitle[] = validEntries
+    const titlesToSave: Omit<DelinquentTitle, 'id'>[] = validEntries
       .filter((e) => e.parsedTitle)
-      .map((e, i) => {
-        const customerCode = (e.parsedTitle!.customerCode as string) || (e as any).rawCustomerCode || '';
+      .map((e) => {
+        const p = e.parsedTitle!;
+        const customerCode = (p.customerCode as string) || (e as any).rawCustomerCode || '';
 
-        // Tenta vincular cliente por código, depois por nome
+        // Vincula cliente por cod_cliente e, como fallback, por nome
         const matchedCustomer = customers.find(
           (c) =>
             (customerCode && c.code.toLowerCase() === customerCode.toLowerCase()) ||
@@ -431,30 +474,83 @@ export default function App() {
         );
 
         return {
-          id: `imported_${Date.now()}_${i}`,
-          titleNumber: e.parsedTitle!.titleNumber || `IMP-${Date.now()}`,
-          customerId: matchedCustomer?.id || e.parsedTitle!.customerId || '',
+          titleNumber: p.titleNumber || `IMP-${Date.now()}`,
+          parcela: p.parcela || '',
+          customerId: matchedCustomer?.id || p.customerId || '',
           customerCode: matchedCustomer?.code || customerCode,
           customerName: matchedCustomer?.name || e.rawCustomerName,
-          cnpjCpf: e.parsedTitle!.cnpjCpf || e.rawCnpjCpf || matchedCustomer?.cnpjCpf || '',
-          issueDate: e.parsedTitle!.issueDate || '',
-          dueDate: e.parsedTitle!.dueDate || e.rawDueDate,
-          originalAmount: e.parsedTitle!.originalAmount || 0,
-          updatedAmount: e.parsedTitle!.updatedAmount || e.parsedTitle!.originalAmount || 0,
-          daysOverdue: e.parsedTitle!.daysOverdue || 0,
-          agingBucket: (e.parsedTitle!.agingBucket as DelinquentTitle['agingBucket']) || '1-30',
-          collectionStatus: (e.parsedTitle!.collectionStatus as DelinquentTitle['collectionStatus']) || 'Aguardando',
-          notes: e.parsedTitle!.notes || '',
+          sellerId: p.sellerId || '',
+          sellerCode: p.sellerCode || '',
+          sellerName: p.sellerName || '',
+          cnpjCpf: p.cnpjCpf || e.rawCnpjCpf || matchedCustomer?.cnpjCpf || '',
+          issueDate: p.issueDate || '',
+          dueDate: p.dueDate || e.rawDueDate,
+          originalAmount: p.originalAmount || 0,
+          updatedAmount: p.updatedAmount || p.originalAmount || 0,
+          juros: p.juros || 0,
+          multa: p.multa || 0,
+          daysOverdue: p.daysOverdue || 0,
+          agingBucket: (p.agingBucket as DelinquentTitle['agingBucket']) || '1-30',
+          collectionStatus: (p.collectionStatus as DelinquentTitle['collectionStatus']) || 'Aguardando',
+          notes: p.notes || '',
         };
       });
 
     if (titlesToSave.length === 0) return;
 
     try {
-      await saveBatchDelinquentTitles(titlesToSave);
-      setDelinquentTitles((prev) => [...titlesToSave, ...prev]);
+      const result = await upsertTitulos(titlesToSave);
+      console.log(`Títulos importados: ${result.added} novos, ${result.updated} atualizados.`);
+      // Recarrega títulos reais do Firestore e recalcula a dívida dos clientes
+      const freshTitles = await getTitulosInadimplentes();
+      setDelinquentTitles(freshTitles);
+      await applyDelinquencyToCustomers(freshTitles, customers);
     } catch (err: any) {
-      console.error('Erro ao importar inadimplência:', err.message);
+      console.error('Erro ao importar inadimplência:', err?.message || err);
+    }
+  };
+
+  // ── Handlers: CRUD de Títulos de Inadimplência ──────────────────────────────
+  const handleAddTitle = async (title: Omit<DelinquentTitle, 'id'>) => {
+    try {
+      // Vincula cliente por código informado
+      const matched = customers.find(
+        (c) => title.customerCode && c.code.toLowerCase() === title.customerCode.toLowerCase()
+      );
+      const enriched = {
+        ...title,
+        customerId: matched?.id || title.customerId || '',
+        customerName: matched?.name || title.customerName,
+        cnpjCpf: title.cnpjCpf || matched?.cnpjCpf || '',
+      };
+      await addTitulo(enriched as DelinquentTitle);
+      const freshTitles = await getTitulosInadimplentes();
+      setDelinquentTitles(freshTitles);
+      await applyDelinquencyToCustomers(freshTitles, customers);
+    } catch (e) {
+      console.error('Erro ao adicionar título:', e);
+    }
+  };
+
+  const handleUpdateTitle = async (id: string, title: Partial<DelinquentTitle>) => {
+    try {
+      await updateTitulo(id, title);
+      const freshTitles = await getTitulosInadimplentes();
+      setDelinquentTitles(freshTitles);
+      await applyDelinquencyToCustomers(freshTitles, customers);
+    } catch (e) {
+      console.error('Erro ao atualizar título:', e);
+    }
+  };
+
+  const handleDeleteTitle = async (id: string) => {
+    try {
+      await deleteTitulo(id);
+      const freshTitles = await getTitulosInadimplentes();
+      setDelinquentTitles(freshTitles);
+      await applyDelinquencyToCustomers(freshTitles, customers);
+    } catch (e) {
+      console.error('Erro ao excluir título:', e);
     }
   };
 
@@ -530,6 +626,112 @@ export default function App() {
     await clearInadimplencia().catch((e) =>
       console.error('Erro ao zerar títulos no Firestore:', e)
     );
+  };
+
+  // ── Extrato Financeiro: recálculo do Resultado Financeiro ─────────────────
+  // Recalcula, a partir do conjunto completo de lançamentos de extrato de um
+  // ano, as Entradas de Bancos e Entradas de Tesouraria de cada mês, e persiste
+  // no Firestore (resultado_financeiro). É recomputado do zero (não somado ao
+  // valor anterior) para que o extrato seja sempre a fonte única da verdade e
+  // reimportações/exclusões nunca dupliquem ou deixem valores "presos".
+  const recomputeFinancialFromStatement = async (
+    year: number,
+    entriesForYear: FinancialStatementEntry[],
+    currentFinancial: Record<string, FinancialMonthData>
+  ) => {
+    const monthKeys = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+
+    const bancosPorMes = new Map<string, number>();
+    const tesourariaPorMes = new Map<string, number>();
+    entriesForYear.forEach((e) => {
+      if (!e.monthKey) return;
+      if (e.origin === 'banco') {
+        bancosPorMes.set(e.monthKey, (bancosPorMes.get(e.monthKey) || 0) + e.entryAmount);
+      } else {
+        tesourariaPorMes.set(e.monthKey, (tesourariaPorMes.get(e.monthKey) || 0) + e.entryAmount);
+      }
+    });
+
+    const updatedFinancial: Record<string, FinancialMonthData> = { ...currentFinancial };
+    let acc = 0;
+
+    for (const m of monthKeys) {
+      const current: FinancialMonthData = updatedFinancial[m] || {
+        monthKey: m,
+        monthLabel: `${m}/${year}`,
+        entradasBancos: 0,
+        entradasTesouraria: 0,
+        totalEntradas: 0,
+        totalSaidas: 0,
+        resultadoFinanceiro: 0,
+        resultadoPercent: 0,
+        estoque: 0,
+        inadimplenciaMensal: 0,
+        inadimplenciaAcumulada: 0,
+      };
+
+      const entradasBancos = Math.round((bancosPorMes.get(m) || 0) * 100) / 100;
+      const entradasTesouraria = Math.round((tesourariaPorMes.get(m) || 0) * 100) / 100;
+      const totalEntradas = entradasBancos + entradasTesouraria;
+      const totalSaidas = current.totalSaidas || 0;
+      const resultadoFinanceiro = totalEntradas - totalSaidas;
+      const resultadoPercent = totalEntradas > 0 ? (resultadoFinanceiro / totalEntradas) * 100 : 0;
+      acc += current.inadimplenciaMensal || 0;
+
+      const updatedMonth: FinancialMonthData = {
+        ...current,
+        entradasBancos,
+        entradasTesouraria,
+        totalEntradas,
+        totalSaidas,
+        resultadoFinanceiro,
+        resultadoPercent: Math.round(resultadoPercent * 100) / 100,
+        inadimplenciaAcumulada: Math.round(acc * 100) / 100,
+      };
+
+      updatedFinancial[m] = updatedMonth;
+      await saveFinancialMonth(year, m, updatedMonth).catch((e) =>
+        console.error(`Erro ao salvar financeiro (${m}) a partir do extrato:`, e)
+      );
+    }
+
+    setFinancialData(updatedFinancial);
+  };
+
+  // ── Handler: Importação de Extrato Financeiro (UPSERT) ─────────────────────
+  const handleCommitStatementImport = async (entries: Omit<FinancialStatementEntry, 'id'>[]) => {
+    if (entries.length === 0) return;
+    try {
+      const result = await upsertExtratoFinanceiro(entries);
+      console.log(`Extrato importado: ${result.added} novo(s), ${result.updated} atualizado(s).`);
+      const fresh = await getExtratoFinanceiro(selectedYear);
+      setStatementEntries(fresh);
+      await recomputeFinancialFromStatement(selectedYear, fresh, financialData);
+    } catch (err: any) {
+      console.error('Erro ao importar extrato financeiro:', err?.message || err);
+    }
+  };
+
+  const handleDeleteStatementEntry = async (id: string) => {
+    try {
+      await deleteExtratoFinanceiro(id);
+      const fresh = await getExtratoFinanceiro(selectedYear);
+      setStatementEntries(fresh);
+      await recomputeFinancialFromStatement(selectedYear, fresh, financialData);
+    } catch (e) {
+      console.error('Erro ao excluir lançamento do extrato:', e);
+    }
+  };
+
+  const handleClearStatementEntries = async (source?: StatementSource) => {
+    try {
+      await clearExtratoFinanceiro(selectedYear, source);
+      const fresh = await getExtratoFinanceiro(selectedYear);
+      setStatementEntries(fresh);
+      await recomputeFinancialFromStatement(selectedYear, fresh, financialData);
+    } catch (e) {
+      console.error('Erro ao zerar extrato financeiro:', e);
+    }
   };
 
   // ── Handler: Gerar Token API ──────────────────────────────────────────────
@@ -617,6 +819,17 @@ export default function App() {
             />
           )}
 
+          {activeTab === 'statement' && (
+            <FinancialStatementView
+              entries={statementEntries}
+              selectedYear={selectedYear}
+              onCommitEntries={handleCommitStatementImport}
+              onDeleteEntry={handleDeleteStatementEntry}
+              onClearEntries={handleClearStatementEntries}
+              userRole={currentUser.role}
+            />
+          )}
+
           {activeTab === 'import' && (
             <ImportDataView
               onCommitImport={handleCommitImport}
@@ -633,6 +846,10 @@ export default function App() {
               onUpdateCustomer={handleUpdateCustomer}
               onDeleteCustomer={handleDeleteCustomer}
               userRole={currentUser.role}
+              onNavigateToImport={() => {
+                setImportTargetModule('customers');
+                setActiveTab('import');
+              }}
             />
           )}
 
@@ -650,8 +867,17 @@ export default function App() {
           {activeTab === 'delinquency' && (
             <DelinquencyReportView
               titles={delinquentTitles}
+              customers={customers}
               selectedYear={selectedYear}
               onClearDelinquency={handleClearDelinquency}
+              onAddTitle={handleAddTitle}
+              onUpdateTitle={handleUpdateTitle}
+              onDeleteTitle={handleDeleteTitle}
+              userRole={currentUser.role}
+              onNavigateToImport={() => {
+                setImportTargetModule('delinquency');
+                setActiveTab('import');
+              }}
             />
           )}
 

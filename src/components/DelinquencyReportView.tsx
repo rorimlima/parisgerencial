@@ -14,28 +14,149 @@ import {
   Filter,
   ShieldAlert,
   Search,
+  Plus,
+  Eye,
+  Edit2,
+  Trash2,
+  X,
+  Check,
 } from 'lucide-react';
-import { DelinquentTitle } from '../types';
+import { Customer, DelinquentTitle } from '../types';
 import { exportReportToExcel, exportReportToPdf, formatCurrency } from '../utils/exportUtils';
 
 interface DelinquencyReportViewProps {
   titles: DelinquentTitle[];
+  customers?: Customer[];
   selectedYear: number;
   onNavigateToImport?: () => void;
   onClearDelinquency?: () => void;
+  onAddTitle?: (title: Omit<DelinquentTitle, 'id'>) => void;
+  onUpdateTitle?: (id: string, title: Partial<DelinquentTitle>) => void;
+  onDeleteTitle?: (id: string) => void;
+  userRole?: string;
 }
+
+const STATUS_OPTIONS: DelinquentTitle['collectionStatus'][] = [
+  'Aguardando', 'Em Cobrança', 'Acordo em Andamento', 'Negativado', 'Judicial',
+];
+
+const agingFromDays = (days: number): DelinquentTitle['agingBucket'] =>
+  days <= 30 ? '1-30' : days <= 60 ? '31-60' : days <= 90 ? '61-90' : '>90';
+
+const daysFromDue = (dueDate: string): number => {
+  if (!dueDate) return 0;
+  const due = new Date(dueDate);
+  if (isNaN(due.getTime())) return 0;
+  return Math.max(0, Math.floor((Date.now() - due.getTime()) / (1000 * 60 * 60 * 24)));
+};
+
+const emptyForm = {
+  titleNumber: '', parcela: '', customerCode: '', customerName: '', cnpjCpf: '',
+  sellerName: '', issueDate: '', dueDate: '', originalAmount: '', updatedAmount: '',
+  collectionStatus: 'Aguardando' as DelinquentTitle['collectionStatus'], notes: '',
+};
 
 export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
   titles,
+  customers = [],
   selectedYear,
   onNavigateToImport,
   onClearDelinquency,
+  onAddTitle,
+  onUpdateTitle,
+  onDeleteTitle,
+  userRole,
 }) => {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [agingFilter, setAgingFilter] = useState<string>('all');
   const [sellerFilter, setSellerFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
+
+  // CRUD state
+  const [isFormOpen, setIsFormOpen] = useState(false);
+  const [editingTitle, setEditingTitle] = useState<DelinquentTitle | null>(null);
+  const [detailsTitle, setDetailsTitle] = useState<DelinquentTitle | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [form, setForm] = useState({ ...emptyForm });
+
+  const canEdit = userRole !== 'analista' && !!(onAddTitle || onUpdateTitle);
+
+  const openAddForm = () => {
+    setEditingTitle(null);
+    setForm({ ...emptyForm });
+    setIsFormOpen(true);
+  };
+
+  const openEditForm = (t: DelinquentTitle) => {
+    setEditingTitle(t);
+    setForm({
+      titleNumber: t.titleNumber || '',
+      parcela: t.parcela || '',
+      customerCode: t.customerCode || '',
+      customerName: t.customerName || '',
+      cnpjCpf: t.cnpjCpf || '',
+      sellerName: t.sellerName || '',
+      issueDate: t.issueDate || '',
+      dueDate: t.dueDate || '',
+      originalAmount: String(t.originalAmount ?? ''),
+      updatedAmount: String(t.updatedAmount ?? ''),
+      collectionStatus: t.collectionStatus || 'Aguardando',
+      notes: t.notes || '',
+    });
+    setIsFormOpen(true);
+  };
+
+  // Autopreenche nome/CNPJ ao digitar um cod_cliente existente
+  const handleCodeBlur = () => {
+    const match = customers.find((c) => c.code.toLowerCase() === form.customerCode.trim().toLowerCase());
+    if (match) {
+      setForm((f) => ({
+        ...f,
+        customerName: f.customerName || match.name,
+        cnpjCpf: f.cnpjCpf || match.cnpjCpf,
+      }));
+    }
+  };
+
+  const handleSubmitTitle = (e: React.FormEvent) => {
+    e.preventDefault();
+    const originalAmount = parseFloat(form.originalAmount.replace(/\./g, '').replace(',', '.')) || 0;
+    const updatedAmount = form.updatedAmount
+      ? parseFloat(form.updatedAmount.replace(/\./g, '').replace(',', '.')) || originalAmount
+      : originalAmount;
+    const daysOverdue = daysFromDue(form.dueDate);
+
+    const payload: Omit<DelinquentTitle, 'id'> = {
+      titleNumber: form.titleNumber.trim() || `MAN-${Date.now()}`,
+      parcela: form.parcela.trim(),
+      customerId: editingTitle?.customerId || '',
+      customerCode: form.customerCode.trim(),
+      customerName: form.customerName.trim(),
+      cnpjCpf: form.cnpjCpf.trim(),
+      sellerName: form.sellerName.trim(),
+      issueDate: form.issueDate,
+      dueDate: form.dueDate,
+      originalAmount,
+      updatedAmount,
+      daysOverdue,
+      agingBucket: agingFromDays(daysOverdue),
+      collectionStatus: form.collectionStatus,
+      notes: form.notes.trim(),
+    };
+
+    if (editingTitle && onUpdateTitle) {
+      onUpdateTitle(editingTitle.id, payload);
+    } else if (onAddTitle) {
+      onAddTitle(payload);
+    }
+    setIsFormOpen(false);
+  };
+
+  const confirmDelete = (id: string) => {
+    if (onDeleteTitle) onDeleteTitle(id);
+    setDeleteConfirmId(null);
+  };
 
   const totalDelinquent = titles.reduce((acc, t) => acc + t.updatedAmount, 0);
   const uniqueCustomersCount = new Set(titles.map((t) => t.customerCode)).size;
@@ -146,6 +267,16 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {canEdit && onAddTitle && (
+            <button
+              onClick={openAddForm}
+              className="px-3.5 py-2 text-xs font-bold bg-[#2D2A26] hover:bg-[#3F3B35] text-white rounded-lg shadow-xs transition-all flex items-center gap-1.5"
+            >
+              <Plus className="w-4 h-4 text-[#C19A6B]" />
+              <span>Novo Título</span>
+            </button>
+          )}
+
           {onClearDelinquency && (
             <button
               onClick={() => setIsClearConfirmOpen(true)}
@@ -323,6 +454,7 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
                 <th className="p-3 text-right">Valor Atualizado (Juros/Multa)</th>
                 <th className="p-3 text-center">Status Cobrança</th>
                 <th className="p-3">Observações de Campo</th>
+                <th className="p-3 text-center whitespace-nowrap">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#EAE6DF] text-[#433E37]">
@@ -358,12 +490,302 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
                   <td className="p-3 text-[#8B7D6B] text-[11px] max-w-xs line-clamp-2">
                     {t.notes || 'Sem observações registradas'}
                   </td>
+                  <td className="p-3 text-center whitespace-nowrap">
+                    <div className="flex items-center justify-center space-x-1.5">
+                      <button
+                        onClick={() => setDetailsTitle(t)}
+                        title="Ver Detalhes do Título"
+                        className="p-1.5 rounded-lg bg-[#F3F1ED] hover:bg-[#2D2A26] text-[#433E37] hover:text-white transition-colors"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                      </button>
+                      {canEdit && onUpdateTitle && (
+                        <button
+                          onClick={() => openEditForm(t)}
+                          title="Editar Título"
+                          className="p-1.5 rounded-lg bg-[#F3F1ED] hover:bg-[#C19A6B] text-[#433E37] hover:text-white transition-colors"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {userRole !== 'analista' && onDeleteTitle && (
+                        <button
+                          onClick={() => setDeleteConfirmId(t.id)}
+                          title="Excluir Título"
+                          className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </div>
+
+      {/* Modal: Novo / Editar Título */}
+      {isFormOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-[#EAE6DF] rounded-xl w-full max-w-2xl shadow-xl flex flex-col text-[#2D2A26]" style={{ maxHeight: '90vh' }}>
+            <div className="p-6 border-b border-[#EAE6DF] flex items-center justify-between">
+              <h3 className="text-base font-bold flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-rose-600" />
+                {editingTitle ? 'Editar Título Inadimplente' : 'Novo Título Inadimplente'}
+              </h3>
+              <button onClick={() => setIsFormOpen(false)} className="text-[#8B7D6B] hover:text-[#2D2A26]">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto">
+              <form id="title-form" onSubmit={handleSubmitTitle} className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Cód. Cliente *</label>
+                    <input
+                      type="text" required list="cust-codes"
+                      value={form.customerCode}
+                      onChange={(e) => setForm((f) => ({ ...f, customerCode: e.target.value }))}
+                      onBlur={handleCodeBlur}
+                      placeholder="cod_cliente"
+                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs font-mono focus:outline-none focus:border-[#C19A6B]"
+                    />
+                    <datalist id="cust-codes">
+                      {customers.slice(0, 500).map((c) => (
+                        <option key={c.id} value={c.code}>{c.name}</option>
+                      ))}
+                    </datalist>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Cliente / Devedor *</label>
+                    <input
+                      type="text" required
+                      value={form.customerName}
+                      onChange={(e) => setForm((f) => ({ ...f, customerName: e.target.value }))}
+                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs focus:outline-none focus:border-[#C19A6B]"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Nº Título</label>
+                    <input
+                      type="text"
+                      value={form.titleNumber}
+                      onChange={(e) => setForm((f) => ({ ...f, titleNumber: e.target.value }))}
+                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs font-mono focus:outline-none focus:border-[#C19A6B]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Parcela</label>
+                    <input
+                      type="text"
+                      value={form.parcela}
+                      onChange={(e) => setForm((f) => ({ ...f, parcela: e.target.value }))}
+                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs font-mono focus:outline-none focus:border-[#C19A6B]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">CNPJ / CPF</label>
+                    <input
+                      type="text"
+                      value={form.cnpjCpf}
+                      onChange={(e) => setForm((f) => ({ ...f, cnpjCpf: e.target.value }))}
+                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs focus:outline-none focus:border-[#C19A6B]"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Emissão</label>
+                    <input
+                      type="date"
+                      value={form.issueDate}
+                      onChange={(e) => setForm((f) => ({ ...f, issueDate: e.target.value }))}
+                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs focus:outline-none focus:border-[#C19A6B]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Vencimento *</label>
+                    <input
+                      type="date" required
+                      value={form.dueDate}
+                      onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
+                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs focus:outline-none focus:border-[#C19A6B]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Vendedor</label>
+                    <input
+                      type="text"
+                      value={form.sellerName}
+                      onChange={(e) => setForm((f) => ({ ...f, sellerName: e.target.value }))}
+                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs focus:outline-none focus:border-[#C19A6B]"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-rose-700 mb-1">Valor Original (R$) *</label>
+                    <input
+                      type="text" required
+                      value={form.originalAmount}
+                      onChange={(e) => setForm((f) => ({ ...f, originalAmount: e.target.value }))}
+                      placeholder="0,00"
+                      className="w-full bg-white border-2 border-rose-200 rounded-lg p-2.5 text-xs font-mono font-bold focus:outline-none focus:border-rose-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Valor Atualizado (R$)</label>
+                    <input
+                      type="text"
+                      value={form.updatedAmount}
+                      onChange={(e) => setForm((f) => ({ ...f, updatedAmount: e.target.value }))}
+                      placeholder="Se vazio = valor original"
+                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs font-mono focus:outline-none focus:border-[#C19A6B]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Status Cobrança</label>
+                    <select
+                      value={form.collectionStatus}
+                      onChange={(e) => setForm((f) => ({ ...f, collectionStatus: e.target.value as DelinquentTitle['collectionStatus'] }))}
+                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs font-bold focus:outline-none focus:border-[#C19A6B]"
+                    >
+                      {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Observações</label>
+                  <textarea
+                    value={form.notes}
+                    onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+                    rows={2}
+                    className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs focus:outline-none focus:border-[#C19A6B]"
+                  />
+                </div>
+              </form>
+            </div>
+
+            <div className="p-6 border-t border-[#EAE6DF] flex items-center justify-end space-x-3 bg-[#F9F7F2] rounded-b-xl">
+              <button type="button" onClick={() => setIsFormOpen(false)} className="px-4 py-2 text-xs font-bold text-[#8B7D6B] hover:text-[#2D2A26]">
+                Cancelar
+              </button>
+              <button type="submit" form="title-form" className="flex items-center space-x-1.5 px-5 py-2 text-xs font-bold bg-rose-700 hover:bg-rose-800 text-white rounded-lg shadow-xs transition-colors">
+                <Check className="w-4 h-4" />
+                <span>{editingTitle ? 'Salvar Alterações' : 'Adicionar Título'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Detalhes do Título */}
+      {detailsTitle && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-[#EAE6DF] rounded-xl w-full max-w-xl shadow-xl flex flex-col text-[#2D2A26]" style={{ maxHeight: '90vh' }}>
+            <div className="p-6 border-b border-[#EAE6DF] flex items-center justify-between">
+              <h3 className="text-base font-bold flex items-center gap-2">
+                <Eye className="w-5 h-5 text-[#C19A6B]" /> Detalhes do Título
+              </h3>
+              <button onClick={() => setDetailsTitle(null)} className="text-[#8B7D6B] hover:text-[#2D2A26]">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto space-y-4">
+              <div>
+                <p className="text-lg font-black text-[#2D2A26]">{detailsTitle.customerName}</p>
+                <p className="text-[11px] font-mono text-[#C19A6B]">
+                  cod_cliente: {detailsTitle.customerCode || '—'} • Título {detailsTitle.titleNumber}
+                  {detailsTitle.parcela ? `/${detailsTitle.parcela}` : ''}
+                </p>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                <div className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-3">
+                  <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Valor Original</p>
+                  <p className="text-sm font-black text-[#2D2A26]">{formatCurrency(detailsTitle.originalAmount)}</p>
+                </div>
+                <div className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-3">
+                  <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Valor Atualizado</p>
+                  <p className="text-sm font-black text-rose-700">{formatCurrency(detailsTitle.updatedAmount)}</p>
+                </div>
+                <div className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-3">
+                  <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Dias em Atraso</p>
+                  <p className="text-sm font-black text-[#2D2A26]">{detailsTitle.daysOverdue} dias</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-xs">
+                {[
+                  ['CNPJ / CPF', detailsTitle.cnpjCpf],
+                  ['Vendedor', detailsTitle.sellerName],
+                  ['Emissão', detailsTitle.issueDate],
+                  ['Vencimento', detailsTitle.dueDate],
+                  ['Faixa Aging', detailsTitle.agingBucket],
+                  ['Status Cobrança', detailsTitle.collectionStatus],
+                  ['Juros', detailsTitle.juros ? formatCurrency(detailsTitle.juros) : '—'],
+                  ['Multa', detailsTitle.multa ? formatCurrency(detailsTitle.multa) : '—'],
+                ].map(([label, value]) => (
+                  <div key={label as string} className="flex flex-col border-b border-dashed border-[#EAE6DF] pb-1">
+                    <span className="text-[10px] font-bold text-[#8B7D6B] uppercase">{label}</span>
+                    <span className="text-[#2D2A26] font-medium">{(value as string) || '—'}</span>
+                  </div>
+                ))}
+              </div>
+              {detailsTitle.notes && (
+                <div className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-3 text-xs text-[#433E37]">
+                  {detailsTitle.notes}
+                </div>
+              )}
+            </div>
+            <div className="p-6 border-t border-[#EAE6DF] flex items-center justify-end gap-3 bg-[#F9F7F2] rounded-b-xl">
+              {canEdit && onUpdateTitle && (
+                <button
+                  onClick={() => { const t = detailsTitle; setDetailsTitle(null); openEditForm(t); }}
+                  className="px-4 py-2 text-xs font-bold bg-[#2D2A26] hover:bg-[#3F3B35] text-white rounded-lg flex items-center gap-1.5"
+                >
+                  <Edit2 className="w-4 h-4 text-[#C19A6B]" /> Editar
+                </button>
+              )}
+              <button onClick={() => setDetailsTitle(null)} className="px-4 py-2 text-xs font-bold text-[#8B7D6B] hover:text-[#2D2A26]">
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Confirmação de Exclusão de Título */}
+      {deleteConfirmId && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-rose-200 rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4 text-center">
+            <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mx-auto border border-rose-100">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <div>
+              <h4 className="text-base font-black text-[#2D2A26]">Excluir Título?</h4>
+              <p className="text-xs text-[#8B7D6B] mt-1">
+                O título será removido do banco e a dívida do cliente será recalculada automaticamente.
+              </p>
+            </div>
+            <div className="flex items-center justify-center space-x-3 pt-2">
+              <button onClick={() => setDeleteConfirmId(null)} className="px-4 py-2 text-xs font-bold bg-[#F3F1ED] text-[#433E37] rounded-lg hover:bg-gray-200">
+                Cancelar
+              </button>
+              <button onClick={() => confirmDelete(deleteConfirmId)} className="px-4 py-2 text-xs font-bold bg-rose-700 text-white rounded-lg hover:bg-rose-800">
+                Sim, Excluir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal de Confirmação de Zerar Inadimplência */}
       {isClearConfirmOpen && (

@@ -13,6 +13,8 @@ export type ViewTab =
   | 'customers'
   | 'delinquency'
   | 'sellers'
+  | 'statement'
+  | 'payables'
   | 'api-docs'
   | 'postgres-settings';
 
@@ -109,6 +111,14 @@ export interface Customer {
   delinquentAmount: number;
   status: 'Adimplente' | 'Inadimplente' | 'Risco';
   lastPurchaseDate?: string;
+  // Campos adicionais importados da planilha de clientes
+  personType?: 'F' | 'J' | string; // tipo_pessoa (F=Física, J=Jurídica)
+  cellphone?: string;              // celular
+  address?: string;               // endereco
+  addressNumber?: string;         // numero
+  neighborhood?: string;          // bairro
+  zipCode?: string;               // cep
+  sellerResponsible?: string;     // vendedor_responsavel
 }
 
 export interface DelinquentTitle {
@@ -129,6 +139,10 @@ export interface DelinquentTitle {
   agingBucket: '1-30' | '31-60' | '61-90' | '>90';
   collectionStatus: 'Aguardando' | 'Em Cobrança' | 'Negativado' | 'Acordo em Andamento' | 'Judicial';
   notes?: string;
+  // Campos adicionais importados da planilha de títulos
+  parcela?: string;   // Titulo_Parcela
+  juros?: number;     // Juros
+  multa?: number;     // Multa
 }
 
 export type TransactionCategory =
@@ -162,6 +176,69 @@ export interface FinancialEntry {
   createdAt: string;
 }
 
+// ─── Extrato Financeiro (Conciliação Bancária / Caixa) ─────────────────────────
+
+export type StatementSource = 'bradesco' | 'pagseguro' | 'tesouraria';
+export type StatementOrigin = 'banco' | 'caixa';
+
+// Um lançamento individual de extrato bancário ou de caixa/tesouraria, usado
+// para conciliação e para alimentar automaticamente Resultado Financeiro
+// (entradasBancos / entradasTesouraria).
+export interface FinancialStatementEntry {
+  id: string;
+  origin: StatementOrigin;       // 'banco' (Bradesco/PagSeguro) ou 'caixa' (Tesouraria/RFN019)
+  source: StatementSource;       // 'bradesco' | 'pagseguro' | 'tesouraria'
+  sourceLabel: string;           // Rótulo amigável: 'Bradesco', 'PagSeguro', 'Caixa/Tesouraria'
+  date: string;                 // YYYY-MM-DD
+  year: number;
+  monthKey: string;              // 'jan'..'dez'
+  description: string;           // Lançamento / Descrição / Observação
+  clientName?: string;           // Cliente/Beneficiário (ClienteBeneficiario ou nome extraído do Pix)
+  documentType?: string;         // Dcto. / Tipo / Tesouraria_TipoDocumentoDes (ex: 'DINHEIRO', 'Pix recebido')
+  documentRef?: string;          // Dcto. / Tesouraria_NroDocumento / Tesouraria_Codigo
+  entryAmount: number;           // Valor de entrada (crédito/recebimento)
+  exitAmount: number;            // Valor de saída (débito/pagamento)
+  balance?: number;              // Saldo após o lançamento, se disponível no extrato
+  notes?: string;
+  dedupeKey: string;             // Chave determinística para evitar duplicidade em reimportações
+  importedAt?: string;
+}
+
+// ─── Contas a Pagar ──────────────────────────────────────────────────────────
+
+// Status de baixa (conciliação) de um título pago:
+// - 'Em Aberto': pagamento registrado no ERP mas ainda não conciliado com extrato
+// - 'Baixado Automático': conciliado automaticamente com um lançamento de extrato
+// - 'Baixado Manual': baixa confirmada manualmente pelo gestor
+export type PayableStatus = 'Em Aberto' | 'Baixado Automático' | 'Baixado Manual';
+
+// Título de contas a pagar importado do relatório RFN006 (Totais Pagos por Credor).
+// Chave única: movCode (TituloMovCodigo). O credor (TituloPessoaCod) é vinculado
+// ao cadastro de clientes/pessoas pelo cod_cliente.
+export interface PayableTitle {
+  id: string;
+  movCode: string;               // TituloMovCodigo — chave única do movimento
+  companyName?: string;          // TituloEmpresaNome
+  supplierCode: string;          // TituloPessoaCod → vincula a cod_cliente
+  supplierName: string;          // TituloPessoaNome
+  supplierCustomerId?: string;   // id do documento do cliente vinculado (se houver)
+  titleCode?: string;            // TituloCodigo
+  parcela?: string;              // TituloNumeroParcela (ex: '24000/1')
+  dueDate: string;               // TituloDataVencto — YYYY-MM-DD
+  paymentDate: string;           // TitMovDataCaixa — YYYY-MM-DD (data efetiva do pagamento)
+  year: number;                  // ano de paymentDate
+  monthKey: string;              // 'jan'..'dez' de paymentDate
+  description?: string;          // TituloHistorico
+  payingAgent?: string;          // TituloAgentePagadorDescr (CARTEIRA, VEICULOS...)
+  department?: string;           // Departamento_Descricao
+  amount: number;                // TituloValor (valor pago, positivo)
+  status: PayableStatus;
+  reconciledStatementId?: string; // id do lançamento de extrato conciliado (baixa automática)
+  reconciledSource?: string;      // fonte do extrato (Bradesco/PagSeguro/Caixa)
+  reconciledAt?: string;
+  notes?: string;
+}
+
 export interface ValidationRowResult {
   rowNumber: number;
   rawDate: string;
@@ -171,6 +248,7 @@ export interface ValidationRowResult {
   rawCustomer: string;
   status: 'valid' | 'invalid' | 'warning';
   parsedEntry?: Partial<FinancialEntry>;
+  parsedCustomer?: Partial<Customer>;
   errors: string[];
 }
 

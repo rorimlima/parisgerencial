@@ -9,6 +9,8 @@ import {
   AlertTriangle,
   X,
   Check,
+  Eye,
+  MessageCircle,
 } from 'lucide-react';
 import { Customer } from '../types';
 import { formatCurrency, exportReportToExcel } from '../utils/exportUtils';
@@ -35,6 +37,23 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [detailsCustomer, setDetailsCustomer] = useState<Customer | null>(null);
+
+  // Abre o WhatsApp Web/App para o número informado (usa celular, com fallback para telefone).
+  const openWhatsApp = (customer: Customer) => {
+    const raw = customer.cellphone || customer.phone || '';
+    const digits = raw.replace(/\D/g, '');
+    if (!digits) {
+      alert('Este cliente não possui celular ou telefone cadastrado.');
+      return;
+    }
+    // Adiciona DDI do Brasil (55) quando o número tem apenas DDD + número
+    const full = digits.length <= 11 ? `55${digits}` : digits;
+    const msg = encodeURIComponent(
+      `Olá ${customer.contactName || customer.name}, tudo bem? Aqui é da Paris Dakar.`
+    );
+    window.open(`https://wa.me/${full}?text=${msg}`, '_blank');
+  };
 
   // Form State
   const [code, setCode] = useState('');
@@ -192,7 +211,7 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
 
           {userRole !== 'analista' && (
             <button
-              onClick={() => setIsModalOpen(true)}
+              onClick={handleOpenAddModal}
               className="px-4 py-2.5 text-xs font-bold bg-[#2D2A26] text-white hover:bg-[#3F3B35] rounded-lg shadow-xs transition-all flex items-center gap-2"
             >
               <UserPlus className="w-4 h-4 text-[#C19A6B]" />
@@ -314,6 +333,20 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
                   </td>
                   <td className="p-3 text-center whitespace-nowrap">
                     <div className="flex items-center justify-center space-x-1.5">
+                      <button
+                        onClick={() => setDetailsCustomer(c)}
+                        title="Ver Detalhes do Cliente"
+                        className="p-1.5 rounded-lg bg-[#F3F1ED] hover:bg-[#2D2A26] text-[#433E37] hover:text-white transition-colors"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => openWhatsApp(c)}
+                        title="Enviar WhatsApp para o celular do cliente"
+                        className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white transition-colors"
+                      >
+                        <MessageCircle className="w-3.5 h-3.5" />
+                      </button>
                       <button
                         onClick={() => handleOpenEditModal(c)}
                         title="Editar Cliente e Limite"
@@ -525,6 +558,95 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
               >
                 <Check className="w-4 h-4 text-[#C19A6B]" />
                 <span>{editingCustomer ? 'Salvar Alterações' : 'Salvar Cliente'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Detalhes do Cliente */}
+      {detailsCustomer && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-[#EAE6DF] rounded-xl w-full max-w-2xl shadow-xl flex flex-col text-[#2D2A26]" style={{ maxHeight: '90vh' }}>
+            <div className="p-6 border-b border-[#EAE6DF] flex items-center justify-between">
+              <h3 className="text-base font-bold flex items-center gap-2">
+                <Eye className="w-5 h-5 text-[#C19A6B]" />
+                Detalhes do Cliente
+              </h3>
+              <button onClick={() => setDetailsCustomer(null)} className="text-[#8B7D6B] hover:text-[#2D2A26]">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-5">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-lg font-black text-[#2D2A26]">{detailsCustomer.name}</p>
+                  <p className="text-xs text-[#8B7D6B]">{detailsCustomer.tradeName}</p>
+                  <p className="text-[11px] font-mono text-[#C19A6B] mt-1">
+                    cod_cliente: {detailsCustomer.code}
+                    {detailsCustomer.personType ? ` • ${detailsCustomer.personType === 'J' ? 'Pessoa Jurídica' : 'Pessoa Física'}` : ''}
+                  </p>
+                </div>
+                <button
+                  onClick={() => openWhatsApp(detailsCustomer)}
+                  className="px-3 py-2 text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 rounded-lg flex items-center gap-1.5 shrink-0"
+                >
+                  <MessageCircle className="w-4 h-4" />
+                  WhatsApp
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-3">
+                  <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Limite de Crédito</p>
+                  <p className="text-sm font-black text-[#2D2A26]">{formatCurrency(detailsCustomer.creditLimit)}</p>
+                </div>
+                <div className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-3">
+                  <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Saldo Devedor</p>
+                  <p className="text-sm font-black text-[#C19A6B]">{formatCurrency(detailsCustomer.currentBalance)}</p>
+                </div>
+                <div className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-3">
+                  <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Inadimplência</p>
+                  <p className="text-sm font-black text-rose-700">{formatCurrency(detailsCustomer.delinquentAmount)}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-xs">
+                {[
+                  ['CNPJ / CPF', detailsCustomer.cnpjCpf],
+                  ['Status', detailsCustomer.status],
+                  ['Contato', detailsCustomer.contactName],
+                  ['Vendedor Responsável', detailsCustomer.sellerResponsible],
+                  ['Telefone', detailsCustomer.phone],
+                  ['Celular', detailsCustomer.cellphone],
+                  ['E-mail', detailsCustomer.email],
+                  ['Endereço', [detailsCustomer.address, detailsCustomer.addressNumber].filter(Boolean).join(', ')],
+                  ['Bairro', detailsCustomer.neighborhood],
+                  ['CEP', detailsCustomer.zipCode],
+                  ['Cidade', detailsCustomer.city],
+                  ['UF', detailsCustomer.state],
+                ].map(([label, value]) => (
+                  <div key={label as string} className="flex flex-col border-b border-dashed border-[#EAE6DF] pb-1">
+                    <span className="text-[10px] font-bold text-[#8B7D6B] uppercase">{label}</span>
+                    <span className="text-[#2D2A26] font-medium">{(value as string) || '—'}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-[#EAE6DF] flex items-center justify-end gap-3 bg-[#F9F7F2] rounded-b-xl">
+              <button
+                onClick={() => { const c = detailsCustomer; setDetailsCustomer(null); handleOpenEditModal(c); }}
+                className="px-4 py-2 text-xs font-bold bg-[#2D2A26] hover:bg-[#3F3B35] text-white rounded-lg flex items-center gap-1.5"
+              >
+                <Edit2 className="w-4 h-4 text-[#C19A6B]" /> Editar
+              </button>
+              <button
+                onClick={() => setDetailsCustomer(null)}
+                className="px-4 py-2 text-xs font-bold text-[#8B7D6B] hover:text-[#2D2A26]"
+              >
+                Fechar
               </button>
             </div>
           </div>

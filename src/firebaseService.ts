@@ -26,6 +26,21 @@ import {
   saveBatchCustomers as _saveBatchCustomers,
   saveBatchDelinquentTitles as _saveBatchDelinquentTitles,
   saveDelinquentTitlesBatch as _saveDelinquentTitlesBatch,
+  upsertCustomersBatch as _upsertCustomersBatch,
+  upsertDelinquentTitlesBatch as _upsertDelinquentTitlesBatch,
+  updateCustomerDelinquency as _updateCustomerDelinquency,
+  updateDelinquentTitle as _updateDelinquentTitle,
+  deleteDelinquentTitle as _deleteDelinquentTitle,
+  fetchStatementEntries,
+  upsertStatementEntries as _upsertStatementEntries,
+  deleteStatementEntry as _deleteStatementEntry,
+  clearStatementEntries as _clearStatementEntries,
+  fetchPayables,
+  upsertPayablesBatch as _upsertPayablesBatch,
+  updatePayable as _updatePayable,
+  applyPayablesReconciliation as _applyPayablesReconciliation,
+  deletePayable as _deletePayable,
+  clearPayables as _clearPayables,
 } from './services/firebaseService';
 
 import { ApiToken, Customer, DelinquentTitle, EconomicMonthData, FinancialMonthData, Seller, User } from './types';
@@ -116,4 +131,28 @@ export const saveBatchCustomers = _saveBatchCustomers;
 export const saveBatchDelinquentTitles = _saveBatchDelinquentTitles;
 export const saveDelinquentTitle = addDelinquentTitle;
 export const saveDelinquentTitlesBatch = _saveDelinquentTitlesBatch;
+
+// ── Importação com UPSERT (usa cod_cliente como chave) ───────────────────────
+export const upsertClientes = _upsertCustomersBatch;
+export const upsertTitulos = _upsertDelinquentTitlesBatch;
+export const updateClienteInadimplencia = _updateCustomerDelinquency;
+
+// ── CRUD de Títulos de Inadimplência ─────────────────────────────────────────
+export const addTitulo = addDelinquentTitle;
+export const updateTitulo = _updateDelinquentTitle;
+export const deleteTitulo = _deleteDelinquentTitle;
+
+// ── Extrato Financeiro (Conciliação Bancária / Caixa-Tesouraria) ────────────
+export const getExtratoFinanceiro = fetchStatementEntries;
+export const upsertExtratoFinanceiro = _upsertStatementEntries;
+export const deleteExtratoFinanceiro = _deleteStatementEntry;
+export const clearExtratoFinanceiro = _clearStatementEntries;
+
+// ── Contas a Pagar (RFN006 — Totais Pagos por Credor) ───────────────────────
+export const getContasPagar = fetchPayables;
+export const upsertContasPagar = _upsertPayablesBatch;
+export const updateContaPagar = _updatePayable;
+export const applyBaixaAutomatica = _applyPayablesReconciliation;
+export const deleteContaPagar = _deletePayable;
+export const clearContasPagar = _clearPayables;
 

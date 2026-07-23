@@ -5,12 +5,13 @@ import {
   getDocs, 
   query, 
   where, 
-  setDoc, 
-  doc, 
-  addDoc, 
+  setDoc,
+  doc,
+  addDoc,
   updateDoc,
   deleteDoc,
-  limit 
+  writeBatch,
+  limit
 } from 'firebase/firestore';
 import { firebaseConfig } from '../firebaseConfig';
 import { INITIAL_ECONOMIC_BY_YEAR, INITIAL_FINANCIAL_BY_YEAR, INITIAL_SELLERS } from '../data/initialData';
@@ -21,7 +22,9 @@ import {
   Customer,
   DelinquentTitle,
   Seller,
-  ApiToken
+  ApiToken,
+  FinancialStatementEntry,
+  PayableTitle
 } from '../types';
 
 let firestoreDb: ReturnType<typeof getFirestore>;
@@ -286,7 +289,14 @@ export const fetchCustomers = async (): Promise<Customer[]> => {
         currentBalance: data.saldo_atual || 0,
         delinquentAmount: data.valor_inadimplente || 0,
         status: data.status || 'Adimplente',
-        lastPurchaseDate: data.ultima_compra
+        lastPurchaseDate: data.ultima_compra,
+        personType: data.tipo_pessoa || '',
+        cellphone: data.celular || '',
+        address: data.endereco || '',
+        addressNumber: data.numero || '',
+        neighborhood: data.bairro || '',
+        zipCode: data.cep || '',
+        sellerResponsible: data.vendedor_responsavel || '',
       };
     });
   } catch (error) {
@@ -295,26 +305,120 @@ export const fetchCustomers = async (): Promise<Customer[]> => {
   }
 };
 
+// Sanitiza um valor para uso como ID de documento no Firestore (sem '/', espaços etc.)
+const sanitizeDocId = (raw: string): string =>
+  (raw || '').toString().trim().replace(/[\/\\#?\s]+/g, '-').replace(/^-+|-+$/g, '');
+
+// Mapeia um Customer para o formato do Firestore (inclui campos estendidos da planilha)
+const customerToFirestore = (customer: Partial<Customer>): Record<string, any> => {
+  const data: Record<string, any> = {};
+  if (customer.code !== undefined) data.codigo = customer.code;
+  if (customer.cnpjCpf !== undefined) data.cnpj_cpf = customer.cnpjCpf;
+  if (customer.name !== undefined) data.razao_social = customer.name;
+  if (customer.tradeName !== undefined) data.nome_fantasia = customer.tradeName || '';
+  if (customer.contactName !== undefined) data.contato_nome = customer.contactName || '';
+  if (customer.phone !== undefined) data.telefone = customer.phone || '';
+  if (customer.email !== undefined) data.email = customer.email || '';
+  if (customer.city !== undefined) data.cidade = customer.city || '';
+  if (customer.state !== undefined) data.estado = customer.state || '';
+  if (customer.creditLimit !== undefined) data.limite_credito = customer.creditLimit;
+  if (customer.currentBalance !== undefined) data.saldo_atual = customer.currentBalance;
+  if (customer.delinquentAmount !== undefined) data.valor_inadimplente = customer.delinquentAmount;
+  if (customer.status !== undefined) data.status = customer.status;
+  if (customer.lastPurchaseDate !== undefined) data.ultima_compra = customer.lastPurchaseDate || null;
+  if (customer.personType !== undefined) data.tipo_pessoa = customer.personType || '';
+  if (customer.cellphone !== undefined) data.celular = customer.cellphone || '';
+  if (customer.address !== undefined) data.endereco = customer.address || '';
+  if (customer.addressNumber !== undefined) data.numero = customer.addressNumber || '';
+  if (customer.neighborhood !== undefined) data.bairro = customer.neighborhood || '';
+  if (customer.zipCode !== undefined) data.cep = customer.zipCode || '';
+  if (customer.sellerResponsible !== undefined) data.vendedor_responsavel = customer.sellerResponsible || '';
+  return data;
+};
+
+/**
+ * Importa clientes em lote usando cod_cliente como chave (UPSERT).
+ * - Se já existe um cliente com o mesmo código: atualiza (merge) os campos vindos da planilha,
+ *   preservando saldo/inadimplência quando não fornecidos.
+ * - Se não existe: cria um novo documento usando o próprio código como ID.
+ * Retorna a contagem de adicionados x atualizados.
+ */
+export const upsertCustomersBatch = async (
+  customers: Partial<Customer>[]
+): Promise<{ added: number; updated: number; errors: number }> => {
+  const db = getFirestoreDb();
+  let added = 0, updated = 0, errors = 0;
+
+  // Mapa código -> docId dos clientes já existentes
+  const snapshot = await getDocs(collection(db, 'clientes'));
+  const codeToId = new Map<string, string>();
+  snapshot.forEach((d) => {
+    const code = (d.data().codigo || '').toString().trim().toLowerCase();
+    if (code) codeToId.set(code, d.id);
+  });
+
+  for (const customer of customers) {
+    try {
+      const code = (customer.code || '').toString().trim();
+      if (!code) {
+        // Sem código: cria documento novo com ID automático
+        await addDoc(collection(db, 'clientes'), customerToFirestore(customer));
+        added++;
+        continue;
+      }
+      const existingId = codeToId.get(code.toLowerCase());
+      if (existingId) {
+        // Atualiza somente os campos vindos da planilha (não sobrescreve saldo/inadimplência)
+        const payload = customerToFirestore(customer);
+        delete payload.saldo_atual;
+        delete payload.valor_inadimplente;
+        await setDoc(doc(db, 'clientes', existingId), payload, { merge: true });
+        updated++;
+      } else {
+        // Novo cliente: usa o código como ID do documento
+        const newId = sanitizeDocId(code) || `cli_${Date.now()}`;
+        await setDoc(doc(db, 'clientes', newId), customerToFirestore(customer), { merge: true });
+        codeToId.set(code.toLowerCase(), newId);
+        added++;
+      }
+    } catch (err) {
+      console.error('Erro no upsert de cliente:', customer.code, err);
+      errors++;
+    }
+  }
+
+  return { added, updated, errors };
+};
+
+// Atualiza apenas os valores de inadimplência/saldo de um cliente (usado após importar títulos)
+export const updateCustomerDelinquency = async (
+  id: string,
+  delinquentAmount: number,
+  status: Customer['status']
+): Promise<void> => {
+  try {
+    const db = getFirestoreDb();
+    await setDoc(
+      doc(db, 'clientes', id),
+      { valor_inadimplente: delinquentAmount, status },
+      { merge: true }
+    );
+  } catch (error) {
+    console.error('Error updating customer delinquency:', error);
+  }
+};
+
 export const addCustomer = async (customer: Customer): Promise<void> => {
   try {
     const db = getFirestoreDb();
-    const firestoreData = {
-      codigo: customer.code,
-      cnpj_cpf: customer.cnpjCpf,
-      razao_social: customer.name,
-      nome_fantasia: customer.tradeName || '',
-      contato_nome: customer.contactName,
-      telefone: customer.phone,
-      email: customer.email,
-      cidade: customer.city,
-      estado: customer.state,
-      limite_credito: customer.creditLimit,
-      saldo_atual: customer.currentBalance,
-      valor_inadimplente: customer.delinquentAmount,
-      status: customer.status,
-      ultima_compra: customer.lastPurchaseDate || null
-    };
-    await addDoc(collection(db, 'clientes'), firestoreData);
+    const code = (customer.code || '').toString().trim();
+    const firestoreData = customerToFirestore(customer);
+    if (code) {
+      // Usa o código como ID do documento para permitir upsert futuro
+      await setDoc(doc(db, 'clientes', sanitizeDocId(code)), firestoreData, { merge: true });
+    } else {
+      await addDoc(collection(db, 'clientes'), firestoreData);
+    }
   } catch (error) {
     console.error('Error adding customer:', error);
     throw error;
@@ -325,22 +429,7 @@ export const updateCustomer = async (id: string, customer: Partial<Customer>): P
   try {
     const db = getFirestoreDb();
     const docRef = doc(db, 'clientes', id);
-    const firestoreData: any = {};
-    if (customer.code !== undefined) firestoreData.codigo = customer.code;
-    if (customer.name !== undefined) firestoreData.razao_social = customer.name;
-    if (customer.tradeName !== undefined) firestoreData.nome_fantasia = customer.tradeName;
-    if (customer.cnpjCpf !== undefined) firestoreData.cnpj_cpf = customer.cnpjCpf;
-    if (customer.contactName !== undefined) firestoreData.contato_nome = customer.contactName;
-    if (customer.phone !== undefined) firestoreData.telefone = customer.phone;
-    if (customer.email !== undefined) firestoreData.email = customer.email;
-    if (customer.city !== undefined) firestoreData.cidade = customer.city;
-    if (customer.state !== undefined) firestoreData.estado = customer.state;
-    if (customer.creditLimit !== undefined) firestoreData.limite_credito = customer.creditLimit;
-    if (customer.currentBalance !== undefined) firestoreData.saldo_atual = customer.currentBalance;
-    if (customer.delinquentAmount !== undefined) firestoreData.valor_inadimplente = customer.delinquentAmount;
-    if (customer.status !== undefined) firestoreData.status = customer.status;
-
-    await updateDoc(docRef, firestoreData);
+    await setDoc(docRef, customerToFirestore(customer), { merge: true });
   } catch (error) {
     console.error('Error updating customer:', error);
     throw error;
@@ -382,12 +471,110 @@ export const fetchDelinquentTitles = async (): Promise<DelinquentTitle[]> => {
         daysOverdue: data.dias_atraso || 0,
         agingBucket: data.faixa_aging || '1-30',
         collectionStatus: data.status_cobranca || 'Aguardando',
-        notes: data.observacoes || ''
+        notes: data.observacoes || '',
+        parcela: data.parcela || '',
+        juros: data.juros || 0,
+        multa: data.multa || 0,
       };
     });
   } catch (error) {
     console.error('Error fetching delinquent titles:', error);
     return [];
+  }
+};
+
+// Mapeia um título para o formato do Firestore
+const titleToFirestore = (title: Partial<DelinquentTitle>): Record<string, any> => {
+  const data: Record<string, any> = {};
+  if (title.titleNumber !== undefined) data.numero_titulo = title.titleNumber;
+  if (title.customerId !== undefined) data.cliente_id = title.customerId || '';
+  if (title.customerCode !== undefined) data.codigo_cliente = title.customerCode || '';
+  if (title.customerName !== undefined) data.cliente_nome = title.customerName || '';
+  if (title.sellerId !== undefined) data.vendedor_id = title.sellerId || '';
+  if (title.sellerCode !== undefined) data.codigo_vendedor = title.sellerCode || '';
+  if (title.sellerName !== undefined) data.vendedor_nome = title.sellerName || '';
+  if (title.cnpjCpf !== undefined) data.cnpj_cpf = title.cnpjCpf || '';
+  if (title.issueDate !== undefined) data.data_emissao = title.issueDate || '';
+  if (title.dueDate !== undefined) data.data_vencimento = title.dueDate || '';
+  if (title.originalAmount !== undefined) data.valor_original = title.originalAmount;
+  if (title.updatedAmount !== undefined) data.valor_atualizado = title.updatedAmount;
+  if (title.daysOverdue !== undefined) data.dias_atraso = title.daysOverdue;
+  if (title.agingBucket !== undefined) data.faixa_aging = title.agingBucket;
+  if (title.collectionStatus !== undefined) data.status_cobranca = title.collectionStatus;
+  if (title.notes !== undefined) data.observacoes = title.notes || '';
+  if (title.parcela !== undefined) data.parcela = title.parcela || '';
+  if (title.juros !== undefined) data.juros = title.juros;
+  if (title.multa !== undefined) data.multa = title.multa;
+  return data;
+};
+
+/**
+ * Importa títulos inadimplentes em lote com UPSERT.
+ * Chave determinística: cod_cliente + número do título + parcela.
+ * Isso evita duplicatas quando a mesma planilha é reimportada.
+ */
+export const upsertDelinquentTitlesBatch = async (
+  titles: Omit<DelinquentTitle, 'id'>[]
+): Promise<{ added: number; updated: number; errors: number }> => {
+  const db = getFirestoreDb();
+  let added = 0, updated = 0, errors = 0;
+
+  // Índice das chaves já existentes -> docId
+  const snapshot = await getDocs(collection(db, 'titulos_inadimplentes'));
+  const keyToId = new Map<string, string>();
+  snapshot.forEach((d) => {
+    const data = d.data();
+    const key = `${(data.codigo_cliente || '').toString().trim()}|${(data.numero_titulo || '').toString().trim()}|${(data.parcela || '').toString().trim()}`.toLowerCase();
+    keyToId.set(key, d.id);
+  });
+
+  for (const title of titles) {
+    try {
+      const daysOverdue = title.daysOverdue > 0 ? title.daysOverdue : calcDaysOverdue(title.dueDate);
+      const agingBucket = title.agingBucket || calcAgingBucket(daysOverdue);
+      const updatedAmount = title.updatedAmount > 0 ? title.updatedAmount : title.originalAmount;
+      const normalized = { ...title, daysOverdue, agingBucket, updatedAmount };
+
+      const key = `${(title.customerCode || '').toString().trim()}|${(title.titleNumber || '').toString().trim()}|${(title.parcela || '').toString().trim()}`.toLowerCase();
+      const payload = { ...titleToFirestore(normalized), importado_em: new Date().toISOString() };
+      const existingId = keyToId.get(key);
+
+      if (existingId) {
+        await setDoc(doc(db, 'titulos_inadimplentes', existingId), payload, { merge: true });
+        updated++;
+      } else {
+        const docRef = await addDoc(collection(db, 'titulos_inadimplentes'), payload);
+        keyToId.set(key, docRef.id);
+        added++;
+      }
+    } catch (err) {
+      console.error('Erro no upsert de título:', title.titleNumber, err);
+      errors++;
+    }
+  }
+
+  return { added, updated, errors };
+};
+
+// Atualiza um título inadimplente (edição manual completa)
+export const updateDelinquentTitle = async (id: string, title: Partial<DelinquentTitle>): Promise<void> => {
+  try {
+    const db = getFirestoreDb();
+    await setDoc(doc(db, 'titulos_inadimplentes', id), titleToFirestore(title), { merge: true });
+  } catch (error) {
+    console.error('Error updating delinquent title:', error);
+    throw error;
+  }
+};
+
+// Exclui um título inadimplente
+export const deleteDelinquentTitle = async (id: string): Promise<void> => {
+  try {
+    const db = getFirestoreDb();
+    await deleteDoc(doc(db, 'titulos_inadimplentes', id));
+  } catch (error) {
+    console.error('Error deleting delinquent title:', error);
+    throw error;
   }
 };
 
@@ -570,6 +757,297 @@ export const saveBatchDelinquentTitles = async (titles: DelinquentTitle[]): Prom
     } catch (error) {
       console.error('Error saving batch title:', title.titleNumber, error);
     }
+  }
+};
+
+// --- Extrato Financeiro (Conciliação Bancária / Caixa-Tesouraria) ---
+
+const STATEMENT_COLLECTION = 'extrato_financeiro';
+
+const statementToFirestore = (entry: Partial<FinancialStatementEntry>): Record<string, any> => {
+  const data: Record<string, any> = {};
+  if (entry.origin !== undefined) data.origem = entry.origin;
+  if (entry.source !== undefined) data.fonte = entry.source;
+  if (entry.sourceLabel !== undefined) data.fonte_label = entry.sourceLabel;
+  if (entry.date !== undefined) data.data = entry.date;
+  if (entry.year !== undefined) data.ano = entry.year;
+  if (entry.monthKey !== undefined) data.mes_chave = entry.monthKey;
+  if (entry.description !== undefined) data.descricao = entry.description || '';
+  if (entry.clientName !== undefined) data.cliente_beneficiario = entry.clientName || '';
+  if (entry.documentType !== undefined) data.tipo_documento = entry.documentType || '';
+  if (entry.documentRef !== undefined) data.documento_ref = entry.documentRef || '';
+  if (entry.entryAmount !== undefined) data.valor_entrada = entry.entryAmount;
+  if (entry.exitAmount !== undefined) data.valor_saida = entry.exitAmount;
+  if (entry.balance !== undefined) data.saldo = entry.balance;
+  if (entry.notes !== undefined) data.observacoes = entry.notes || '';
+  if (entry.dedupeKey !== undefined) data.chave_dedupe = entry.dedupeKey;
+  return data;
+};
+
+const statementFromFirestore = (id: string, data: any): FinancialStatementEntry => ({
+  id,
+  origin: data.origem || 'banco',
+  source: data.fonte || 'bradesco',
+  sourceLabel: data.fonte_label || '',
+  date: data.data || '',
+  year: data.ano || 0,
+  monthKey: data.mes_chave || '',
+  description: data.descricao || '',
+  clientName: data.cliente_beneficiario || '',
+  documentType: data.tipo_documento || '',
+  documentRef: data.documento_ref || '',
+  entryAmount: data.valor_entrada || 0,
+  exitAmount: data.valor_saida || 0,
+  balance: data.saldo,
+  notes: data.observacoes || '',
+  dedupeKey: data.chave_dedupe || '',
+  importedAt: data.importado_em || '',
+});
+
+// Busca lançamentos de extrato financeiro de um ano (ou todos, se ano omitido)
+export const fetchStatementEntries = async (year?: number): Promise<FinancialStatementEntry[]> => {
+  try {
+    const db = getFirestoreDb();
+    const q = year
+      ? query(collection(db, STATEMENT_COLLECTION), where('ano', '==', year))
+      : collection(db, STATEMENT_COLLECTION);
+    const snapshot = await getDocs(q);
+    return snapshot.docs
+      .map((d) => statementFromFirestore(d.id, d.data()))
+      .sort((a, b) => (a.date < b.date ? 1 : -1));
+  } catch (error) {
+    console.error('Error fetching statement entries:', error);
+    return [];
+  }
+};
+
+/**
+ * Importa lançamentos de extrato (banco ou caixa) com UPSERT usando dedupeKey como chave.
+ * Isso permite reimportar o mesmo extrato (ex: reprocessar o mês) sem gerar duplicidade.
+ */
+export const upsertStatementEntries = async (
+  entries: Omit<FinancialStatementEntry, 'id'>[]
+): Promise<{ added: number; updated: number; errors: number }> => {
+  const db = getFirestoreDb();
+  let added = 0, updated = 0, errors = 0;
+
+  const snapshot = await getDocs(collection(db, STATEMENT_COLLECTION));
+  const keyToId = new Map<string, string>();
+  snapshot.forEach((d) => {
+    const key = (d.data().chave_dedupe || '').toString();
+    if (key) keyToId.set(key, d.id);
+  });
+
+  for (const entry of entries) {
+    try {
+      const payload = { ...statementToFirestore(entry), importado_em: new Date().toISOString() };
+      const existingId = entry.dedupeKey ? keyToId.get(entry.dedupeKey) : undefined;
+      if (existingId) {
+        await setDoc(doc(db, STATEMENT_COLLECTION, existingId), payload, { merge: true });
+        updated++;
+      } else {
+        const docRef = await addDoc(collection(db, STATEMENT_COLLECTION), payload);
+        if (entry.dedupeKey) keyToId.set(entry.dedupeKey, docRef.id);
+        added++;
+      }
+    } catch (err) {
+      console.error('Erro no upsert de lançamento de extrato:', entry.dedupeKey, err);
+      errors++;
+    }
+  }
+
+  return { added, updated, errors };
+};
+
+export const deleteStatementEntry = async (id: string): Promise<void> => {
+  try {
+    const db = getFirestoreDb();
+    await deleteDoc(doc(db, STATEMENT_COLLECTION, id));
+  } catch (error) {
+    console.error('Error deleting statement entry:', error);
+    throw error;
+  }
+};
+
+// Limpa todos os lançamentos de um ano, opcionalmente filtrando por fonte (bradesco/pagseguro/tesouraria)
+export const clearStatementEntries = async (year: number, source?: string): Promise<void> => {
+  try {
+    const db = getFirestoreDb();
+    const q = query(collection(db, STATEMENT_COLLECTION), where('ano', '==', year));
+    const snapshot = await getDocs(q);
+    const toDelete = snapshot.docs.filter((d) => !source || d.data().fonte === source);
+    await Promise.all(toDelete.map((d) => deleteDoc(doc(db, STATEMENT_COLLECTION, d.id))));
+  } catch (error) {
+    console.error('Error clearing statement entries:', error);
+    throw error;
+  }
+};
+
+// --- Contas a Pagar (RFN006 — Totais Pagos por Credor) ---
+
+const PAYABLES_COLLECTION = 'contas_a_pagar';
+
+const payableFromFirestore = (id: string, data: any): PayableTitle => ({
+  id,
+  movCode: data.mov_codigo || '',
+  companyName: data.empresa_nome || '',
+  supplierCode: data.credor_codigo || '',
+  supplierName: data.credor_nome || '',
+  supplierCustomerId: data.credor_cliente_id || '',
+  titleCode: data.titulo_codigo || '',
+  parcela: data.parcela || '',
+  dueDate: data.data_vencimento || '',
+  paymentDate: data.data_pagamento || '',
+  year: data.ano || 0,
+  monthKey: data.mes_chave || '',
+  description: data.historico || '',
+  payingAgent: data.agente_pagador || '',
+  department: data.departamento || '',
+  amount: data.valor || 0,
+  status: data.status_baixa || 'Em Aberto',
+  reconciledStatementId: data.extrato_id || '',
+  reconciledSource: data.extrato_fonte || '',
+  reconciledAt: data.baixa_em || '',
+  notes: data.observacoes || '',
+});
+
+export const fetchPayables = async (year?: number): Promise<PayableTitle[]> => {
+  try {
+    const db = getFirestoreDb();
+    const q = year
+      ? query(collection(db, PAYABLES_COLLECTION), where('ano', '==', year))
+      : collection(db, PAYABLES_COLLECTION);
+    const snapshot = await getDocs(q);
+    return snapshot.docs
+      .map((d) => payableFromFirestore(d.id, d.data()))
+      .sort((a, b) => (a.paymentDate < b.paymentDate ? 1 : -1));
+  } catch (error) {
+    console.error('Error fetching payables:', error);
+    return [];
+  }
+};
+
+/**
+ * Importa títulos de contas a pagar (RFN006) com UPSERT em lote via writeBatch
+ * (blocos de 400 operações — a base tem ~6 mil linhas, gravação 1-a-1 seria inviável).
+ * DocId determinístico = mov_<TituloMovCodigo>, então reimportações atualizam
+ * os dados cadastrais SEM sobrescrever o status de baixa já aplicado
+ * (os campos de baixa não são incluídos no payload de importação).
+ */
+export const upsertPayablesBatch = async (
+  payables: Omit<PayableTitle, 'id' | 'status' | 'reconciledStatementId' | 'reconciledSource' | 'reconciledAt'>[]
+): Promise<{ count: number; errors: number }> => {
+  const db = getFirestoreDb();
+  let count = 0, errors = 0;
+  const CHUNK = 400;
+
+  for (let i = 0; i < payables.length; i += CHUNK) {
+    const chunk = payables.slice(i, i + CHUNK);
+    try {
+      const batch = writeBatch(db);
+      for (const p of chunk) {
+        const docId = `mov_${sanitizeDocId(p.movCode)}`;
+        batch.set(
+          doc(db, PAYABLES_COLLECTION, docId),
+          {
+            mov_codigo: p.movCode,
+            empresa_nome: p.companyName || '',
+            credor_codigo: p.supplierCode || '',
+            credor_nome: p.supplierName || '',
+            credor_cliente_id: p.supplierCustomerId || '',
+            titulo_codigo: p.titleCode || '',
+            parcela: p.parcela || '',
+            data_vencimento: p.dueDate || '',
+            data_pagamento: p.paymentDate || '',
+            ano: p.year,
+            mes_chave: p.monthKey,
+            historico: p.description || '',
+            agente_pagador: p.payingAgent || '',
+            departamento: p.department || '',
+            valor: p.amount,
+            importado_em: new Date().toISOString(),
+            // status_baixa intencionalmente omitido: novos docs ficam sem o campo
+            // (lidos como 'Em Aberto'); docs existentes preservam a baixa aplicada.
+          },
+          { merge: true }
+        );
+      }
+      await batch.commit();
+      count += chunk.length;
+    } catch (err) {
+      console.error('Erro no batch de contas a pagar:', err);
+      errors += chunk.length;
+    }
+  }
+
+  return { count, errors };
+};
+
+export const updatePayable = async (id: string, fields: Partial<PayableTitle>): Promise<void> => {
+  try {
+    const db = getFirestoreDb();
+    const data: Record<string, any> = {};
+    if (fields.status !== undefined) data.status_baixa = fields.status;
+    if (fields.reconciledStatementId !== undefined) data.extrato_id = fields.reconciledStatementId;
+    if (fields.reconciledSource !== undefined) data.extrato_fonte = fields.reconciledSource;
+    if (fields.reconciledAt !== undefined) data.baixa_em = fields.reconciledAt;
+    if (fields.notes !== undefined) data.observacoes = fields.notes;
+    if (fields.supplierCustomerId !== undefined) data.credor_cliente_id = fields.supplierCustomerId;
+    await setDoc(doc(db, PAYABLES_COLLECTION, id), data, { merge: true });
+  } catch (error) {
+    console.error('Error updating payable:', error);
+    throw error;
+  }
+};
+
+// Aplica um conjunto de baixas (automáticas) em lote via writeBatch
+export const applyPayablesReconciliation = async (
+  updates: { id: string; statementId: string; source: string }[]
+): Promise<void> => {
+  const db = getFirestoreDb();
+  const CHUNK = 400;
+  const now = new Date().toISOString();
+  for (let i = 0; i < updates.length; i += CHUNK) {
+    const chunk = updates.slice(i, i + CHUNK);
+    const batch = writeBatch(db);
+    for (const u of chunk) {
+      batch.set(
+        doc(db, PAYABLES_COLLECTION, u.id),
+        { status_baixa: 'Baixado Automático', extrato_id: u.statementId, extrato_fonte: u.source, baixa_em: now },
+        { merge: true }
+      );
+    }
+    await batch.commit();
+  }
+};
+
+export const deletePayable = async (id: string): Promise<void> => {
+  try {
+    const db = getFirestoreDb();
+    await deleteDoc(doc(db, PAYABLES_COLLECTION, id));
+  } catch (error) {
+    console.error('Error deleting payable:', error);
+    throw error;
+  }
+};
+
+export const clearPayables = async (year?: number): Promise<void> => {
+  try {
+    const db = getFirestoreDb();
+    const q = year
+      ? query(collection(db, PAYABLES_COLLECTION), where('ano', '==', year))
+      : collection(db, PAYABLES_COLLECTION);
+    const snapshot = await getDocs(q);
+    const CHUNK = 400;
+    const docs = snapshot.docs;
+    for (let i = 0; i < docs.length; i += CHUNK) {
+      const batch = writeBatch(db);
+      docs.slice(i, i + CHUNK).forEach((d) => batch.delete(doc(db, PAYABLES_COLLECTION, d.id)));
+      await batch.commit();
+    }
+  } catch (error) {
+    console.error('Error clearing payables:', error);
+    throw error;
   }
 };
 

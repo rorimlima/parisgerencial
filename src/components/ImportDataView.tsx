@@ -15,7 +15,7 @@ import {
   Info,
   UploadCloud,
 } from 'lucide-react';
-import { DelinquencyValidationRowResult, ValidationRowResult } from '../types';
+import { Customer, DelinquencyValidationRowResult, ValidationRowResult } from '../types';
 
 interface ImportDataViewProps {
   onCommitImport: (
@@ -32,16 +32,53 @@ interface ImportDataViewProps {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-const parseAmount = (raw: string): number => {
-  if (!raw) return 0;
-  const cleaned = raw
-    .toString()
-    .replace(/R\$\s?/g, '')
-    .replace(/\./g, '')
-    .replace(',', '.')
-    .trim();
-  const num = parseFloat(cleaned);
+// Converte valores monetários de múltiplos formatos (número JS, "1.234,56", "1234.56", "R$ ...").
+const parseAmount = (raw: any): number => {
+  if (raw === null || raw === undefined || raw === '') return 0;
+  if (typeof raw === 'number') return isNaN(raw) ? 0 : raw;
+  let s = raw.toString().trim().replace(/R\$\s?/gi, '').replace(/\s/g, '');
+  if (s === '') return 0;
+  const hasComma = s.includes(',');
+  const hasDot = s.includes('.');
+  if (hasComma && hasDot) {
+    // Formato PT-BR: ponto = milhar, vírgula = decimal
+    s = s.replace(/\./g, '').replace(',', '.');
+  } else if (hasComma) {
+    // Só vírgula → decimal
+    s = s.replace(',', '.');
+  }
+  // Só ponto (ou número puro) → ponto já é o decimal
+  const num = parseFloat(s);
   return isNaN(num) ? 0 : num;
+};
+
+// Normaliza datas de vários formatos para YYYY-MM-DD (aceita Date, "2026-07-01 00:00:00", "01/03/1987").
+const normalizeDate = (raw: any): string => {
+  if (raw === null || raw === undefined || raw === '') return '';
+  if (raw instanceof Date && !isNaN(raw.getTime())) {
+    const y = raw.getFullYear();
+    const m = String(raw.getMonth() + 1).padStart(2, '0');
+    const d = String(raw.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  const s = raw.toString().trim();
+  if (!s) return '';
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const br = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (br) return `${br[3]}-${br[2].padStart(2, '0')}-${br[1].padStart(2, '0')}`;
+  return s;
+};
+
+// Lê um valor de uma linha aceitando múltiplas variações de nome de coluna
+const pick = (row: any, keys: string[]): string => {
+  for (const k of keys) {
+    const v = row[k];
+    if (v !== undefined && v !== null && v.toString().trim() !== '') {
+      return v instanceof Date ? v.toISOString() : v.toString().trim();
+    }
+  }
+  return '';
 };
 
 const normalizeStatus = (raw: string): string => {
@@ -126,10 +163,10 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
       reader.onload = (e) => {
         try {
           const data = new Uint8Array(e.target?.result as ArrayBuffer);
-          const workbook = XLSX.read(data, { type: 'array' });
+          const workbook = XLSX.read(data, { type: 'array', cellDates: true });
           const firstSheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[firstSheetName];
-          const jsonRows = XLSX.utils.sheet_to_json(worksheet);
+          const jsonRows = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
           handleRows(jsonRows);
         } catch (err: any) {
           alert(`Erro ao processar planilha Excel: ${err.message}`);
@@ -219,79 +256,85 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
     const validated: ValidationRowResult[] = rawRows.map((row: any, idx: number) => {
       const errors: string[] = [];
 
-      // Código do cliente
-      const rawCode = (
-        row['codigo'] || row['Código'] || row['Codigo'] || row['CODIGO'] ||
-        row['cod'] || row['Cod'] || row['COD'] || row['id'] || ''
-      ).toString().trim();
+      // Código do cliente (CHAVE = cod_cliente)
+      const rawCode = pick(row, [
+        'cod_cliente', 'Cod_Cliente', 'COD_CLIENTE', 'codigo_cliente',
+        'codigo', 'Código', 'Codigo', 'CODIGO', 'cod', 'Cod', 'COD', 'id',
+      ]);
+
+      const personType = pick(row, ['tipo_pessoa', 'Tipo_Pessoa', 'TIPO_PESSOA', 'tipoPessoa']);
 
       // Razão social / nome — obrigatório
-      const rawName = (
-        row['razao_social'] || row['Razao Social'] || row['Razão Social'] ||
-        row['RAZAO SOCIAL'] || row['razaosocial'] || row['nome'] || row['Nome'] ||
-        row['NOME'] || row['cliente'] || row['Cliente'] || row['CLIENTE'] ||
-        row['name'] || row['Name'] || ''
-      ).toString().trim();
+      const rawName = pick(row, [
+        'razao_social', 'Razao Social', 'Razão Social', 'RAZAO SOCIAL', 'razaosocial',
+        'nome', 'Nome', 'NOME', 'cliente', 'Cliente', 'CLIENTE', 'name', 'Name',
+      ]);
 
-      // CNPJ / CPF
-      const rawCnpj = (
-        row['cnpj_cpf'] || row['cnpj'] || row['CNPJ'] || row['cpf'] || row['CPF'] ||
-        row['CNPJ/CPF'] || row['cnpj/cpf'] || row['documento'] || ''
-      ).toString().trim();
+      // CNPJ / CPF — a planilha traz colunas separadas cnpj e cpf
+      const rawCnpj = pick(row, [
+        'cnpj_cpf', 'cnpj', 'CNPJ', 'CNPJ/CPF', 'cnpj/cpf', 'documento',
+      ]);
+      const rawCpf = pick(row, ['cpf', 'CPF']);
+      const cnpjCpf = rawCnpj || rawCpf;
 
-      // Nome fantasia
-      const rawFantasia = (
-        row['nome_fantasia'] || row['fantasia'] || row['Fantasia'] ||
-        row['Nome Fantasia'] || row['FANTASIA'] || ''
-      ).toString().trim();
+      const rawFantasia = pick(row, [
+        'nome_fantasia', 'fantasia', 'Fantasia', 'Nome Fantasia', 'FANTASIA',
+      ]);
 
-      // Limite de crédito
-      const rawLimit = (
-        row['limite_credito'] || row['Limite'] || row['limite'] ||
-        row['LIMITE'] || row['Limite Crédito'] || row['limite credito'] || '0'
-      ).toString().trim();
+      // Limite de crédito — a planilha usa "valorLimiteCredito"
+      const rawLimit = pick(row, [
+        'valorLimiteCredito', 'valor_limite_credito', 'limite_credito',
+        'Limite', 'limite', 'LIMITE', 'Limite Crédito', 'limite credito',
+      ]) || '0';
 
-      // Contato
-      const rawContact = (
-        row['contato'] || row['Contato'] || row['CONTATO'] ||
-        row['responsavel'] || row['Responsável'] || ''
-      ).toString().trim();
+      // Contato — planilha usa Contato1_Nome; fallback para vendedor_responsavel
+      const rawContact = pick(row, [
+        'contato', 'Contato', 'CONTATO', 'Contato1_Nome', 'responsavel', 'Responsável',
+      ]);
 
-      // Telefone
-      const rawPhone = (
-        row['telefone'] || row['Telefone'] || row['TELEFONE'] ||
-        row['fone'] || row['cel'] || row['Celular'] || ''
-      ).toString().trim();
+      // Telefone / Celular (a planilha tem os dois)
+      const rawPhone = pick(row, ['telefone', 'Telefone', 'TELEFONE', 'fone', 'Contato1_Telefone1']);
+      const rawCell = pick(row, ['celular', 'Celular', 'cel', 'CELULAR']);
 
-      // E-mail
-      const rawEmail = (
-        row['email'] || row['Email'] || row['E-mail'] ||
-        row['e-mail'] || row['EMAIL'] || ''
-      ).toString().trim();
+      const rawEmail = pick(row, ['email', 'Email', 'E-mail', 'e-mail', 'EMAIL']);
+      const rawCity = pick(row, ['cidade', 'Cidade', 'CIDADE', 'city']);
+      const rawState = pick(row, ['estado', 'Estado', 'UF', 'uf']);
+      const rawAddress = pick(row, ['endereco', 'Endereço', 'Endereco', 'ENDERECO', 'logradouro']);
+      const rawNumber = pick(row, ['numero', 'Número', 'Numero', 'NUMERO']);
+      const rawNeighborhood = pick(row, ['bairro', 'Bairro', 'BAIRRO']);
+      const rawZip = pick(row, ['cep', 'CEP']);
+      const rawSeller = pick(row, ['vendedor_responsavel', 'Vendedor Responsável', 'vendedor']);
 
-      // Cidade
-      const rawCity = (
-        row['cidade'] || row['Cidade'] || row['CIDADE'] ||
-        row['city'] || ''
-      ).toString().trim();
-
-      // Estado / UF
-      const rawState = (
-        row['estado'] || row['Estado'] || row['UF'] || row['uf'] || ''
-      ).toString().trim();
-
-      // Validação obrigatória
       if (!rawName) errors.push('Razão Social / Nome do cliente é obrigatório');
+
+      const parsedCustomer: Partial<Customer> = errors.length === 0 ? {
+        code: rawCode,
+        name: rawName,
+        tradeName: rawFantasia,
+        cnpjCpf,
+        contactName: rawContact,
+        phone: (rawPhone || rawCell).trim(),
+        cellphone: (rawCell || rawPhone).trim(),
+        email: rawEmail,
+        city: rawCity,
+        state: rawState,
+        creditLimit: parseAmount(rawLimit),
+        personType,
+        address: rawAddress,
+        addressNumber: rawNumber,
+        neighborhood: rawNeighborhood,
+        zipCode: rawZip,
+        sellerResponsible: rawSeller,
+      } : undefined;
 
       return {
         rowNumber: idx + 1,
-        rawDate: rawCode,          // reutilizando campo rawDate para código
-        rawType: rawName,          // reutilizando campo rawType para nome
+        rawDate: rawCode,          // exibição: código
+        rawType: rawName,          // exibição: nome
         rawDescription: rawFantasia,
         rawValue: rawLimit,
-        rawCustomer: rawCnpj,
-        // dados extras preservados como propriedades adicionais
-        ...({ rawContact, rawPhone, rawEmail, rawCity, rawState } as any),
+        rawCustomer: cnpjCpf,
+        parsedCustomer,
         status: errors.length === 0 ? 'valid' : 'invalid',
         errors,
       };
@@ -308,95 +351,97 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
       return;
     }
 
-    const validated: DelinquencyValidationRowResult[] = rawRows.map((row: any, idx: number) => {
+    // A planilha RFN029 traz uma coluna "Registro": 'T' = título; 'O' = ocorrência/histórico.
+    // Importamos APENAS os títulos ('T'); linhas de histórico são ignoradas.
+    // Se a planilha não tiver a coluna Registro, todas as linhas são consideradas títulos.
+    const hasRegistro = rawRows.some((r) => r && (r['Registro'] !== undefined || r['registro'] !== undefined));
+    const titleRows = hasRegistro
+      ? rawRows.filter((r) => {
+          const reg = pick(r, ['Registro', 'registro']).toUpperCase();
+          return reg === 'T';
+        })
+      : rawRows;
+
+    const validated: DelinquencyValidationRowResult[] = titleRows.map((row: any, idx: number) => {
       const errors: string[] = [];
 
-      // Mapeamento flexível de colunas (aceita variações de nome)
-      const rawTitleNumber = (
-        row['numero_titulo'] || row['Nº Título'] || row['N titulo'] || row['Titulo'] ||
-        row['TITULO'] || row['titulo'] || row['number'] || row['Number'] || ''
-      ).toString().trim();
+      const rawTitleNumber = pick(row, [
+        'Titulo_Numero', 'numero_titulo', 'Nº Título', 'N titulo', 'Titulo',
+        'TITULO', 'titulo', 'number', 'Number',
+      ]);
 
-      // Nome do cliente — aceita também coluna 'Devedor'
-      const rawCustomerName = (
-        row['Devedor'] || row['devedor'] || row['DEVEDOR'] ||
-        row['cliente'] || row['Cliente'] || row['CLIENTE'] || row['cliente_nome'] ||
-        row['Nome'] || row['nome'] || row['customer'] || ''
-      ).toString().trim();
+      const rawParcela = pick(row, ['Titulo_Parcela', 'parcela', 'Parcela', 'PARCELA']);
 
-      // Código do cliente para vínculo — aceita 'cod_cliente'
-      const rawCustomerCode = (
-        row['cod_cliente'] || row['Cod_Cliente'] || row['COD_CLIENTE'] ||
-        row['codigo_cliente'] || row['Código Cliente'] || row['codigo'] ||
-        row['Cod'] || row['cod'] || ''
-      ).toString().trim();
+      const rawCustomerName = pick(row, [
+        'Devedor', 'devedor', 'DEVEDOR', 'cliente', 'Cliente', 'CLIENTE',
+        'cliente_nome', 'Nome', 'nome', 'customer',
+      ]);
 
-      const rawSellerName = (
-        row['vendedor'] || row['Vendedor'] || row['VENDEDOR'] || row['vendedor_nome'] ||
-        row['Nome Vendedor'] || row['Vendedor Responsável'] || ''
-      ).toString().trim();
+      // Código do cliente para vínculo — CHAVE = cod_cliente
+      const rawCustomerCode = pick(row, [
+        'cod_cliente', 'Cod_Cliente', 'COD_CLIENTE', 'codigo_cliente',
+        'Código Cliente', 'codigo', 'Cod', 'cod',
+      ]);
 
-      const rawSellerCode = (
-        row['cod_vendedor'] || row['Cod Vendedor'] || row['COD_VENDEDOR'] ||
-        row['codigo_vendedor'] || row['Código Vendedor'] || row['cod_vend'] || ''
-      ).toString().trim();
+      const rawSellerName = pick(row, [
+        'Vendedor', 'vendedor', 'VENDEDOR', 'vendedor_nome',
+        'Nome Vendedor', 'Vendedor Responsável',
+      ]);
 
-      const rawCnpjCpf = (
-        row['cnpj_cpf'] || row['CNPJ'] || row['CPF'] || row['cnpj'] || row['cpf'] ||
-        row['CNPJ/CPF'] || row['cnpj_cpf'] || ''
-      ).toString().trim();
+      const rawSellerCode = pick(row, [
+        'cod_vendedor', 'Cod Vendedor', 'COD_VENDEDOR', 'codigo_vendedor',
+        'Código Vendedor', 'cod_vend',
+      ]);
 
-      const rawIssueDate = (
-        row['data_emissao'] || row['Emissão'] || row['emissao'] || row['Emissao'] ||
-        row['DATA EMISSAO'] || row['data emissao'] || ''
-      ).toString().trim();
+      const rawCnpjCpf = pick(row, [
+        'DevedorCpfCnpj', 'cnpj_cpf', 'CNPJ', 'CPF', 'cnpj', 'cpf', 'CNPJ/CPF',
+      ]);
 
-      const rawDueDate = (
-        row['data_vencimento'] || row['Vencimento'] || row['vencimento'] || row['VENCIMENTO'] ||
-        row['data vencimento'] || row['Due Date'] || ''
-      ).toString().trim();
+      const rawIssueDate = normalizeDate(pick(row, [
+        'Emissão', 'data_emissao', 'emissao', 'Emissao', 'DATA EMISSAO', 'Lançamento',
+      ]));
 
-      const rawOriginalAmount = (
-        row['valor_original'] || row['Valor Original'] || row['Valor'] || row['valor'] ||
-        row['VALOR'] || row['original'] || row['amount'] || ''
-      ).toString().trim();
+      const rawDueDate = normalizeDate(pick(row, [
+        'Vencimento', 'data_vencimento', 'vencimento', 'VENCIMENTO', 'Due Date',
+      ]));
 
-      const rawUpdatedAmount = (
-        row['valor_atualizado'] || row['Valor Atualizado'] || row['valor atualizado'] || ''
-      ).toString().trim();
+      const rawOriginalAmount = pick(row, [
+        'Valor', 'valor_original', 'Valor Original', 'valor', 'VALOR', 'original', 'amount',
+      ]);
 
-      const rawDaysOverdue = (
-        row['dias_atraso'] || row['Dias Atraso'] || row['dias atraso'] || row['DIAS ATRASO'] ||
-        row['Atraso'] || row['atraso'] || row['days'] || ''
-      ).toString().trim();
+      const rawUpdatedAmount = pick(row, ['valor_atualizado', 'Valor Atualizado', 'valor atualizado']);
 
-      const rawAgingBucket = (
-        row['faixa_aging'] || row['Aging'] || row['aging'] || row['AGING'] ||
-        row['faixa'] || row['Faixa'] || ''
-      ).toString().trim();
+      const rawJuros = pick(row, ['Juros', 'juros', 'JUROS']);
+      const rawMulta = pick(row, ['Multa', 'multa', 'MULTA']);
 
-      const rawCollectionStatus = (
-        row['status_cobranca'] || row['Status'] || row['status'] || row['STATUS'] ||
-        row['Status Cobrança'] || row['status cobranca'] || ''
-      ).toString().trim();
+      const rawDaysOverdue = pick(row, [
+        'Atr', 'dias_atraso', 'Dias Atraso', 'dias atraso', 'DIAS ATRASO',
+        'Atraso', 'atraso', 'days',
+      ]);
 
-      const rawNotes = (
-        row['observacoes'] || row['Observações'] || row['obs'] || row['Obs'] ||
-        row['notas'] || row['notes'] || ''
-      ).toString().trim();
+      const rawAgingBucket = pick(row, ['faixa_aging', 'Aging', 'aging', 'AGING', 'faixa', 'Faixa']);
+
+      const rawCollectionStatus = pick(row, [
+        'status_cobranca', 'Status', 'status', 'STATUS', 'Status Cobrança', 'status cobranca',
+      ]);
+
+      const rawNotes = pick(row, [
+        'observacoes', 'Observações', 'obs', 'Obs', 'notas', 'notes',
+        'TituloHistorico_Observacao', 'Ocorrencia',
+      ]);
 
       // Validações obrigatórias
       if (!rawCustomerName) errors.push('Nome do cliente é obrigatório');
       if (!rawDueDate) errors.push('Data de vencimento é obrigatória');
+      const originalAmount = parseAmount(rawOriginalAmount);
       if (!rawOriginalAmount) {
         errors.push('Valor original é obrigatório');
-      } else {
-        const val = parseAmount(rawOriginalAmount);
-        if (val <= 0) errors.push('Valor original deve ser maior que zero');
+      } else if (originalAmount <= 0) {
+        errors.push('Valor original deve ser maior que zero');
       }
 
       // Calcula dias em atraso se não fornecido
-      let calcDays = parseInt(rawDaysOverdue) || 0;
+      let calcDays = parseInt(rawDaysOverdue, 10) || 0;
       if (!calcDays && rawDueDate) {
         const due = new Date(rawDueDate);
         const today = new Date();
@@ -405,11 +450,14 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
         }
       }
 
-      const originalAmount = parseAmount(rawOriginalAmount);
-      const updatedAmount = parseAmount(rawUpdatedAmount) || originalAmount;
+      const juros = parseAmount(rawJuros);
+      const multa = parseAmount(rawMulta);
+      // Valor atualizado = valor informado OU (original + juros + multa)
+      const updatedAmount = parseAmount(rawUpdatedAmount) || (originalAmount + juros + multa);
 
       const parsedTitle = errors.length === 0 ? {
         titleNumber: rawTitleNumber || `IMP-${String(idx + 1).padStart(4, '0')}`,
+        parcela: rawParcela,
         customerName: rawCustomerName,
         customerCode: rawCustomerCode,
         sellerName: rawSellerName,
@@ -419,6 +467,8 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
         dueDate: rawDueDate,
         originalAmount,
         updatedAmount,
+        juros,
+        multa,
         daysOverdue: calcDays,
         agingBucket: normalizeAging(rawAgingBucket, calcDays) as any,
         collectionStatus: normalizeStatus(rawCollectionStatus) as any,
@@ -435,8 +485,8 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
         rawCnpjCpf,
         rawIssueDate,
         rawDueDate,
-        rawOriginalAmount,
-        rawUpdatedAmount,
+        rawOriginalAmount: rawOriginalAmount ? String(originalAmount) : '',
+        rawUpdatedAmount: rawUpdatedAmount || String(updatedAmount),
         rawDaysOverdue: calcDays ? String(calcDays) : rawDaysOverdue,
         rawAgingBucket,
         rawCollectionStatus,
@@ -589,16 +639,16 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 text-[10px]">
             {[
-              { col: 'codigo / Código', label: 'Código Cliente', req: false },
+              { col: 'cod_cliente (CHAVE)', label: 'Código Cliente', req: true },
               { col: 'razao_social / Nome / Cliente', label: 'Razão Social / Nome', req: true },
-              { col: 'cnpj_cpf / CNPJ / CPF', label: 'CNPJ ou CPF', req: false },
-              { col: 'nome_fantasia / Fantasia', label: 'Nome Fantasia', req: false },
-              { col: 'contato / Contato', label: 'Contato', req: false },
-              { col: 'telefone / Telefone', label: 'Telefone', req: false },
-              { col: 'email / E-mail', label: 'E-mail', req: false },
-              { col: 'cidade / Cidade', label: 'Cidade', req: false },
+              { col: 'cnpj / cpf', label: 'CNPJ ou CPF', req: false },
+              { col: 'nome_fantasia', label: 'Nome Fantasia', req: false },
+              { col: 'Contato1_Nome / contato', label: 'Contato', req: false },
+              { col: 'telefone / celular', label: 'Telefone / Celular', req: false },
+              { col: 'email', label: 'E-mail', req: false },
+              { col: 'cidade / bairro / endereco', label: 'Endereço', req: false },
               { col: 'estado / UF', label: 'UF (Estado)', req: false },
-              { col: 'limite_credito / Limite', label: 'Limite de Crédito', req: false },
+              { col: 'valorLimiteCredito', label: 'Limite de Crédito', req: false },
             ].map((item) => (
               <div key={item.col} className="bg-white border border-emerald-100 rounded p-2">
                 <p className="font-bold text-emerald-900">
@@ -625,18 +675,18 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 text-[10px]">
             {[
-              { col: 'numero_titulo / Nº Título', label: 'Nº do Título', req: false },
-              { col: 'Devedor / cliente / Nome', label: 'Nome do Devedor/Cliente', req: true },
-              { col: 'cod_cliente / codigo_cliente', label: 'Código do Cliente (vínculo)', req: false },
-              { col: 'cnpj_cpf / CNPJ / CPF', label: 'CNPJ ou CPF', req: false },
-              { col: 'data_emissao / Emissão', label: 'Data Emissão', req: false },
-              { col: 'data_vencimento / Vencimento', label: 'Data Vencimento', req: true },
-              { col: 'valor_original / Valor', label: 'Valor Original (R$)', req: true },
-              { col: 'valor_atualizado', label: 'Valor Atualizado', req: false },
-              { col: 'dias_atraso / Atraso', label: 'Dias em Atraso', req: false },
-              { col: 'faixa_aging / Aging', label: 'Faixa Aging', req: false },
+              { col: 'Titulo_Numero + Titulo_Parcela', label: 'Nº do Título / Parcela', req: false },
+              { col: 'Devedor', label: 'Nome do Devedor/Cliente', req: true },
+              { col: 'cod_cliente (CHAVE de vínculo)', label: 'Código do Cliente', req: false },
+              { col: 'DevedorCpfCnpj', label: 'CNPJ ou CPF', req: false },
+              { col: 'Emissão', label: 'Data Emissão', req: false },
+              { col: 'Vencimento', label: 'Data Vencimento', req: true },
+              { col: 'Valor', label: 'Valor Original (R$)', req: true },
+              { col: 'Juros + Multa', label: 'Encargos (Valor Atualizado)', req: false },
+              { col: 'Atr', label: 'Dias em Atraso', req: false },
+              { col: 'Vendedor', label: 'Vendedor', req: false },
               { col: 'status_cobranca / Status', label: 'Status Cobrança', req: false },
-              { col: 'observacoes / Observações', label: 'Observações', req: false },
+              { col: 'Registro = "T" (só títulos)', label: 'Filtro automático', req: false },
             ].map((item) => (
               <div key={item.col} className="bg-white border border-blue-100 rounded p-2">
                 <p className="font-bold text-blue-900">

@@ -16,6 +16,7 @@ import {
   Briefcase,
   AlertTriangle,
   ArrowUpRight,
+  Landmark,
 } from 'lucide-react';
 import { ViewTab } from '../types';
 
@@ -59,6 +60,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Resultado Financeiro',
       icon: DollarSign,
       description: 'Fluxo de caixa, entradas, saídas e estoque',
+    },
+    {
+      id: 'statement' as ViewTab,
+      label: 'Extrato Financeiro',
+      icon: Landmark,
+      description: 'Conciliação bancária (Bradesco/PagSeguro) e caixa/tesouraria',
     },
     {
       id: 'import' as ViewTab,
