@@ -775,7 +775,8 @@ export default function App() {
   ): { id: string; statementId: string; source: string; notes?: string }[] => {
     // Janela ampliada para 15 dias para encontrar o máximo de correspondências automáticas
     const DATE_WINDOW_DAYS = 15;
-    const AMOUNT_TOLERANCE = 0.01;
+    // Tolerância em centavos evita problemas de arredondamento de ponto flutuante
+    const AMOUNT_TOLERANCE_CENTS = 1;
 
     const openPayables = payablesList.filter((p) => p.status === 'Em Aberto');
     const usedStatementIds = new Set(payablesList.filter((p) => p.reconciledStatementId).map((p) => p.reconciledStatementId));
@@ -787,27 +788,46 @@ export default function App() {
       return new Date(iso.slice(0, 10) + 'T00:00:00').getTime();
     };
 
+    // Agrupa os lançamentos de saída disponíveis por valor (em centavos), permitindo
+    // que cada título busque apenas candidatos com o mesmo valor em vez de varrer
+    // toda a lista de lançamentos — troca O(títulos × lançamentos) por ~O(títulos +
+    // lançamentos), essencial para bases com milhares de registros (RFN006 tem
+    // ~6 mil linhas) responderem em milissegundos em vez de segundos/minutos.
+    const exitsByAmountCents = new Map<number, FinancialStatementEntry[]>();
+    for (const e of availableExits) {
+      const cents = Math.round(e.exitAmount * 100);
+      const bucket = exitsByAmountCents.get(cents);
+      if (bucket) bucket.push(e);
+      else exitsByAmountCents.set(cents, [e]);
+    }
+
     const candidates: { payableId: string; entryId: string; sourceLabel: string; diffDays: number; notes: string }[] = [];
     for (const p of openPayables) {
       const pTime = toTime(p.paymentDate);
       if (isNaN(pTime)) continue;
-      for (const e of availableExits) {
-        if (Math.abs(p.amount - e.exitAmount) > AMOUNT_TOLERANCE) continue;
-        const eTime = toTime(e.date);
-        if (isNaN(eTime)) continue;
-        const diffDays = Math.abs(pTime - eTime) / (1000 * 60 * 60 * 24);
-        if (diffDays > DATE_WINDOW_DAYS) continue;
 
-        // Se houver texto contendo borderô, capturamos para justificar a baixa
-        let notes = '';
-        const desc = (p.description || '').trim();
-        if (desc.toLowerCase().includes('borderô') || desc.toLowerCase().includes('bordero')) {
-          notes = desc;
-        } else {
-          notes = `Baixa automática com base em lançamento de ${e.sourceLabel}`;
+      const pCents = Math.round(p.amount * 100);
+      // Considera o valor exato e uma pequena tolerância de arredondamento (±1 centavo)
+      for (let delta = -AMOUNT_TOLERANCE_CENTS; delta <= AMOUNT_TOLERANCE_CENTS; delta++) {
+        const bucket = exitsByAmountCents.get(pCents + delta);
+        if (!bucket) continue;
+        for (const e of bucket) {
+          const eTime = toTime(e.date);
+          if (isNaN(eTime)) continue;
+          const diffDays = Math.abs(pTime - eTime) / (1000 * 60 * 60 * 24);
+          if (diffDays > DATE_WINDOW_DAYS) continue;
+
+          // Se houver texto contendo borderô, capturamos para justificar a baixa
+          let notes = '';
+          const desc = (p.description || '').trim();
+          if (desc.toLowerCase().includes('borderô') || desc.toLowerCase().includes('bordero')) {
+            notes = desc;
+          } else {
+            notes = `Baixa automática com base em lançamento de ${e.sourceLabel}`;
+          }
+
+          candidates.push({ payableId: p.id, entryId: e.id, sourceLabel: e.sourceLabel, diffDays, notes });
         }
-
-        candidates.push({ payableId: p.id, entryId: e.id, sourceLabel: e.sourceLabel, diffDays, notes });
       }
     }
     candidates.sort((a, b) => a.diffDays - b.diffDays);

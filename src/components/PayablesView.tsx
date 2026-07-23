@@ -70,6 +70,29 @@ export interface RawPayableRow {
 
 const MONTH_KEYS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 
+// Janela padrão (em dias, para cada lado) da busca "Encontrar no Extrato"
+const SEARCH_WINDOW_DAYS_DEFAULT = 7;
+
+// Defesa em profundidade: garante que a UI nunca fique presa em "Processando..."
+// indefinidamente, mesmo que a promise do handler no App.tsx nunca resolva por
+// algum motivo imprevisto (rede, trava do Firestore, etc). Sempre rejeita em
+// no máximo `ms` milissegundos, liberando o botão para nova tentativa.
+const withClientTimeout = <T,>(promise: Promise<T>, ms = 15000): Promise<T> => {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`A operação demorou mais de ${Math.round(ms / 1000)}s e foi cancelada. Tente novamente.`)), ms)
+    ),
+  ]);
+};
+
+interface ExtratoMatch {
+  entry: FinancialStatementEntry;
+  diffDays: number;
+  diffAmount: number;
+  quality: 'exato' | 'aproximado';
+}
+
 const normalizeDate = (raw: any): string => {
   if (!raw && raw !== 0) return '';
   if (raw instanceof Date && !isNaN(raw.getTime())) {
@@ -160,6 +183,7 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
   const [detailsPayable, setDetailsPayable] = useState<PayableTitle | null>(null);
   const [baixaTarget, setBaixaTarget] = useState<PayableTitle | null>(null);
   const [baixaNotes, setBaixaNotes] = useState('');
+  const [baixaError, setBaixaError] = useState<string | null>(null);
   const [linkTarget, setLinkTarget] = useState<PayableTitle | null>(null);
   const [linkCode, setLinkCode] = useState('');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -168,48 +192,67 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
 
   // Estado do modal "Encontrar no Extrato"
   const [extratoSearchTarget, setExtratoSearchTarget] = useState<PayableTitle | null>(null);
-  const [extratoSearchResults, setExtratoSearchResults] = useState<FinancialStatementEntry[]>([]);
+  const [extratoSearchResults, setExtratoSearchResults] = useState<ExtratoMatch[]>([]);
   const [extratoSearchLoading, setExtratoSearchLoading] = useState(false);
+  const [extratoSearchDays, setExtratoSearchDays] = useState(SEARCH_WINDOW_DAYS_DEFAULT);
 
   const canEdit = userRole !== 'analista';
 
-  // ── Função: Encontrar no Extrato (±2 dias, valor exato na saída) ────────
-  const searchExtratoForPayable = (target: PayableTitle) => {
+  // Lançamentos de extrato já usados em alguma baixa (para não sugerir o mesmo
+  // lançamento bancário para dois títulos diferentes). O próprio lançamento já
+  // vinculado ao título que está sendo pesquisado continua aparecendo, para
+  // permitir revisão/reconfirmação.
+  const usedStatementIds = useMemo(
+    () => new Set(payables.filter((p) => p.reconciledStatementId).map((p) => p.reconciledStatementId)),
+    [payables]
+  );
+
+  // ── Função: Encontrar no Extrato ─────────────────────────────────────────
+  // Busca prioriza a DATA (janela configurável, padrão ±7 dias em torno do
+  // pagamento); o VALOR não é mais um filtro rígido — lançamentos com valor
+  // aproximado também aparecem (ex: descontos, tarifas ou arredondamentos),
+  // classificados como "Exato" ou "Aproximado" e ordenados pelo melhor
+  // casamento combinado (valor tem peso maior que a distância em dias).
+  const searchExtratoForPayable = (target: PayableTitle, windowDays: number = extratoSearchDays) => {
     setExtratoSearchTarget(target);
     setExtratoSearchLoading(true);
     try {
       const payDate = new Date(target.paymentDate + 'T00:00:00');
       if (isNaN(payDate.getTime())) {
         setExtratoSearchResults([]);
-        setExtratoSearchLoading(false);
         return;
       }
-      // Janela: 2 dias antes até o dia presente (ou dia do pagamento, o que for maior)
-      const today = new Date();
-      today.setHours(23, 59, 59, 999);
+
       const startWindow = new Date(payDate);
-      startWindow.setDate(startWindow.getDate() - 2);
+      startWindow.setDate(startWindow.getDate() - windowDays);
       startWindow.setHours(0, 0, 0, 0);
-      const endWindow = today > payDate ? today : payDate;
+      const endWindow = new Date(payDate);
+      endWindow.setDate(endWindow.getDate() + windowDays);
+      endWindow.setHours(23, 59, 59, 999);
 
-      const targetAmount = Math.round(target.amount * 100); // centavos para comparação exata
+      const targetAmount = target.amount;
+      const matches: ExtratoMatch[] = [];
 
-      const matches = statementEntries.filter((e) => {
-        // Só entradas de saída (exit > 0)
-        if (e.exitAmount <= 0) return false;
-        // Comparar valor exato em centavos
-        if (Math.round(e.exitAmount * 100) !== targetAmount) return false;
-        // Verificar janela de data
+      for (const e of statementEntries) {
+        if (e.exitAmount <= 0) continue;
+        // Ignora lançamentos já usados em OUTRA baixa, mas mantém o já vinculado a este título
+        if (usedStatementIds.has(e.id) && e.id !== target.reconciledStatementId) continue;
+
         const entryDate = new Date(e.date + 'T00:00:00');
-        if (isNaN(entryDate.getTime())) return false;
-        return entryDate >= startWindow && entryDate <= endWindow;
-      });
+        if (isNaN(entryDate.getTime())) continue;
+        if (entryDate < startWindow || entryDate > endWindow) continue;
 
-      // Ordena por proximidade de data ao pagamento
+        const diffDays = Math.abs(entryDate.getTime() - payDate.getTime()) / (1000 * 60 * 60 * 24);
+        const diffAmount = Math.abs(e.exitAmount - targetAmount);
+        const quality: ExtratoMatch['quality'] = diffAmount <= 0.01 ? 'exato' : 'aproximado';
+        matches.push({ entry: e, diffDays, diffAmount, quality });
+      }
+
+      // Exatos primeiro; dentro de cada grupo, melhor combinação de proximidade
+      // de valor (peso 2x) e de data
       matches.sort((a, b) => {
-        const da = Math.abs(new Date(a.date).getTime() - payDate.getTime());
-        const db = Math.abs(new Date(b.date).getTime() - payDate.getTime());
-        return da - db;
+        if (a.quality !== b.quality) return a.quality === 'exato' ? -1 : 1;
+        return (a.diffAmount * 2 + a.diffDays) - (b.diffAmount * 2 + b.diffDays);
       });
 
       setExtratoSearchResults(matches);
@@ -663,7 +706,7 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                           </button>
                           <button
                             onClick={() => { setBaixaTarget(p); setBaixaNotes(''); searchExtratoForPayable(p); }}
-                            title="Encontrar no Extrato (±2 dias)"
+                            title="Encontrar no Extrato (busca por data, valor aproximado)"
                             className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white transition-colors"
                           >
                             <Search className="w-3.5 h-3.5" />
@@ -856,16 +899,22 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
             />
             {/* Botão: Encontrar no Extrato */}
             <button
-              onClick={() => searchExtratoForPayable(baixaTarget)}
+              onClick={() => { setBaixaError(null); searchExtratoForPayable(baixaTarget); }}
               disabled={isBaixaLoading}
               className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg hover:bg-emerald-100 transition-colors disabled:opacity-50"
             >
               <Search className="w-4 h-4" />
-              Encontrar no Extrato (±2 dias)
+              Encontrar no Extrato (±{extratoSearchDays} dias)
             </button>
+            {baixaError && (
+              <div className="flex items-start gap-2 bg-rose-50 border border-rose-200 rounded-lg p-2.5">
+                <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+                <p className="text-[11px] text-rose-700 font-semibold">{baixaError}</p>
+              </div>
+            )}
             <div className="flex items-center justify-center space-x-3">
               <button
-                onClick={() => { setBaixaTarget(null); setIsBaixaLoading(false); }}
+                onClick={() => { setBaixaTarget(null); setIsBaixaLoading(false); setBaixaError(null); }}
                 disabled={isBaixaLoading}
                 className="px-4 py-2 text-xs font-bold bg-[#F3F1ED] text-[#433E37] rounded-lg hover:bg-gray-200 disabled:opacity-50"
               >
@@ -875,11 +924,14 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                 disabled={isBaixaLoading}
                 onClick={async () => {
                   setIsBaixaLoading(true);
+                  setBaixaError(null);
                   try {
-                    await onManualBaixa(baixaTarget.id, baixaNotes.trim() || undefined);
+                    await withClientTimeout(
+                      Promise.resolve(onManualBaixa(baixaTarget.id, baixaNotes.trim() || undefined))
+                    );
                     setBaixaTarget(null);
-                  } catch {
-                    // Erro tratado no handler
+                  } catch (err) {
+                    setBaixaError(err instanceof Error ? err.message : 'Falha ao processar a baixa. Tente novamente.');
                   } finally {
                     setIsBaixaLoading(false);
                   }
@@ -892,7 +944,7 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                     <path d="M4 12a8 8 0 018-8V0C5.37 0 0 5.37 0 12h4z" fill="currentColor" className="opacity-75" />
                   </svg>
                 )}
-                Confirmar Baixa Manual
+                {isBaixaLoading ? 'Processando baixa...' : 'Confirmar Baixa Manual'}
               </button>
             </div>
           </div>
@@ -911,11 +963,11 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                     <Search className="w-5 h-5 text-emerald-600" /> Encontrar no Extrato
                   </h4>
                   <p className="text-xs text-[#8B7D6B] mt-1">
-                    Buscando saída de <span className="font-bold text-[#2D2A26]">{formatCurrency(extratoSearchTarget.amount)}</span>{' '}
+                    Buscando saída próxima de <span className="font-bold text-[#2D2A26]">{formatCurrency(extratoSearchTarget.amount)}</span>{' '}
                     para <span className="font-bold">{extratoSearchTarget.supplierName}</span>
                   </p>
                   <p className="text-[10px] font-mono text-[#C19A6B] mt-0.5">
-                    Janela: 2 dias antes de {extratoSearchTarget.paymentDate} até hoje
+                    Data de pagamento: {extratoSearchTarget.paymentDate} • busca por data (valor é aproximado, não é filtro rígido)
                   </p>
                 </div>
                 <button
@@ -925,10 +977,35 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                   <X className="w-4 h-4 text-[#8B7D6B]" />
                 </button>
               </div>
+
+              {/* Controle da janela de dias */}
+              <div className="flex items-center gap-2 mt-3">
+                <span className="text-[10px] font-bold text-[#8B7D6B] uppercase">Janela de busca:</span>
+                <select
+                  value={extratoSearchDays}
+                  onChange={(e) => {
+                    const days = parseInt(e.target.value, 10);
+                    setExtratoSearchDays(days);
+                    if (extratoSearchTarget) searchExtratoForPayable(extratoSearchTarget, days);
+                  }}
+                  className="bg-[#F9F7F2] border border-[#EAE6DF] text-xs text-[#2D2A26] rounded-lg px-2 py-1 font-bold focus:outline-none focus:border-[#C19A6B]"
+                >
+                  <option value={3}>±3 dias</option>
+                  <option value={7}>±7 dias</option>
+                  <option value={15}>±15 dias</option>
+                  <option value={30}>±30 dias</option>
+                </select>
+              </div>
             </div>
 
             {/* Resultados */}
             <div className="p-5 overflow-y-auto flex-1">
+              {baixaError && (
+                <div className="flex items-start gap-2 bg-rose-50 border border-rose-200 rounded-lg p-2.5 mb-3">
+                  <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-rose-700 font-semibold">{baixaError}</p>
+                </div>
+              )}
               {extratoSearchLoading ? (
                 <div className="flex items-center justify-center py-8">
                   <svg className="animate-spin w-6 h-6 text-emerald-600" viewBox="0 0 24 24" fill="none">
@@ -942,8 +1019,8 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                   <AlertCircle className="w-10 h-10 text-amber-400 mx-auto mb-2" />
                   <p className="text-sm font-bold text-[#2D2A26]">Nenhum lançamento encontrado</p>
                   <p className="text-xs text-[#8B7D6B] mt-1">
-                    Não foi encontrada nenhuma saída de {formatCurrency(extratoSearchTarget.amount)} no extrato
-                    dentro da janela de ±2 dias.
+                    Nenhuma saída no extrato dentro de ±{extratoSearchDays} dias de {extratoSearchTarget.paymentDate}.
+                    Tente aumentar a janela de busca acima.
                   </p>
                 </div>
               ) : (
@@ -951,32 +1028,37 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                   <p className="text-xs font-bold text-emerald-700 mb-3">
                     {extratoSearchResults.length} lançamento(s) encontrado(s) — clique para confirmar a baixa:
                   </p>
-                  {extratoSearchResults.map((entry) => (
+                  {extratoSearchResults.map((match) => {
+                    const entry = match.entry;
+                    return (
                     <div
                       key={entry.id}
                       className="border border-[#EAE6DF] rounded-xl p-4 hover:border-emerald-400 hover:bg-emerald-50/40 transition-all cursor-pointer group"
                       onClick={async () => {
                         if (isBaixaLoading) return;
                         setIsBaixaLoading(true);
+                        setBaixaError(null);
                         const justificativa = [
                           baixaNotes.trim(),
-                          `Conciliado c/ extrato ${entry.sourceLabel} em ${entry.date}`,
+                          `Conciliado c/ extrato ${entry.sourceLabel} em ${entry.date}${match.quality === 'aproximado' ? ` (valor aproximado, diferença de ${formatCurrency(match.diffAmount)})` : ''}`,
                           extratoSearchTarget.description?.includes('Borderô')
                             ? extratoSearchTarget.description
                             : '',
                         ].filter(Boolean).join(' | ');
                         try {
-                          await onManualBaixa(
-                            extratoSearchTarget.id,
-                            justificativa,
-                            entry.id,
-                            entry.source
+                          await withClientTimeout(
+                            Promise.resolve(onManualBaixa(
+                              extratoSearchTarget.id,
+                              justificativa,
+                              entry.id,
+                              entry.source
+                            ))
                           );
                           setExtratoSearchTarget(null);
                           setExtratoSearchResults([]);
                           setBaixaTarget(null);
-                        } catch {
-                          // Erro tratado no handler
+                        } catch (err) {
+                          setBaixaError(err instanceof Error ? err.message : 'Falha ao processar a baixa. Tente novamente.');
                         } finally {
                           setIsBaixaLoading(false);
                         }
@@ -984,11 +1066,22 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                     >
                       <div className="flex items-center justify-between">
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
                               {entry.sourceLabel}
                             </span>
-                            <span className="text-xs font-mono text-[#8B7D6B]">{entry.date}</span>
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                match.quality === 'exato'
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'bg-amber-100 text-amber-800 border border-amber-200'
+                              }`}
+                            >
+                              {match.quality === 'exato' ? 'Valor Exato' : `Aproximado (dif. ${formatCurrency(match.diffAmount)})`}
+                            </span>
+                            <span className="text-xs font-mono text-[#8B7D6B]">
+                              {entry.date} • {Math.round(match.diffDays)} dia(s) de diferença
+                            </span>
                           </div>
                           <p className="text-xs text-[#433E37] mt-1 truncate">{entry.description}</p>
                           {entry.clientName && (
@@ -1006,7 +1099,8 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                         </span>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>

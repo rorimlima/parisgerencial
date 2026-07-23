@@ -32,6 +32,25 @@ let firestoreDb: ReturnType<typeof getFirestore>;
 
 const ALL_MONTHS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 
+/**
+ * Executa uma operação do Firestore com um tempo limite (timeout) explícito.
+ * Garante que a UI nunca fique "presa" indefinidamente esperando uma escrita ou
+ * leitura que trave por instabilidade de rede — em vez de girar para sempre, a
+ * promessa rejeita com uma mensagem clara após `ms` milissegundos, permitindo
+ * que a interface se recupere e informe o usuário.
+ */
+const withTimeout = <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Tempo limite excedido (${Math.round(ms / 1000)}s) em: ${label}. Verifique sua conexão e tente novamente.`));
+    }, ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err) => { clearTimeout(timer); reject(err); }
+    );
+  });
+};
+
 function createEmptyEconomicMonth(monthKey: string, year: number): EconomicMonthData {
   return {
     monthKey,
@@ -923,7 +942,7 @@ export const fetchPayables = async (year?: number): Promise<PayableTitle[]> => {
     const q = year
       ? query(collection(db, PAYABLES_COLLECTION), where('ano', '==', year))
       : collection(db, PAYABLES_COLLECTION);
-    const snapshot = await getDocs(q);
+    const snapshot = await withTimeout(getDocs(q), 25000, 'buscar contas a pagar');
     return snapshot.docs
       .map((d) => payableFromFirestore(d.id, d.data()))
       .sort((a, b) => (a.paymentDate < b.paymentDate ? 1 : -1));
@@ -986,7 +1005,7 @@ export const upsertPayablesBatch = async (
           { merge: true }
         );
       }
-      await batch.commit();
+      await withTimeout(batch.commit(), 20000, `importar lote de contas a pagar (${chunk.length} títulos)`);
       count += chunk.length;
     } catch (err) {
       console.error('Erro no batch de contas a pagar:', err);
@@ -1008,7 +1027,7 @@ export const updatePayable = async (id: string, fields: Partial<PayableTitle>): 
     if (fields.notes !== undefined) data.observacoes = fields.notes;
     if (fields.baixaCode !== undefined) data.baixa_code = fields.baixaCode;
     if (fields.supplierCustomerId !== undefined) data.credor_cliente_id = fields.supplierCustomerId;
-    await setDoc(doc(db, PAYABLES_COLLECTION, id), data, { merge: true });
+    await withTimeout(setDoc(doc(db, PAYABLES_COLLECTION, id), data, { merge: true }), 12000, 'salvar baixa do título');
   } catch (error) {
     console.error('Error updating payable:', error);
     throw error;
@@ -1041,14 +1060,14 @@ export const applyPayablesReconciliation = async (
         { merge: true }
       );
     }
-    await batch.commit();
+    await withTimeout(batch.commit(), 20000, `aplicar conciliação automática (${chunk.length} baixas)`);
   }
 };
 
 export const deletePayable = async (id: string): Promise<void> => {
   try {
     const db = getFirestoreDb();
-    await deleteDoc(doc(db, PAYABLES_COLLECTION, id));
+    await withTimeout(deleteDoc(doc(db, PAYABLES_COLLECTION, id)), 12000, 'excluir título de contas a pagar');
   } catch (error) {
     console.error('Error deleting payable:', error);
     throw error;
@@ -1061,13 +1080,13 @@ export const clearPayables = async (year?: number): Promise<void> => {
     const q = year
       ? query(collection(db, PAYABLES_COLLECTION), where('ano', '==', year))
       : collection(db, PAYABLES_COLLECTION);
-    const snapshot = await getDocs(q);
+    const snapshot = await withTimeout(getDocs(q), 25000, 'buscar contas a pagar para zerar');
     const CHUNK = 400;
     const docs = snapshot.docs;
     for (let i = 0; i < docs.length; i += CHUNK) {
       const batch = writeBatch(db);
       docs.slice(i, i + CHUNK).forEach((d) => batch.delete(doc(db, PAYABLES_COLLECTION, d.id)));
-      await batch.commit();
+      await withTimeout(batch.commit(), 20000, `zerar lote de contas a pagar (${docs.slice(i, i + CHUNK).length} títulos)`);
     }
   } catch (error) {
     console.error('Error clearing payables:', error);
