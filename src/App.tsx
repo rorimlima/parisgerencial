@@ -126,47 +126,70 @@ export default function App() {
     isConnected: true,
   });
 
-  // ── Carrega dados do Firestore quando o ano mudar ─────────────────────────
-  const loadAllData = useCallback(async (year: number) => {
-    setIsLoading(true);
+  // ── Dados "mestre" (não variam por ano) ───────────────────────────────────
+  // clientes/títulos/vendedores/tokens não têm campo "ano": antes eram
+  // recarregados por inteiro em TODA troca de aba de ano (2024/2025/2026/2027),
+  // multiplicando leituras no Firestore sem necessidade nenhuma (a cota estourou
+  // 8x o limite diário com só 3 usuários — ver commit da correção). Agora
+  // carregam uma única vez por login.
+  const loadMasterData = useCallback(async () => {
     try {
-      const [ecoData, finData, cliData, titData, vendData, tokData, stmtData, payData, cashData] = await Promise.all([
-        getEconomicData(year),
-        getFinancialData(year),
+      const [cliData, titData, vendData, tokData] = await Promise.all([
         getClientes(),
         getTitulosInadimplentes(),
         getVendedores(),
         getApiTokens(),
+      ]);
+      setCustomers(cliData);
+      setDelinquentTitles(titData);
+      setSellers(vendData);
+      setApiTokens(tokData);
+    } catch (err: any) {
+      console.error('Erro ao carregar dados mestre do Firestore:', err.message);
+    }
+  }, []);
+
+  // ── Dados do ano selecionado (já filtrados por "ano" no Firestore) ────────
+  const loadYearData = useCallback(async (year: number) => {
+    setIsLoading(true);
+    try {
+      const [ecoData, finData, stmtData, payData, cashData] = await Promise.all([
+        getEconomicData(year),
+        getFinancialData(year),
         getExtratoFinanceiro(year),
         getContasPagar(year),
         getFluxoCaixa(year),
       ]);
       setEconomicData(ecoData);
       setFinancialData(finData);
-      setCustomers(cliData);
-      setDelinquentTitles(titData);
-      setSellers(vendData);
-      setApiTokens(tokData);
       setStatementEntries(stmtData);
       setPayables(payData);
       setCashFlowPlans(cashData);
     } catch (err: any) {
-      console.error('Erro ao carregar dados do Firestore:', err.message);
+      console.error('Erro ao carregar dados do ano no Firestore:', err.message);
     } finally {
       setIsLoading(false);
     }
   }, []);
 
+  // Carrega os dados mestre uma única vez por login (não depende do ano
+  // selecionado, então não deve rodar de novo a cada troca de aba de ano).
+  useEffect(() => {
+    if (!currentUser) return;
+    loadMasterData();
+  }, [currentUser, loadMasterData]);
+
   // Só carrega dados depois que houver um usuário autenticado. Além de ser o
   // correto em termos de acesso, evita gastar cota do Firestore com visitantes
-  // que nem entraram no sistema.
+  // que nem entraram no sistema. Recarrega ao trocar de ano — mas sem repetir
+  // as coleções mestre (ver loadMasterData acima).
   useEffect(() => {
     if (!currentUser) {
       setIsLoading(false);
       return;
     }
-    loadAllData(selectedYear);
-  }, [selectedYear, loadAllData, currentUser]);
+    loadYearData(selectedYear);
+  }, [selectedYear, loadYearData, currentUser]);
 
 
 
