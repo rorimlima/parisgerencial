@@ -11,7 +11,14 @@ import {
   PlusCircle,
 } from 'lucide-react';
 import { EconomicMonthData } from '../types';
-import { exportReportToExcel, exportReportToPdf, formatCurrency, formatPercent } from '../utils/exportUtils';
+import {
+  exportEconomicPdfGeral,
+  exportEconomicPdfMensal,
+  exportReportToExcel,
+  formatCurrency,
+  formatPercent,
+} from '../utils/exportUtils';
+import { PdfExportMenu } from './PdfExportMenu';
 
 interface EconomicViewProps {
   economicMonths: Record<string, EconomicMonthData>;
@@ -46,74 +53,12 @@ export const EconomicView: React.FC<EconomicViewProps> = ({
   const totalDespesasPercent = totalReceita > 0 ? (totalDespesas / totalReceita) * 100 : 0;
   const totalResEcoPercent = totalReceita > 0 ? (totalResEco / totalReceita) * 100 : 0;
 
-  const handleExportPdf = () => {
-    const headers = [
-      'Indicador',
-      ...monthKeys.map((m) => m.toUpperCase()),
-      'Total Ano',
-      'Média Mês',
-    ];
+  const handleExportGeralPdf = () => {
+    exportEconomicPdfGeral(economicMonths, selectedYear);
+  };
 
-    const rows = [
-      [
-        'Receita Bruta',
-        ...monthKeys.map((m) => formatCurrency(economicMonths[m]?.receitaBruta)),
-        formatCurrency(totalReceita),
-        formatCurrency(avgReceita),
-      ],
-      [
-        'CMV (Custos)',
-        ...monthKeys.map(
-          (m) => `${formatCurrency(economicMonths[m]?.cmv)} (${formatPercent(economicMonths[m]?.cmvPercent)})`
-        ),
-        `${formatCurrency(totalCmv)} (${formatPercent(totalCmvPercent)})`,
-        formatCurrency(avgCmv),
-      ],
-      [
-        'Margem Bruta',
-        ...monthKeys.map(
-          (m) => `${formatCurrency(economicMonths[m]?.margemBruta)} (${formatPercent(economicMonths[m]?.margemPercent)})`
-        ),
-        `${formatCurrency(totalMargem)} (${formatPercent(totalMargemPercent)})`,
-        formatCurrency(avgMargem),
-      ],
-      [
-        'Despesas Fixas',
-        ...monthKeys.map(
-          (m) => `${formatCurrency(economicMonths[m]?.despesasFixas)} (${formatPercent(economicMonths[m]?.despesasPercent)})`
-        ),
-        `${formatCurrency(totalDespesas)} (${formatPercent(totalDespesasPercent)})`,
-        formatCurrency(avgDespesas),
-      ],
-      [
-        'Resultado Econômico',
-        ...monthKeys.map(
-          (m) => `${formatCurrency(economicMonths[m]?.resultadoEconomico)} (${formatPercent(economicMonths[m]?.resultadoPercent)})`
-        ),
-        `${formatCurrency(totalResEco)} (${formatPercent(totalResEcoPercent)})`,
-        formatCurrency(avgResEco),
-      ],
-      [
-        'Ponto de Equilíbrio',
-        ...monthKeys.map((m) => formatCurrency(economicMonths[m]?.pontoEquilibrio)),
-        '-',
-        formatCurrency(avgDespesas / (totalMargemPercent / 100 || 1)),
-      ],
-    ];
-
-    exportReportToPdf({
-      title: `RESULTADO ECONÔMICO — JANEIRO A DEZEMBRO DE ${selectedYear}`,
-      subtitle: `Demonstrativo do Resultado do Exercício (DRE) — Paris Dakar Gerencial`,
-      summaryCards: [
-        { label: 'Receita Bruta Total', value: formatCurrency(totalReceita) },
-        { label: 'Margem Bruta Total', value: formatCurrency(totalMargem) },
-        { label: 'Despesas Fixas Total', value: formatCurrency(totalDespesas) },
-        { label: 'Resultado Econômico', value: formatCurrency(totalResEco) },
-      ],
-      headers,
-      rows,
-      filename: `Paris_Dakar_Resultado_Economico_${selectedYear}.pdf`,
-    });
+  const handleExportMensalPdf = (mKey: string) => {
+    exportEconomicPdfMensal(economicMonths, selectedYear, mKey);
   };
 
   const handleExportExcel = () => {
@@ -179,13 +124,11 @@ export const EconomicView: React.FC<EconomicViewProps> = ({
         </div>
 
         <div className="flex items-center space-x-3">
-          <button
-            onClick={handleExportPdf}
-            className="px-3.5 py-2 text-xs font-bold bg-red-50 text-red-700 hover:bg-red-100 border border-red-200 rounded-lg transition-all flex items-center gap-1.5"
-          >
-            <FileText className="w-4 h-4 text-red-600" />
-            <span>Exportar PDF</span>
-          </button>
+          <PdfExportMenu
+            selectedYear={selectedYear}
+            onExportGeral={handleExportGeralPdf}
+            onExportMensal={handleExportMensalPdf}
+          />
           <button
             onClick={handleExportExcel}
             className="px-3.5 py-2 text-xs font-bold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-all flex items-center gap-1.5"

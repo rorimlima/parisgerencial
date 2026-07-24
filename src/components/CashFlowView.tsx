@@ -28,7 +28,13 @@ import {
   Wallet,
 } from 'lucide-react';
 import { CashFlowPendencia, CashFlowPlan, CashFlowWeekKey, FinancialStatementEntry } from '../types';
-import { exportReportToExcel, formatCurrency } from '../utils/exportUtils';
+import {
+  exportCashFlowPdfGeral,
+  exportCashFlowPdfMensal,
+  exportReportToExcel,
+  formatCurrency,
+} from '../utils/exportUtils';
+import { PdfExportMenu } from './PdfExportMenu';
 
 interface CashFlowViewProps {
   plans: CashFlowPlan[];
@@ -281,6 +287,15 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
     exportReportToExcel(data, `FLUXO_CAIXA_${monthLabel}_${selectedYear}`, `Fluxo_Caixa_${monthLabel}_${selectedYear}.xlsx`);
   };
 
+  const handleExportGeralPdf = () => {
+    exportCashFlowPdfGeral(plans, statementEntries, selectedYear);
+  };
+
+  const handleExportMensalPdf = (mKey: string) => {
+    const targetPlan = plans.find((p) => p.monthKey === mKey && p.year === selectedYear) || (mKey === monthKey ? draft : undefined);
+    exportCashFlowPdfMensal(targetPlan, statementEntries, selectedYear, mKey);
+  };
+
   const receiptTypes = Object.keys(realized.recebByType).sort();
   const paymentSources = Object.keys(realized.desembBySource).sort();
 
@@ -292,7 +307,7 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
         <div>
           <div className="flex items-center space-x-2">
             <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-[#C19A6B]/15 text-[#C19A6B] border border-[#C19A6B]/30">
-              FLUXO DE CAIXA
+              PLANEJAMENTO & REALIZADO
             </span>
             <span className="text-xs text-[#8B7D6B]">• Exercício: {selectedYear}</span>
           </div>
@@ -313,6 +328,14 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
               <option key={m.key} value={m.key}>{m.label}</option>
             ))}
           </select>
+
+          <PdfExportMenu
+            selectedYear={selectedYear}
+            currentMonthKey={monthKey}
+            onExportGeral={handleExportGeralPdf}
+            onExportMensal={handleExportMensalPdf}
+          />
+
           <button
             onClick={handleExport}
             className="px-4 py-2.5 text-xs font-bold bg-[#F3F1ED] text-[#433E37] hover:bg-[#EAE6DF] rounded-lg shadow-xs transition-all flex items-center gap-2 border border-[#EAE6DF]"

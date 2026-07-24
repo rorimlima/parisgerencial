@@ -14,7 +14,14 @@ import {
   Wallet,
 } from 'lucide-react';
 import { FinancialMonthData } from '../types';
-import { exportReportToExcel, exportReportToPdf, formatCurrency, formatPercent } from '../utils/exportUtils';
+import {
+  exportFinancialPdfGeral,
+  exportFinancialPdfMensal,
+  exportReportToExcel,
+  formatCurrency,
+  formatPercent,
+} from '../utils/exportUtils';
+import { PdfExportMenu } from './PdfExportMenu';
 
 interface FinancialViewProps {
   financialMonths: Record<string, FinancialMonthData>;
@@ -47,82 +54,12 @@ export const FinancialView: React.FC<FinancialViewProps> = ({
   const avgInadAcumulada =
     monthKeys.reduce((acc, m) => acc + (financialMonths[m]?.inadimplenciaAcumulada || 0), 0) / activeCount;
 
-  const handleExportPdf = () => {
-    const headers = [
-      'Métrica Financeira',
-      'Jan',
-      'Fev',
-      'Mar',
-      'Abr',
-      'Mai',
-      'Jun',
-      'Jul',
-      'Ago',
-      'Set',
-      'Out',
-      'Nov',
-      'Dez',
-      'Total Ano',
-    ];
+  const handleExportGeralPdf = () => {
+    exportFinancialPdfGeral(financialMonths, selectedYear);
+  };
 
-    const rows = [
-      [
-        'ENTRADAS - Bancos',
-        ...monthKeys.map((m) => formatCurrency(financialMonths[m]?.entradasBancos)),
-        formatCurrency(totalBancos),
-      ],
-      [
-        'ENTRADAS - Tesouraria',
-        ...monthKeys.map((m) => formatCurrency(financialMonths[m]?.entradasTesouraria)),
-        formatCurrency(totalTesouraria),
-      ],
-      [
-        'TOTAL ENTRADAS',
-        ...monthKeys.map((m) => formatCurrency(financialMonths[m]?.totalEntradas)),
-        formatCurrency(totalEntradas),
-      ],
-      [
-        'TOTAL SAÍDAS',
-        ...monthKeys.map((m) => formatCurrency(financialMonths[m]?.totalSaidas)),
-        formatCurrency(totalSaidas),
-      ],
-      [
-        'RESULTADO FINANCEIRO',
-        ...monthKeys.map(
-          (m) => `${formatCurrency(financialMonths[m]?.resultadoFinanceiro)} (${formatPercent(financialMonths[m]?.resultadoPercent)})`
-        ),
-        `${formatCurrency(totalResFin)} (${formatPercent(totalResFinPct)})`,
-      ],
-      [
-        'ESTOQUE (Ativo Circulante)',
-        ...monthKeys.map((m) => formatCurrency(financialMonths[m]?.estoque)),
-        `Média: ${formatCurrency(avgEstoque)}`,
-      ],
-      [
-        'INADIMPLÊNCIA MENSAL',
-        ...monthKeys.map((m) => formatCurrency(financialMonths[m]?.inadimplenciaMensal)),
-        `Média: ${formatCurrency(avgInadMensal)}`,
-      ],
-      [
-        'INADIMPLÊNCIA ACUMULADA',
-        ...monthKeys.map((m) => formatCurrency(financialMonths[m]?.inadimplenciaAcumulada)),
-        `Média: ${formatCurrency(avgInadAcumulada)}`,
-      ],
-    ];
-
-    exportReportToPdf({
-      title: `RESULTADO FINANCEIRO — JANEIRO A DEZEMBRO DE ${selectedYear}`,
-      subtitle: `Demonstrativo de Fluxo de Caixa, Movimentação Bancária, Estoque e Inadimplência — Paris Dakar Gerencial`,
-      summaryCards: [
-        { label: 'Total Entradas Bancos/Tesouraria', value: formatCurrency(totalEntradas) },
-        { label: 'Total Saídas Efetivadas', value: formatCurrency(totalSaidas) },
-        { label: 'Resultado Financeiro Líquido', value: formatCurrency(totalResFin) },
-        { label: 'Estoque Médio', value: formatCurrency(avgEstoque) },
-      ],
-      headers,
-      rows,
-      filename: `Paris_Dakar_Resultado_Financeiro_${selectedYear}.pdf`,
-    });
+  const handleExportMensalPdf = (mKey: string) => {
+    exportFinancialPdfMensal(financialMonths, selectedYear, mKey);
   };
 
   const handleExportExcel = () => {
@@ -192,13 +129,11 @@ export const FinancialView: React.FC<FinancialViewProps> = ({
         </div>
 
         <div className="flex items-center space-x-3">
-          <button
-            onClick={handleExportPdf}
-            className="px-3.5 py-2 text-xs font-bold bg-red-50 text-red-700 hover:bg-red-100 border border-red-200 rounded-lg transition-all flex items-center gap-1.5"
-          >
-            <FileText className="w-4 h-4 text-red-600" />
-            <span>Exportar PDF</span>
-          </button>
+          <PdfExportMenu
+            selectedYear={selectedYear}
+            onExportGeral={handleExportGeralPdf}
+            onExportMensal={handleExportMensalPdf}
+          />
           <button
             onClick={handleExportExcel}
             className="px-3.5 py-2 text-xs font-bold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-all flex items-center gap-1.5"
