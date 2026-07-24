@@ -25,7 +25,8 @@ import {
   ApiToken,
   FinancialStatementEntry,
   PayableTitle,
-  PayableStatus
+  PayableStatus,
+  CashFlowPlan
 } from '../types';
 
 let firestoreDb: ReturnType<typeof getFirestore>;
@@ -1090,6 +1091,65 @@ export const clearPayables = async (year?: number): Promise<void> => {
     }
   } catch (error) {
     console.error('Error clearing payables:', error);
+    throw error;
+  }
+};
+
+// --- Fluxo de Caixa (Planejamento Semanal) ---
+const CASHFLOW_COLLECTION = 'fluxo_caixa';
+
+const EMPTY_WEEK = { recebimentos: 0, desembolsos: 0, aportes: 0 };
+const emptyWeeks = () => ({
+  sem01: { ...EMPTY_WEEK },
+  sem02: { ...EMPTY_WEEK },
+  sem03: { ...EMPTY_WEEK },
+  sem04: { ...EMPTY_WEEK },
+  sem05: { ...EMPTY_WEEK },
+});
+
+const cashFlowFromFirestore = (id: string, data: any): CashFlowPlan => ({
+  id,
+  year: Number(data.ano) || 0,
+  monthKey: (data.mes || '').toString(),
+  saldoInicial: Number(data.saldo_inicial) || 0,
+  useSaldoAutomatico: !!data.saldo_automatico,
+  weeks: { ...emptyWeeks(), ...(data.semanas || {}) },
+  notes: data.observacoes || '',
+  updatedAt: data.atualizado_em || undefined,
+});
+
+// Busca todos os planos de fluxo de caixa de um ano (um por mês).
+export const fetchCashFlowPlans = async (year?: number): Promise<CashFlowPlan[]> => {
+  try {
+    const db = getFirestoreDb();
+    const q = year
+      ? query(collection(db, CASHFLOW_COLLECTION), where('ano', '==', year))
+      : collection(db, CASHFLOW_COLLECTION);
+    const snapshot = await withTimeout(getDocs(q), 20000, 'buscar planos de fluxo de caixa');
+    return snapshot.docs.map((d) => cashFlowFromFirestore(d.id, d.data()));
+  } catch (error) {
+    console.error('Error fetching cash flow plans:', error);
+    return [];
+  }
+};
+
+// Salva (upsert) o plano previsto de um mês. Doc id = `${ano}_${mes}`.
+export const saveCashFlowPlan = async (plan: CashFlowPlan): Promise<void> => {
+  try {
+    const db = getFirestoreDb();
+    const docId = `${plan.year}_${plan.monthKey}`;
+    const payload = {
+      ano: plan.year,
+      mes: plan.monthKey,
+      saldo_inicial: plan.saldoInicial,
+      saldo_automatico: !!plan.useSaldoAutomatico,
+      semanas: plan.weeks,
+      observacoes: plan.notes || '',
+      atualizado_em: new Date().toISOString(),
+    };
+    await withTimeout(setDoc(doc(db, CASHFLOW_COLLECTION, docId), payload, { merge: true }), 12000, 'salvar plano de fluxo de caixa');
+  } catch (error) {
+    console.error('Error saving cash flow plan:', error);
     throw error;
   }
 };

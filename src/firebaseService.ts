@@ -35,6 +35,8 @@ import {
   upsertStatementEntries as _upsertStatementEntries,
   deleteStatementEntry as _deleteStatementEntry,
   clearStatementEntries as _clearStatementEntries,
+  fetchCashFlowPlans,
+  saveCashFlowPlan as _saveCashFlowPlan,
   fetchPayables,
   upsertPayablesBatch as _upsertPayablesBatch,
   updatePayable as _updatePayable,
@@ -147,6 +149,10 @@ export const getExtratoFinanceiro = fetchStatementEntries;
 export const upsertExtratoFinanceiro = _upsertStatementEntries;
 export const deleteExtratoFinanceiro = _deleteStatementEntry;
 export const clearExtratoFinanceiro = _clearStatementEntries;
+
+// ── Fluxo de Caixa (Planejamento Semanal Previsto x Realizado) ──────────────
+export const getFluxoCaixa = fetchCashFlowPlans;
+export const saveFluxoCaixa = _saveCashFlowPlan;
 
 // ── Contas a Pagar (RFN006 — Totais Pagos por Credor) ───────────────────────
 export const getContasPagar = fetchPayables;

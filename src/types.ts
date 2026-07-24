@@ -15,6 +15,7 @@ export type ViewTab =
   | 'sellers'
   | 'statement'
   | 'payables'
+  | 'cashflow'
   | 'api-docs'
   | 'postgres-settings';
 
@@ -240,6 +241,32 @@ export interface PayableTitle {
   reconciledAt?: string;
   baixaCode?: string;            // Código técnico da baixa (ex: BX-2026-00001)
   notes?: string;
+}
+
+// ─── Fluxo de Caixa (Planejamento Semanal Previsto x Realizado) ──────────────
+
+// Semanas do mês (01 a 05). O REALIZADO é calculado a partir do Extrato
+// Financeiro (entradas = recebimentos, saídas = desembolsos), agrupado por
+// semana. O PREVISTO é preenchido manualmente para planejamento do futuro.
+export type CashFlowWeekKey = 'sem01' | 'sem02' | 'sem03' | 'sem04' | 'sem05';
+
+export interface CashFlowWeekPlan {
+  recebimentos: number; // previsto de entradas
+  desembolsos: number;  // previsto de saídas (valor negativo)
+  aportes: number;      // previsto de aportes de sócios/capital
+}
+
+// Documento de planejamento por mês (chave: `${ano}_${monthKey}`). Guarda
+// apenas os valores manuais (previsto + saldo inicial). O realizado é derivado.
+export interface CashFlowPlan {
+  id: string;
+  year: number;
+  monthKey: string;               // 'jan'..'dez'
+  saldoInicial: number;           // saldo de abertura do mês (manual)
+  useSaldoAutomatico?: boolean;   // se true, herda o saldo final do mês anterior
+  weeks: Record<CashFlowWeekKey, CashFlowWeekPlan>;
+  notes?: string;
+  updatedAt?: string;
 }
 
 export interface ValidationRowResult {

@@ -23,6 +23,7 @@ import { ApiIntegrationDocsView } from './components/ApiIntegrationDocsView';
 import { PostgresSettingsView } from './components/PostgresSettingsView';
 import { FinancialStatementView } from './components/FinancialStatementView';
 import { PayablesView, RawPayableRow } from './components/PayablesView';
+import { CashFlowView } from './components/CashFlowView';
 
 import {
   getEconomicData,
@@ -61,6 +62,8 @@ import {
   applyBaixaAutomatica,
   deleteContaPagar,
   clearContasPagar,
+  getFluxoCaixa,
+  saveFluxoCaixa,
 } from './firebaseService';
 
 import {
@@ -72,6 +75,7 @@ import {
   FinancialMonthData,
   FinancialStatementEntry,
   PayableTitle,
+  CashFlowPlan,
   PostgresConfig,
   Seller,
   StatementSource,
@@ -111,6 +115,7 @@ export default function App() {
   const [apiTokens, setApiTokens] = useState<ApiToken[]>([]);
   const [statementEntries, setStatementEntries] = useState<FinancialStatementEntry[]>([]);
   const [payables, setPayables] = useState<PayableTitle[]>([]);
+  const [cashFlowPlans, setCashFlowPlans] = useState<CashFlowPlan[]>([]);
   const [loginError, setLoginError] = useState<string>('');
 
   // Config Postgres mantida apenas para exibição da tela de configurações
@@ -127,7 +132,7 @@ export default function App() {
   const loadAllData = useCallback(async (year: number) => {
     setIsLoading(true);
     try {
-      const [ecoData, finData, cliData, titData, vendData, tokData, stmtData, payData] = await Promise.all([
+      const [ecoData, finData, cliData, titData, vendData, tokData, stmtData, payData, cashData] = await Promise.all([
         getEconomicData(year),
         getFinancialData(year),
         getClientes(),
@@ -136,6 +141,7 @@ export default function App() {
         getApiTokens(),
         getExtratoFinanceiro(year),
         getContasPagar(year),
+        getFluxoCaixa(year),
       ]);
       setEconomicData(ecoData);
       setFinancialData(finData);
@@ -145,6 +151,7 @@ export default function App() {
       setApiTokens(tokData);
       setStatementEntries(stmtData);
       setPayables(payData);
+      setCashFlowPlans(cashData);
     } catch (err: any) {
       console.error('Erro ao carregar dados do Firestore:', err.message);
     } finally {
@@ -1095,6 +1102,16 @@ export default function App() {
     }
   };
 
+  // ── Handler: Salvar plano de Fluxo de Caixa (previsto manual) ─────────────
+  const handleSaveCashFlowPlan = async (plan: CashFlowPlan) => {
+    await saveFluxoCaixa(plan);
+    // Atualiza o estado local (upsert por mês)
+    setCashFlowPlans((prev) => {
+      const others = prev.filter((p) => !(p.monthKey === plan.monthKey && p.year === plan.year));
+      return [...others, plan];
+    });
+  };
+
   // ── Handler: Gerar Token API ──────────────────────────────────────────────
   const handleGenerateApiToken = async (name: string) => {
     try {
@@ -1206,6 +1223,16 @@ export default function App() {
               onLinkSupplier={handleLinkSupplier}
               onDeletePayable={handleDeletePayable}
               onClearPayables={handleClearPayables}
+              userRole={currentUser.role}
+            />
+          )}
+
+          {activeTab === 'cashflow' && (
+            <CashFlowView
+              plans={cashFlowPlans}
+              statementEntries={statementEntries}
+              selectedYear={selectedYear}
+              onSavePlan={handleSaveCashFlowPlan}
               userRole={currentUser.role}
             />
           )}

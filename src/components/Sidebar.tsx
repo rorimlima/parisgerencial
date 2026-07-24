@@ -18,6 +18,7 @@ import {
   ArrowUpRight,
   Landmark,
   Receipt,
+  TrendingUp,
 } from 'lucide-react';
 import { ViewTab } from '../types';
 
@@ -66,6 +67,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Resultado Financeiro',
       icon: DollarSign,
       description: 'Fluxo de caixa, entradas, saídas e estoque',
+    },
+    {
+      id: 'cashflow' as ViewTab,
+      label: 'Fluxo de Caixa',
+      icon: TrendingUp,
+      description: 'Planejamento semanal Previsto x Realizado por mês',
     },
     {
       id: 'statement' as ViewTab,
