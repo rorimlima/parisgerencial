@@ -147,8 +147,11 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
     const prevReceb = (w: CashFlowWeekKey) => draft.weeks[w]?.recebimentos || 0;
     const prevDesemb = (w: CashFlowWeekKey) => draft.weeks[w]?.desembolsos || 0; // já negativo
     const aporte = (w: CashFlowWeekKey) => draft.weeks[w]?.aportes || 0;
-    const realReceb = (w: CashFlowWeekKey) => realized.weeks[w].receb;
-    const realDesemb = (w: CashFlowWeekKey) => -realized.weeks[w].desemb; // saída como negativo
+    // Realizado: manual (histórico importado) quando `realizadoManual`, senão vem do Extrato.
+    const realReceb = (w: CashFlowWeekKey) =>
+      draft.realizadoManual ? (draft.weeks[w]?.recebRealizado || 0) : realized.weeks[w].receb;
+    const realDesemb = (w: CashFlowWeekKey) =>
+      draft.realizadoManual ? (draft.weeks[w]?.desembRealizado || 0) : -realized.weeks[w].desemb; // saída como negativo
 
     const prevGer = (w: CashFlowWeekKey) => prevReceb(w) + prevDesemb(w);
     const realGer = (w: CashFlowWeekKey) => realReceb(w) + realDesemb(w);
@@ -196,7 +199,11 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
     const n = parseFloat(s);
     return isNaN(n) ? 0 : n;
   };
-  const setWeekValue = (w: CashFlowWeekKey, field: 'recebimentos' | 'desembolsos' | 'aportes', raw: string) => {
+  const setWeekValue = (
+    w: CashFlowWeekKey,
+    field: 'recebimentos' | 'desembolsos' | 'aportes' | 'recebRealizado' | 'desembRealizado',
+    raw: string
+  ) => {
     setDraft((d) => ({
       ...d,
       weeks: { ...d.weeks, [w]: { ...d.weeks[w], [field]: parseInput(raw) } },
@@ -382,6 +389,21 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
             Herdar do mês anterior ({formatCurrency(previousMonthFinalSaldo)})
           </button>
         )}
+        <div className="sm:ml-auto flex items-center gap-2">
+          <label className="flex items-center gap-2 text-[11px] font-bold text-[#433E37] cursor-pointer select-none" title="Ative para meses históricos: o Realizado é digitado manualmente. Desative para o Realizado vir automaticamente do Extrato Financeiro.">
+            <input
+              type="checkbox"
+              disabled={!canEdit}
+              checked={!!draft.realizadoManual}
+              onChange={(e) => setDraft((d) => ({ ...d, realizadoManual: e.target.checked }))}
+              className="accent-[#C19A6B] w-4 h-4"
+            />
+            Realizado manual (histórico)
+          </label>
+          <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${draft.realizadoManual ? 'bg-[#C19A6B]/15 text-[#C19A6B] border border-[#C19A6B]/30' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>
+            {draft.realizadoManual ? 'Manual' : 'Automático (Extrato)'}
+          </span>
+        </div>
       </div>
 
       {/* Grade principal Previsto x Realizado */}
@@ -423,7 +445,19 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
                         className="w-full bg-emerald-50/40 border border-transparent hover:border-emerald-200 focus:border-emerald-400 rounded px-1.5 py-1 text-right font-mono text-[11px] focus:outline-none disabled:opacity-60"
                       />
                     </td>
-                    <td className="p-1.5 text-right font-mono text-[11px] text-emerald-700 font-semibold">{formatCurrency(rows.realReceb(w))}</td>
+                    <td className="p-1">
+                      {draft.realizadoManual && canEdit ? (
+                        <input
+                          type="text"
+                          value={draft.weeks[w].recebRealizado || ''}
+                          onChange={(e) => setWeekValue(w, 'recebRealizado', e.target.value)}
+                          placeholder="0"
+                          className="w-full bg-emerald-100/50 border border-transparent hover:border-emerald-300 focus:border-emerald-500 rounded px-1.5 py-1 text-right font-mono text-[11px] text-emerald-800 font-semibold focus:outline-none"
+                        />
+                      ) : (
+                        <span className="block px-1.5 text-right font-mono text-[11px] text-emerald-700 font-semibold">{formatCurrency(rows.realReceb(w))}</span>
+                      )}
+                    </td>
                   </React.Fragment>
                 ))}
                 <td className="p-1.5 text-right font-mono text-[11px] font-bold border-l border-[#C19A6B]/40 bg-[#F9F7F2]">{formatCurrency(totalPrevReceb)}</td>
@@ -444,7 +478,19 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
                         className="w-full bg-rose-50/40 border border-transparent hover:border-rose-200 focus:border-rose-400 rounded px-1.5 py-1 text-right font-mono text-[11px] focus:outline-none disabled:opacity-60"
                       />
                     </td>
-                    <td className="p-1.5 text-right font-mono text-[11px] text-rose-700 font-semibold">{formatCurrency(rows.realDesemb(w))}</td>
+                    <td className="p-1">
+                      {draft.realizadoManual && canEdit ? (
+                        <input
+                          type="text"
+                          value={draft.weeks[w].desembRealizado || ''}
+                          onChange={(e) => setWeekValue(w, 'desembRealizado', e.target.value)}
+                          placeholder="0"
+                          className="w-full bg-rose-100/50 border border-transparent hover:border-rose-300 focus:border-rose-500 rounded px-1.5 py-1 text-right font-mono text-[11px] text-rose-800 font-semibold focus:outline-none"
+                        />
+                      ) : (
+                        <span className="block px-1.5 text-right font-mono text-[11px] text-rose-700 font-semibold">{formatCurrency(rows.realDesemb(w))}</span>
+                      )}
+                    </td>
                   </React.Fragment>
                 ))}
                 <td className="p-1.5 text-right font-mono text-[11px] font-bold border-l border-[#C19A6B]/40 bg-[#F9F7F2]">{formatCurrency(totalPrevDesemb)}</td>

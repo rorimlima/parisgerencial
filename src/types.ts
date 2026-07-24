@@ -254,6 +254,11 @@ export interface CashFlowWeekPlan {
   recebimentos: number; // previsto de entradas
   desembolsos: number;  // previsto de saídas (valor negativo)
   aportes: number;      // previsto de aportes de sócios/capital
+  // Realizado manual (opcional). Usado para meses históricos importados de
+  // planilha, quando não há Extrato Financeiro carregado. Se `realizadoManual`
+  // do mês for false, estes campos são ignorados e o realizado vem do Extrato.
+  recebRealizado?: number; // realizado de entradas (positivo)
+  desembRealizado?: number; // realizado de saídas (valor negativo, como o previsto)
 }
 
 // Documento de planejamento por mês (chave: `${ano}_${monthKey}`). Guarda
@@ -264,6 +269,7 @@ export interface CashFlowPlan {
   monthKey: string;               // 'jan'..'dez'
   saldoInicial: number;           // saldo de abertura do mês (manual)
   useSaldoAutomatico?: boolean;   // se true, herda o saldo final do mês anterior
+  realizadoManual?: boolean;      // se true, usa recebRealizado/desembRealizado das semanas em vez do Extrato
   weeks: Record<CashFlowWeekKey, CashFlowWeekPlan>;
   notes?: string;
   updatedAt?: string;
