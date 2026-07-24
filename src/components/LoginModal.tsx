@@ -12,13 +12,37 @@ interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
   onLoginSuccess: (credentials: { email: string; password: string }) => void;
+  onGoogleLogin: () => void | Promise<void>;
   loginError?: string;
 }
+
+/** Ícone oficial "G" do Google (SVG inline, sem dependência externa). */
+const GoogleIcon = () => (
+  <svg className="w-4 h-4" viewBox="0 0 48 48" aria-hidden="true">
+    <path
+      fill="#EA4335"
+      d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
+    />
+    <path
+      fill="#4285F4"
+      d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
+    />
+    <path
+      fill="#FBBC05"
+      d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
+    />
+    <path
+      fill="#34A853"
+      d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
+    />
+  </svg>
+);
 
 export const LoginModal: React.FC<LoginModalProps> = ({
   isOpen,
   onClose,
   onLoginSuccess,
+  onGoogleLogin,
   loginError,
 }) => {
   if (!isOpen) return null;
@@ -26,6 +50,17 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const [email, setEmail] = useState('rorim@parisdakar.com.br');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [showEmailLogin, setShowEmailLogin] = useState(false);
+
+  const handleGoogleClick = async () => {
+    setIsGoogleLoading(true);
+    try {
+      await onGoogleLogin();
+    } finally {
+      setIsGoogleLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,38 +94,21 @@ export const LoginModal: React.FC<LoginModalProps> = ({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          {/* E-mail */}
-          <div>
-            <label className="block text-xs font-bold text-[#8B7D6B] mb-1">E-mail Corporativo</label>
-            <div className="relative">
-              <User className="w-4 h-4 text-[#8B7D6B] absolute left-3 top-3" />
-              <input
-                type="text"
-                required
-                placeholder="rorim@parisdakar.com.br"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full bg-[#F9F7F2] border border-[#EAE6DF] text-xs text-[#2D2A26] pl-9 pr-3 py-2.5 rounded-lg focus:outline-none focus:border-[#C19A6B] font-mono"
-              />
-            </div>
-          </div>
+        <div className="p-6 space-y-4">
+          {/* Login com Google — método principal */}
+          <button
+            type="button"
+            onClick={handleGoogleClick}
+            disabled={isGoogleLoading || isLoading}
+            className="w-full py-3 text-xs font-extrabold bg-white hover:bg-[#F9F7F2] disabled:opacity-60 text-[#2D2A26] border border-[#EAE6DF] rounded-lg shadow-xs transition-all flex items-center justify-center gap-2.5"
+          >
+            <GoogleIcon />
+            <span>{isGoogleLoading ? 'Abrindo o Google...' : 'Entrar com o Google'}</span>
+          </button>
 
-          {/* Senha */}
-          <div>
-            <label className="block text-xs font-bold text-[#8B7D6B] mb-1">Senha de Acesso</label>
-            <div className="relative">
-              <Lock className="w-4 h-4 text-[#8B7D6B] absolute left-3 top-3" />
-              <input
-                type="password"
-                required
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-[#F9F7F2] border border-[#EAE6DF] text-xs text-[#2D2A26] pl-9 pr-3 py-2.5 rounded-lg focus:outline-none focus:border-[#C19A6B] font-mono"
-              />
-            </div>
-          </div>
+          <p className="text-center text-[10px] text-[#8B7D6B]">
+            Use a conta Google (Gmail) autorizada no sistema.
+          </p>
 
           {/* Mensagem de erro */}
           {loginError && (
@@ -100,26 +118,77 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             </div>
           )}
 
-          {/* Botão de login */}
-          <div className="pt-2">
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full py-3 text-xs font-extrabold bg-[#2D2A26] hover:bg-[#3F3B35] disabled:opacity-60 text-white rounded-lg shadow-xs transition-all flex items-center justify-center gap-2"
-            >
-              <LogIn className="w-4 h-4 text-[#C19A6B]" />
-              <span>{isLoading ? 'Autenticando...' : 'Entrar no Paris Dakar Gerencial'}</span>
-            </button>
+          {/* Separador */}
+          <div className="flex items-center gap-3 pt-1">
+            <div className="h-px flex-1 bg-[#EAE6DF]" />
+            <span className="text-[10px] font-bold text-[#8B7D6B] uppercase tracking-wide">ou</span>
+            <div className="h-px flex-1 bg-[#EAE6DF]" />
           </div>
 
-          <p className="text-center text-[10px] text-[#8B7D6B]">
+          {/* Alternativa: e-mail e senha */}
+          {!showEmailLogin ? (
+            <button
+              type="button"
+              onClick={() => setShowEmailLogin(true)}
+              className="w-full py-2.5 text-xs font-bold text-[#8B7D6B] hover:text-[#2D2A26] rounded-lg transition-all"
+            >
+              Entrar com e-mail e senha
+            </button>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-4">
+              {/* E-mail */}
+              <div>
+                <label className="block text-xs font-bold text-[#8B7D6B] mb-1">E-mail Corporativo</label>
+                <div className="relative">
+                  <User className="w-4 h-4 text-[#8B7D6B] absolute left-3 top-3" />
+                  <input
+                    type="text"
+                    required
+                    placeholder="rorim@parisdakar.com.br"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full bg-[#F9F7F2] border border-[#EAE6DF] text-xs text-[#2D2A26] pl-9 pr-3 py-2.5 rounded-lg focus:outline-none focus:border-[#C19A6B] font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Senha */}
+              <div>
+                <label className="block text-xs font-bold text-[#8B7D6B] mb-1">Senha de Acesso</label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-[#8B7D6B] absolute left-3 top-3" />
+                  <input
+                    type="password"
+                    required
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full bg-[#F9F7F2] border border-[#EAE6DF] text-xs text-[#2D2A26] pl-9 pr-3 py-2.5 rounded-lg focus:outline-none focus:border-[#C19A6B] font-mono"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isLoading || isGoogleLoading}
+                className="w-full py-3 text-xs font-extrabold bg-[#2D2A26] hover:bg-[#3F3B35] disabled:opacity-60 text-white rounded-lg shadow-xs transition-all flex items-center justify-center gap-2"
+              >
+                <LogIn className="w-4 h-4 text-[#C19A6B]" />
+                <span>{isLoading ? 'Autenticando...' : 'Entrar no Paris Dakar Gerencial'}</span>
+              </button>
+
+              <p className="text-center text-[10px] text-[#8B7D6B]">
+                Primeiro acesso de um e-mail autorizado: a senha digitada define seu acesso definitivo.
+              </p>
+            </form>
+          )}
+
+          <p className="text-center text-[10px] text-[#8B7D6B] pt-1">
             Autenticação segura via{' '}
             <span className="text-[#C19A6B] font-bold">Firebase Auth</span> · Projeto:{' '}
             <span className="font-mono">paris-dakar-gerencial</span>
-            <br />
-            Primeiro acesso de um e-mail autorizado: a senha digitada define seu acesso definitivo.
           </p>
-        </form>
+        </div>
       </div>
     </div>
   );

@@ -17,6 +17,8 @@ import {
   getAuth,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  signInWithPopup,
+  GoogleAuthProvider,
   signOut,
 } from 'firebase/auth';
 import { firebaseConfig } from '../firebaseConfig';
@@ -1283,7 +1285,121 @@ export const fetchUsers = async (): Promise<User[]> => {
 // --- Autenticação (Firebase Auth) ---
 // A coleção `usuarios` no Firestore é a fonte da verdade de QUEM pode acessar
 // o sistema e com qual perfil (role) — isso nunca deve vir de um campo enviado
-// pelo formulário de login. A senha real fica no Firebase Auth.
+// pelo formulário de login.
+//
+// Exceção: o MASTER_ADMIN_EMAIL abaixo é o dono do sistema e tem acesso de
+// administrador garantido em código. Isso evita o problema do "ovo e galinha"
+// (ninguém consegue entrar para cadastrar o primeiro admin) e mantém o acesso
+// do dono mesmo se a coleção `usuarios` estiver vazia, indisponível ou se a
+// cota do Firestore estourar.
+export const MASTER_ADMIN_EMAIL = 'onaeror@gmail.com';
+
+const buildMasterAdmin = (name?: string | null, avatar?: string | null): User => ({
+  id: 'master_admin',
+  name: name || 'Rorim (Administrador Master)',
+  email: MASTER_ADMIN_EMAIL,
+  role: 'admin',
+  avatar: avatar || undefined,
+});
+
+/**
+ * Garante que o admin master também exista na coleção `usuarios`, para que ele
+ * apareça nas telas de gestão de usuários do sistema. É "best-effort": se a
+ * escrita falhar (cota excedida, offline, permissão), o login NÃO é bloqueado,
+ * porque o acesso do master já está garantido em código.
+ */
+const ensureMasterAdminRegistered = async (name?: string | null, avatar?: string | null): Promise<void> => {
+  try {
+    const db = getFirestoreDb();
+    await setDoc(
+      doc(db, 'usuarios', 'master_admin'),
+      {
+        nome: name || 'Rorim (Administrador Master)',
+        email: MASTER_ADMIN_EMAIL,
+        funcao: 'admin',
+        avatar: avatar || null,
+        master: true,
+        atualizado_em: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+  } catch (err) {
+    console.warn('Nao foi possivel registrar o admin master no Firestore (acesso segue liberado):', err);
+  }
+};
+
+/**
+ * Decide se um e-mail autenticado pode entrar e com qual perfil.
+ * Master admin sempre entra. Os demais precisam constar em `usuarios`.
+ */
+const resolveAuthorizedUser = async (
+  email: string,
+  displayName?: string | null,
+  photoURL?: string | null
+): Promise<User> => {
+  const normalizedEmail = email.trim().toLowerCase();
+
+  if (normalizedEmail === MASTER_ADMIN_EMAIL) {
+    await ensureMasterAdminRegistered(displayName, photoURL);
+    return buildMasterAdmin(displayName, photoURL);
+  }
+
+  const users = await fetchUsers();
+  const authorizedUser = users.find((u) => u.email.toLowerCase() === normalizedEmail);
+  if (!authorizedUser) {
+    throw new Error(
+      `A conta ${normalizedEmail} nao tem acesso a este sistema. Peca ao administrador para cadastrar seu e-mail.`
+    );
+  }
+  return {
+    ...authorizedUser,
+    avatar: photoURL || authorizedUser.avatar,
+  };
+};
+
+/**
+ * Login com a conta Google (Gmail). Método principal de acesso ao sistema.
+ * Depois do popup do Google, o e-mail retornado ainda passa pela checagem de
+ * autorização — ter uma conta Google válida não basta para entrar.
+ */
+export const signInWithGoogleAccount = async (): Promise<User> => {
+  const auth = getFirebaseAuthInstance();
+  const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: 'select_account' });
+
+  let credential;
+  try {
+    credential = await signInWithPopup(auth, provider);
+  } catch (err: any) {
+    if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
+      throw new Error('Login cancelado.');
+    }
+    if (err.code === 'auth/popup-blocked') {
+      throw new Error('O navegador bloqueou a janela do Google. Libere os pop-ups para este site e tente novamente.');
+    }
+    if (err.code === 'auth/unauthorized-domain') {
+      throw new Error('Este dominio nao esta autorizado no Firebase Auth. Avise o administrador.');
+    }
+    throw new Error(err.message || 'Erro ao entrar com o Google.');
+  }
+
+  const { email, displayName, photoURL } = credential.user;
+  if (!email) {
+    await signOut(auth);
+    throw new Error('Nao foi possivel obter o e-mail da sua conta Google.');
+  }
+
+  try {
+    return await resolveAuthorizedUser(email, displayName, photoURL);
+  } catch (authErr) {
+    // Conta Google válida, mas sem permissão no sistema: desloga para não
+    // deixar uma sessão do Firebase Auth ativa sem acesso.
+    await signOut(auth);
+    throw authErr;
+  }
+};
+
+// Login por e-mail/senha (mantido como alternativa ao Google).
 //
 // Estratégia de migração sem backend/Admin SDK: como os usuários existentes
 // nunca tiveram senha real cadastrada, o primeiro login bem-sucedido de um
@@ -1296,11 +1412,7 @@ export const fetchUsers = async (): Promise<User[]> => {
 //      — faz o login normal (senha precisa bater com a já cadastrada).
 export const signInAuthorizedUser = async (email: string, password: string): Promise<User> => {
   const normalizedEmail = email.trim().toLowerCase();
-  const users = await fetchUsers();
-  const authorizedUser = users.find((u) => u.email.toLowerCase() === normalizedEmail);
-  if (!authorizedUser) {
-    throw new Error('Usuário não encontrado. Verifique o e-mail informado.');
-  }
+  const authorizedUser = await resolveAuthorizedUser(normalizedEmail);
 
   const auth = getFirebaseAuthInstance();
 

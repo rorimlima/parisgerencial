@@ -43,6 +43,7 @@ import {
   clearInadimplencia,
   createApiToken,
   loginFirebase,
+  loginWithGoogle,
   logoutFirebase,
   saveBatchCustomers,
   saveBatchDelinquentTitles,
@@ -183,6 +184,26 @@ export default function App() {
       }
     } catch (err: any) {
       setLoginError(err.message || 'Erro ao autenticar. Verifique as credenciais.');
+    }
+  };
+
+  // ── Handler: Login com a conta Google (Gmail) ────────────────────────────
+  const handleGoogleLogin = async () => {
+    setLoginError('');
+    try {
+      const result = await loginWithGoogle();
+      if (result) {
+        setCurrentUser({
+          id: result.user.id,
+          name: result.user.name,
+          email: result.user.email,
+          role: result.user.role,
+          avatar: result.user.avatar,
+        });
+        setIsLoginModalOpen(false);
+      }
+    } catch (err: any) {
+      setLoginError(err.message || 'Erro ao entrar com o Google.');
     }
   };
 
@@ -1316,6 +1337,7 @@ export default function App() {
         isOpen={isLoginModalOpen}
         onClose={() => setIsLoginModalOpen(false)}
         onLoginSuccess={handleLoginSuccess}
+        onGoogleLogin={handleGoogleLogin}
         loginError={loginError}
       />
 

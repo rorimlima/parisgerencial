@@ -44,6 +44,7 @@ import {
   deletePayable as _deletePayable,
   clearPayables as _clearPayables,
   signInAuthorizedUser,
+  signInWithGoogleAccount,
   signOutUser,
 } from './services/firebaseService';
 
@@ -109,6 +110,12 @@ export const loginFirebase = async (
   password: string
 ): Promise<{ user: User }> => {
   const user = await signInAuthorizedUser(email, password);
+  return { user };
+};
+
+// Login com a conta Google (Gmail) — método principal de acesso.
+export const loginWithGoogle = async (): Promise<{ user: User }> => {
+  const user = await signInWithGoogleAccount();
   return { user };
 };
 
