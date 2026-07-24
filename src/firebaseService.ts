@@ -43,6 +43,8 @@ import {
   applyPayablesReconciliation as _applyPayablesReconciliation,
   deletePayable as _deletePayable,
   clearPayables as _clearPayables,
+  signInAuthorizedUser,
+  signOutUser,
 } from './services/firebaseService';
 
 import { ApiToken, Customer, DelinquentTitle, EconomicMonthData, FinancialMonthData, Seller, User } from './types';
@@ -101,28 +103,17 @@ export const createApiToken = async (name: string): Promise<ApiToken> => {
   return newToken;
 };
 
-// ── Autenticação (simplificada — sem Firebase Auth por ora) ──────────────────
+// ── Autenticação (Firebase Auth real) ─────────────────────────────────────────
 export const loginFirebase = async (
   email: string,
   password: string
 ): Promise<{ user: User }> => {
-  // Busca usuários do Firestore e verifica credenciais
-  const users = await fetchUsers();
-  const user = users.find(
-    (u) => u.email.toLowerCase() === email.toLowerCase()
-  );
-
-  if (!user) {
-    throw new Error('Usuário não encontrado. Verifique o e-mail informado.');
-  }
-
-  // Para demonstração, aceita qualquer senha
+  const user = await signInAuthorizedUser(email, password);
   return { user };
 };
 
 export const logoutFirebase = async (): Promise<void> => {
-  // Logout local
-  console.log('Logout realizado.');
+  await signOutUser();
 };
 
 // ── Verificação de conexão ──────────────────────────────────────────────────

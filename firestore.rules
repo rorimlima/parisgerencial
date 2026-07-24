@@ -1,4 +1,12 @@
 rules_version = '2';
+// ATENCAO: regras abertas (leitura/escrita liberadas para qualquer um).
+// O Firebase Auth ja foi implementado no app (login real por e-mail/senha,
+// ver src/services/firebaseService.ts -> signInAuthorizedUser). Estas regras
+// ainda nao foram apertadas para exigir request.auth != null porque isso
+// precisa ser validado em producao primeiro (confirmar que todo mundo
+// consegue logar) para nao travar o acesso de ninguem sem querer. Depois que
+// o login novo estiver confirmado funcionando para todos os usuarios, trocar
+// para: allow read, write: if request.auth != null;
 service cloud.firestore {
   match /databases/{database}/documents {
     match /{document=**} {

@@ -79,7 +79,6 @@ import {
   PostgresConfig,
   Seller,
   StatementSource,
-  UserRole,
   ValidationRowResult,
   ViewTab,
   User,
@@ -166,7 +165,10 @@ export default function App() {
 
 
   // ── Handler: Login via Firebase Auth ─────────────────────────────────────
-  const handleLoginSuccess = async (credentials: { email: string; password: string; role: UserRole }) => {
+  // O perfil de acesso (role) vem SEMPRE do registro do usuário no Firestore
+  // (fonte da verdade), nunca de um valor escolhido no formulário — isso
+  // evita que qualquer pessoa se autoconceda acesso de administrador.
+  const handleLoginSuccess = async (credentials: { email: string; password: string }) => {
     setLoginError('');
     try {
       const result = await loginFirebase(credentials.email, credentials.password);
@@ -175,7 +177,7 @@ export default function App() {
           id: result.user.id,
           name: result.user.name,
           email: result.user.email,
-          role: credentials.role || result.user.role,
+          role: result.user.role,
         });
         setIsLoginModalOpen(false);
       }

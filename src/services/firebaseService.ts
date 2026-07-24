@@ -1,10 +1,10 @@
 import { initializeApp, getApp, getApps } from 'firebase/app';
-import { 
-  getFirestore, 
-  collection, 
-  getDocs, 
-  query, 
-  where, 
+import {
+  getFirestore,
+  collection,
+  getDocs,
+  query,
+  where,
   setDoc,
   doc,
   addDoc,
@@ -13,6 +13,12 @@ import {
   writeBatch,
   limit
 } from 'firebase/firestore';
+import {
+  getAuth,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+} from 'firebase/auth';
 import { firebaseConfig } from '../firebaseConfig';
 import { INITIAL_ECONOMIC_BY_YEAR, INITIAL_FINANCIAL_BY_YEAR, INITIAL_SELLERS } from '../data/initialData';
 import {
@@ -30,6 +36,7 @@ import {
 } from '../types';
 
 let firestoreDb: ReturnType<typeof getFirestore>;
+let firebaseAuthInstance: ReturnType<typeof getAuth>;
 
 const ALL_MONTHS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 
@@ -73,6 +80,7 @@ function createEmptyFinancialMonth(monthKey: string, year: number): FinancialMon
 export const initFirebase = () => {
   const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
   firestoreDb = getFirestore(app);
+  firebaseAuthInstance = getAuth(app);
   return firestoreDb;
 };
 
@@ -81,6 +89,13 @@ export const getFirestoreDb = () => {
     return initFirebase();
   }
   return firestoreDb;
+};
+
+export const getFirebaseAuthInstance = () => {
+  if (!firebaseAuthInstance) {
+    initFirebase();
+  }
+  return firebaseAuthInstance;
 };
 
 // --- Economic Data ---
@@ -1263,6 +1278,61 @@ export const fetchUsers = async (): Promise<User[]> => {
     console.error('Error fetching users:', error);
     return [];
   }
+};
+
+// --- Autenticação (Firebase Auth) ---
+// A coleção `usuarios` no Firestore é a fonte da verdade de QUEM pode acessar
+// o sistema e com qual perfil (role) — isso nunca deve vir de um campo enviado
+// pelo formulário de login. A senha real fica no Firebase Auth.
+//
+// Estratégia de migração sem backend/Admin SDK: como os usuários existentes
+// nunca tiveram senha real cadastrada, o primeiro login bem-sucedido de um
+// e-mail autorizado "reivindica" a conta — a senha digitada nesse primeiro
+// acesso vira a senha definitiva a partir daí. Login funciona assim:
+//   1. Tenta CRIAR a conta no Firebase Auth com o e-mail/senha digitados.
+//      Se o e-mail ainda não tinha conta, a criação funciona e o acesso é
+//      liberado (primeiro acesso).
+//   2. Se a criação falhar com 'auth/email-already-in-use', a conta já existe
+//      — faz o login normal (senha precisa bater com a já cadastrada).
+export const signInAuthorizedUser = async (email: string, password: string): Promise<User> => {
+  const normalizedEmail = email.trim().toLowerCase();
+  const users = await fetchUsers();
+  const authorizedUser = users.find((u) => u.email.toLowerCase() === normalizedEmail);
+  if (!authorizedUser) {
+    throw new Error('Usuário não encontrado. Verifique o e-mail informado.');
+  }
+
+  const auth = getFirebaseAuthInstance();
+
+  try {
+    await createUserWithEmailAndPassword(auth, normalizedEmail, password);
+    return authorizedUser; // primeiro acesso: conta criada com a senha digitada
+  } catch (createErr: any) {
+    if (createErr.code !== 'auth/email-already-in-use') {
+      if (createErr.code === 'auth/weak-password') {
+        throw new Error('Primeiro acesso: use uma senha com pelo menos 6 caracteres.');
+      }
+      throw new Error(createErr.message || 'Erro ao autenticar. Tente novamente.');
+    }
+    // Conta já existe — segue com login normal
+    try {
+      await signInWithEmailAndPassword(auth, normalizedEmail, password);
+      return authorizedUser;
+    } catch (signInErr: any) {
+      if (signInErr.code === 'auth/wrong-password' || signInErr.code === 'auth/invalid-credential') {
+        throw new Error('Senha incorreta.');
+      }
+      if (signInErr.code === 'auth/too-many-requests') {
+        throw new Error('Muitas tentativas de login. Aguarde alguns minutos e tente novamente.');
+      }
+      throw new Error(signInErr.message || 'Erro ao autenticar. Tente novamente.');
+    }
+  }
+};
+
+export const signOutUser = async (): Promise<void> => {
+  const auth = getFirebaseAuthInstance();
+  await signOut(auth);
 };
 
 // --- API Tokens ---

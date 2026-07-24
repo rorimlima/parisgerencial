@@ -6,13 +6,12 @@
  */
 
 import React, { useState } from 'react';
-import { AlertCircle, Lock, LogIn, Shield, User, X } from 'lucide-react';
-import { UserRole } from '../types';
+import { AlertCircle, Lock, LogIn, User, X } from 'lucide-react';
 
 interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onLoginSuccess: (credentials: { email: string; password: string; role: UserRole }) => void;
+  onLoginSuccess: (credentials: { email: string; password: string }) => void;
   loginError?: string;
 }
 
@@ -26,7 +25,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
   const [email, setEmail] = useState('rorim@parisdakar.com.br');
   const [password, setPassword] = useState('');
-  const [selectedRole, setSelectedRole] = useState<UserRole>('admin');
   const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -36,7 +34,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       await onLoginSuccess({
         email: email.includes('@') ? email : `${email}@parisdakar.com.br`,
         password,
-        role: selectedRole,
       });
     } finally {
       setIsLoading(false);
@@ -63,32 +60,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          {/* Perfil de Acesso */}
-          <div>
-            <label className="block text-xs font-bold text-[#8B7D6B] mb-1">Perfil de Acesso (Função)</label>
-            <div className="grid grid-cols-3 gap-2">
-              {(['admin', 'gestor', 'analista'] as UserRole[]).map((role) => (
-                <button
-                  key={role}
-                  type="button"
-                  onClick={() => setSelectedRole(role)}
-                  className={`py-2 px-2 text-xs font-bold rounded-lg border transition-all text-center capitalize ${
-                    selectedRole === role
-                      ? 'bg-[#2D2A26] text-white border-[#2D2A26] shadow-xs'
-                      : 'bg-[#F9F7F2] text-[#8B7D6B] border-[#EAE6DF] hover:text-[#2D2A26]'
-                  }`}
-                >
-                  {role.charAt(0).toUpperCase() + role.slice(1)}
-                </button>
-              ))}
-            </div>
-            <p className="text-[10px] text-[#8B7D6B] mt-1">
-              {selectedRole === 'admin' && 'Acesso total: visualização, lançamentos, cadastros e chave API.'}
-              {selectedRole === 'gestor' && 'Acesso operacional: visualização, lançamentos e relatórios.'}
-              {selectedRole === 'analista' && 'Acesso restrito: apenas leitura de relatórios e exportações.'}
-            </p>
-          </div>
-
           {/* E-mail */}
           <div>
             <label className="block text-xs font-bold text-[#8B7D6B] mb-1">E-mail Corporativo</label>
@@ -145,6 +116,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             Autenticação segura via{' '}
             <span className="text-[#C19A6B] font-bold">Firebase Auth</span> · Projeto:{' '}
             <span className="font-mono">paris-dakar-gerencial</span>
+            <br />
+            Primeiro acesso de um e-mail autorizado: a senha digitada define seu acesso definitivo.
           </p>
         </form>
       </div>
