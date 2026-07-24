@@ -97,12 +97,10 @@ export default function App() {
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   // ── Autenticação ──────────────────────────────────────────────────────────
-  const [currentUser, setCurrentUser] = useState<User>({
-    id: 'usr_default',
-    name: 'Rorim (Administrador)',
-    email: 'rorim@parisdakar.com.br',
-    role: 'admin',
-  });
+  // Ninguém entra sem autenticar: começa SEM usuário e o app só é renderizado
+  // depois do login. Antes existia um usuário admin padrão aqui, o que fazia
+  // qualquer visitante abrir o sistema já como administrador.
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
   const [isLaunchModalOpen, setIsLaunchModalOpen] = useState<boolean>(false);
 
@@ -159,9 +157,16 @@ export default function App() {
     }
   }, []);
 
+  // Só carrega dados depois que houver um usuário autenticado. Além de ser o
+  // correto em termos de acesso, evita gastar cota do Firestore com visitantes
+  // que nem entraram no sistema.
   useEffect(() => {
+    if (!currentUser) {
+      setIsLoading(false);
+      return;
+    }
     loadAllData(selectedYear);
-  }, [selectedYear, loadAllData]);
+  }, [selectedYear, loadAllData, currentUser]);
 
 
 
@@ -207,9 +212,17 @@ export default function App() {
     }
   };
 
+  // Logout encerra a sessão de verdade e volta para a tela de login (antes
+  // devolvia um usuário admin padrão, ou seja, "deslogar" mantinha acesso total).
   const handleLogout = async () => {
-    await logoutFirebase();
-    setCurrentUser({ id: 'usr_default', name: 'Rorim (Administrador)', email: 'rorim@parisdakar.com.br', role: 'admin' });
+    try {
+      await logoutFirebase();
+    } catch (err) {
+      console.error('Erro ao encerrar sessao:', err);
+    }
+    setCurrentUser(null);
+    setLoginError('');
+    setActiveTab('dashboard');
   };
 
   // ── Handler: Lançamento Manual (DRE / Financeiro) ─────────────────────────
@@ -1160,6 +1173,37 @@ export default function App() {
   };
 
   // ── Render ────────────────────────────────────────────────────────────────
+  // Sem usuário autenticado, nada do sistema é renderizado — apenas a tela de
+  // login. Isso impede que dados financeiros apareçam para quem não entrou.
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-[#F3F1ED] text-[#2D2A26] flex flex-col items-center justify-center font-sans p-4">
+        <div className="flex items-center gap-3 mb-8">
+          <div className="w-12 h-12 rounded-lg bg-[#2D2A26] flex items-center justify-center text-[#C19A6B] font-black text-lg shadow-xs">
+            PD
+          </div>
+          <div>
+            <h1 className="text-xl font-extrabold tracking-tight">
+              PARIS DAKAR <span className="text-[#C19A6B]">GERENCIAL</span>
+            </h1>
+            <p className="text-xs text-[#8B7D6B]">Controle Financeiro &amp; Econômico DRE</p>
+          </div>
+        </div>
+
+        <LoginModal
+          isOpen
+          dismissible={false}
+          onClose={() => {
+            /* Login é obrigatório: não há para onde fechar. */
+          }}
+          onLoginSuccess={handleLoginSuccess}
+          onGoogleLogin={handleGoogleLogin}
+          loginError={loginError}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#F3F1ED] text-[#2D2A26] flex flex-col font-sans selection:bg-[#C19A6B] selection:text-white">
       {/* Barra de carregamento global */}

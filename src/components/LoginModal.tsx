@@ -14,6 +14,8 @@ interface LoginModalProps {
   onLoginSuccess: (credentials: { email: string; password: string }) => void;
   onGoogleLogin: () => void | Promise<void>;
   loginError?: string;
+  /** Quando false, esconde o botão de fechar (login obrigatório). Padrão: true. */
+  dismissible?: boolean;
 }
 
 /** Ícone oficial "G" do Google (SVG inline, sem dependência externa). */
@@ -44,6 +46,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   onLoginSuccess,
   onGoogleLogin,
   loginError,
+  dismissible = true,
 }) => {
   if (!isOpen) return null;
 
@@ -89,9 +92,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               <p className="text-xs text-[#8B7D6B]">Autenticação Firebase — Controle por perfil (RBAC)</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1 rounded-lg text-[#8B7D6B] hover:text-[#2D2A26]">
-            <X className="w-5 h-5" />
-          </button>
+          {dismissible && (
+            <button onClick={onClose} className="p-1 rounded-lg text-[#8B7D6B] hover:text-[#2D2A26]">
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         <div className="p-6 space-y-4">
