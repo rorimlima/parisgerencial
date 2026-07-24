@@ -1115,6 +1115,7 @@ const cashFlowFromFirestore = (id: string, data: any): CashFlowPlan => ({
   useSaldoAutomatico: !!data.saldo_automatico,
   realizadoManual: !!data.realizado_manual,
   weeks: { ...emptyWeeks(), ...(data.semanas || {}) },
+  pendencias: Array.isArray(data.pendencias) ? data.pendencias : [],
   notes: data.observacoes || '',
   updatedAt: data.atualizado_em || undefined,
 });
@@ -1146,6 +1147,7 @@ export const saveCashFlowPlan = async (plan: CashFlowPlan): Promise<void> => {
       saldo_automatico: !!plan.useSaldoAutomatico,
       realizado_manual: !!plan.realizadoManual,
       semanas: plan.weeks,
+      pendencias: plan.pendencias || [],
       observacoes: plan.notes || '',
       atualizado_em: new Date().toISOString(),
     };

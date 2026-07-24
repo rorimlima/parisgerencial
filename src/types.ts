@@ -261,6 +261,12 @@ export interface CashFlowWeekPlan {
   desembRealizado?: number; // realizado de saídas (valor negativo, como o previsto)
 }
 
+// Item de pendência (obrigação em aberto): pró-labore, aluguel, etc.
+export interface CashFlowPendencia {
+  descricao: string;
+  valor: number;
+}
+
 // Documento de planejamento por mês (chave: `${ano}_${monthKey}`). Guarda
 // apenas os valores manuais (previsto + saldo inicial). O realizado é derivado.
 export interface CashFlowPlan {
@@ -271,6 +277,7 @@ export interface CashFlowPlan {
   useSaldoAutomatico?: boolean;   // se true, herda o saldo final do mês anterior
   realizadoManual?: boolean;      // se true, usa recebRealizado/desembRealizado das semanas em vez do Extrato
   weeks: Record<CashFlowWeekKey, CashFlowWeekPlan>;
+  pendencias?: CashFlowPendencia[]; // obrigações em aberto (pró-labore, aluguel...)
   notes?: string;
   updatedAt?: string;
 }

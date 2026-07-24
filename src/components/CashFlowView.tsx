@@ -18,13 +18,16 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   CheckCircle2,
+  ClipboardList,
   Download,
+  Plus,
   RefreshCcw,
   Save,
+  Trash2,
   TrendingUp,
   Wallet,
 } from 'lucide-react';
-import { CashFlowPlan, CashFlowWeekKey, FinancialStatementEntry } from '../types';
+import { CashFlowPendencia, CashFlowPlan, CashFlowWeekKey, FinancialStatementEntry } from '../types';
 import { exportReportToExcel, formatCurrency } from '../utils/exportUtils';
 
 interface CashFlowViewProps {
@@ -80,6 +83,7 @@ const emptyPlan = (year: number, monthKey: string): CashFlowPlan => ({
     sem01: emptyWeekPlan(), sem02: emptyWeekPlan(), sem03: emptyWeekPlan(),
     sem04: emptyWeekPlan(), sem05: emptyWeekPlan(),
   },
+  pendencias: [],
 });
 
 const sumWeeks = (fn: (w: CashFlowWeekKey) => number): number =>
@@ -209,6 +213,19 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
       weeks: { ...d.weeks, [w]: { ...d.weeks[w], [field]: parseInput(raw) } },
     }));
   };
+
+  // ── Pendências (obrigações em aberto) ────────────────────────────────────
+  const pendencias = draft.pendencias || [];
+  const totalPendencias = pendencias.reduce((a, p) => a + (Number(p.valor) || 0), 0);
+  const setPendencia = (idx: number, field: keyof CashFlowPendencia, raw: string) => {
+    setDraft((d) => {
+      const list = [...(d.pendencias || [])];
+      list[idx] = { ...list[idx], [field]: field === 'valor' ? parseInput(raw) : raw };
+      return { ...d, pendencias: list };
+    });
+  };
+  const addPendencia = () => setDraft((d) => ({ ...d, pendencias: [...(d.pendencias || []), { descricao: '', valor: 0 }] }));
+  const removePendencia = (idx: number) => setDraft((d) => ({ ...d, pendencias: (d.pendencias || []).filter((_, i) => i !== idx) }));
 
   const handleSave = async () => {
     if (!canEdit) return;
@@ -622,6 +639,68 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
               </tbody>
             </table>
           </div>
+        </div>
+      </div>
+
+      {/* Pendências (obrigações em aberto) */}
+      <div className="bg-white border border-[#EAE6DF] rounded-xl shadow-xs overflow-hidden">
+        <div className="p-3 border-b border-[#EAE6DF] flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <ClipboardList className="w-4 h-4 text-[#C19A6B]" />
+            <h3 className="text-sm font-bold text-[#2D2A26]">Pendências — Obrigações em Aberto</h3>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-[11px] text-[#8B7D6B]">Total:</span>
+            <span className="text-sm font-black text-rose-700">{formatCurrency(totalPendencias)}</span>
+            {canEdit && (
+              <button
+                onClick={addPendencia}
+                className="px-2.5 py-1.5 text-[11px] font-bold bg-[#F3F1ED] text-[#433E37] hover:bg-[#EAE6DF] rounded-lg border border-[#EAE6DF] flex items-center gap-1"
+              >
+                <Plus className="w-3.5 h-3.5 text-[#C19A6B]" /> Adicionar
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="p-4">
+          {pendencias.length === 0 ? (
+            <p className="text-xs text-[#8B7D6B] text-center py-3">Nenhuma pendência registrada para {monthLabel}/{selectedYear}.</p>
+          ) : (
+            <div className="space-y-2">
+              {pendencias.map((p, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    disabled={!canEdit}
+                    value={p.descricao}
+                    onChange={(e) => setPendencia(idx, 'descricao', e.target.value)}
+                    placeholder="Descrição (ex: PRÓ-LABORE REF JULHO/2026)"
+                    className="flex-1 bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg px-3 py-2 text-xs text-[#433E37] focus:outline-none focus:border-[#C19A6B] disabled:opacity-60"
+                  />
+                  <input
+                    type="text"
+                    disabled={!canEdit}
+                    value={p.valor || ''}
+                    onChange={(e) => setPendencia(idx, 'valor', e.target.value)}
+                    placeholder="0,00"
+                    className="w-36 bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg px-3 py-2 text-xs font-mono text-right text-rose-700 font-semibold focus:outline-none focus:border-[#C19A6B] disabled:opacity-60"
+                  />
+                  {canEdit && (
+                    <button
+                      onClick={() => removePendencia(idx)}
+                      className="p-2 rounded-lg bg-rose-50 hover:bg-rose-600 text-rose-600 hover:text-white transition-colors"
+                      title="Remover pendência"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="text-[10px] text-[#8B7D6B] mt-3">
+            Pendências são obrigações já vencidas/programadas ainda não pagas (pró-labore, aluguel, etc.), importadas da planilha. Não entram no saldo até serem quitadas — servem de alerta de compromissos futuros.
+          </p>
         </div>
       </div>
 
