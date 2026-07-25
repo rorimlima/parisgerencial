@@ -22,6 +22,7 @@ import {
   signOut,
 } from 'firebase/auth';
 import { firebaseConfig } from '../firebaseConfig';
+import { statementDocId } from '../utils/statementKeys';
 import { INITIAL_ECONOMIC_BY_YEAR, INITIAL_FINANCIAL_BY_YEAR, INITIAL_SELLERS } from '../data/initialData';
 import {
   User,
@@ -955,6 +956,13 @@ const statementToFirestore = (entry: Partial<FinancialStatementEntry>): Record<s
   if (entry.balance !== undefined) data.saldo = entry.balance;
   if (entry.notes !== undefined) data.observacoes = entry.notes || '';
   if (entry.dedupeKey !== undefined) data.chave_dedupe = entry.dedupeKey;
+  // RFN019: conta de caixa e marcação de transferência interna. Sem estes
+  // campos não dá para separar Caixa 30108 de Tesouraria 30101, nem excluir
+  // remanejo entre contas do cálculo de entradas.
+  if (entry.accountCode !== undefined) data.conta_codigo = entry.accountCode || '';
+  if (entry.accountLabel !== undefined) data.conta_label = entry.accountLabel || '';
+  if (entry.managementAccount !== undefined) data.conta_gerencial = entry.managementAccount || '';
+  if (entry.isInternalTransfer !== undefined) data.transferencia_interna = !!entry.isInternalTransfer;
   return data;
 };
 
@@ -976,6 +984,10 @@ const statementFromFirestore = (id: string, data: any): FinancialStatementEntry 
   notes: data.observacoes || '',
   dedupeKey: data.chave_dedupe || '',
   importedAt: data.importado_em || '',
+  accountCode: data.conta_codigo || '',
+  accountLabel: data.conta_label || '',
+  managementAccount: data.conta_gerencial || '',
+  isInternalTransfer: !!data.transferencia_interna,
 });
 
 // Busca lançamentos de extrato financeiro de um ano (ou todos, se ano omitido)
@@ -996,41 +1008,85 @@ export const fetchStatementEntries = async (year?: number): Promise<FinancialSta
 };
 
 /**
- * Importa lançamentos de extrato (banco ou caixa) com UPSERT usando dedupeKey como chave.
- * Isso permite reimportar o mesmo extrato (ex: reprocessar o mês) sem gerar duplicidade.
+ * Importa lançamentos de extrato (banco ou caixa) com UPSERT por dedupeKey.
+ *
+ * PERFORMANCE — por que este código mudou (não voltar atrás)
+ * ----------------------------------------------------------
+ * A versão anterior fazia UMA leitura da coleção inteira e depois UM `await
+ * setDoc/addDoc` por lançamento, em série. Importar os dois extratos RFN019
+ * (2.125 linhas) custava a leitura de tudo que já existia + 2.125 idas ao
+ * servidor, uma esperando a outra: minutos de tela travada, e a cota de leitura
+ * do Firestore indo embora à toa.
+ *
+ * Agora o ID do documento é DETERMINÍSTICO, derivado da própria chave
+ * (`statementDocId`). Com isso o upsert é resolvido pelo banco: `set(...,
+ * {merge:true})` cria se não existe e atualiza se existe. Não é preciso ler
+ * nada antes para saber quem já está lá, e as escritas vão em lotes de 400 —
+ * as mesmas 2.125 linhas viram 6 requisições.
+ *
+ * Compatibilidade com o que já foi gravado: os lançamentos antigos (Bradesco,
+ * PagSeguro) foram criados com `addDoc`, ou seja, ID aleatório. Se
+ * simplesmente gravássemos no ID novo, o mesmo lançamento passaria a existir
+ * duas vezes — o problema que estamos justamente evitando. Por isso, antes de
+ * gravar, buscamos os documentos APENAS dos anos que estão sendo importados
+ * (`where('ano','in',...)`, não a coleção toda) e reaproveitamos o ID antigo
+ * quando a chave já existir lá. Conforme os extratos vão sendo reimportados, a
+ * base migra sozinha para os IDs determinísticos.
  */
 export const upsertStatementEntries = async (
   entries: Omit<FinancialStatementEntry, 'id'>[]
 ): Promise<{ added: number; updated: number; errors: number }> => {
   const db = getFirestoreDb();
+  if (entries.length === 0) return { added: 0, updated: 0, errors: 0 };
+
   let added = 0, updated = 0, errors = 0;
 
-  const snapshot = await getDocs(collection(db, STATEMENT_COLLECTION));
-  const keyToId = new Map<string, string>();
-  snapshot.forEach((d) => {
-    const key = (d.data().chave_dedupe || '').toString();
-    if (key) keyToId.set(key, d.id);
-  });
+  // Mapa chave→ID apenas dos anos envolvidos, para reaproveitar documentos
+  // legados de ID aleatório. `in` do Firestore aceita até 30 valores; acima
+  // disso (cenário irreal para extrato) cai para a leitura completa.
+  const years = Array.from(new Set(entries.map((e) => e.year).filter(Boolean)));
+  const legacyKeyToId = new Map<string, string>();
+  try {
+    const ref = collection(db, STATEMENT_COLLECTION);
+    const snap = await withTimeout(
+      getDocs(years.length > 0 && years.length <= 30 ? query(ref, where('ano', 'in', years)) : ref),
+      25000,
+      'ler extrato existente para conciliar chaves'
+    );
+    snap.forEach((d) => {
+      const key = (d.data().chave_dedupe || '').toString();
+      if (key) legacyKeyToId.set(key, d.id);
+    });
+  } catch (err) {
+    // Sem o índice de legados seguimos com IDs determinísticos: o pior caso é
+    // um lançamento antigo continuar existindo em paralelo, nunca perder dado.
+    console.warn('Não foi possível indexar o extrato existente; seguindo com IDs determinísticos.', err);
+  }
 
-  for (const entry of entries) {
+  const importedAt = new Date().toISOString();
+  const CHUNK = 400;
+
+  for (let i = 0; i < entries.length; i += CHUNK) {
+    const chunk = entries.slice(i, i + CHUNK);
     try {
-      const payload = { ...statementToFirestore(entry), importado_em: new Date().toISOString() };
-      const existingId = entry.dedupeKey ? keyToId.get(entry.dedupeKey) : undefined;
-      if (existingId) {
-        await setDoc(doc(db, STATEMENT_COLLECTION, existingId), payload, { merge: true });
-        updated++;
-      } else {
-        const docRef = await addDoc(collection(db, STATEMENT_COLLECTION), payload);
-        if (entry.dedupeKey) keyToId.set(entry.dedupeKey, docRef.id);
-        added++;
+      const batch = writeBatch(db);
+      for (const entry of chunk) {
+        const payload = { ...statementToFirestore(entry), importado_em: importedAt };
+        const legacyId = entry.dedupeKey ? legacyKeyToId.get(entry.dedupeKey) : undefined;
+        const docId = legacyId || statementDocId(entry.dedupeKey);
+        if (legacyId) updated++;
+        else added++;
+        batch.set(doc(db, STATEMENT_COLLECTION, docId), payload, { merge: true });
       }
+      await withTimeout(batch.commit(), 20000, `gravar lote de extrato (${chunk.length} lançamentos)`);
     } catch (err) {
-      console.error('Erro no upsert de lançamento de extrato:', entry.dedupeKey, err);
-      errors++;
+      console.error('Erro ao gravar lote de extrato:', err);
+      errors += chunk.length;
+      added -= chunk.length;
     }
   }
 
-  return { added, updated, errors };
+  return { added: Math.max(0, added), updated, errors };
 };
 
 export const deleteStatementEntry = async (id: string): Promise<void> => {

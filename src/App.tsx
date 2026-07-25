@@ -1176,6 +1176,14 @@ export default function App() {
     const tesourariaPorMes = new Map<string, number>();
     entriesForYear.forEach((e) => {
       if (!e.monthKey) return;
+      // TRANSFERÊNCIA INTERNA NÃO É ENTRADA.
+      // No RFN019 do Caixa 30108, 797 lançamentos (R$ 1,2 mi) são dinheiro
+      // vindo da própria tesouraria — a empresa passando dinheiro de um bolso
+      // para o outro. Somar isso como recebimento inventa caixa: só em 2026
+      // seriam R$ 42.543,77 de entrada que nenhum cliente pagou. O lançamento
+      // fica gravado para a conciliação fechar com o saldo da conta, mas é
+      // excluído aqui do cálculo de entradas.
+      if (e.isInternalTransfer) return;
       if (e.origin === 'banco') {
         bancosPorMes.set(e.monthKey, (bancosPorMes.get(e.monthKey) || 0) + e.entryAmount);
       } else {

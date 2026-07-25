@@ -42,6 +42,12 @@ import {
 } from 'lucide-react';
 import { FinancialStatementEntry, StatementOrigin, StatementSource } from '../types';
 import { exportReportToExcel, formatCurrency, parseNumberPtBr } from '../utils/exportUtils';
+import { parseRfn019Rows } from '../utils/rfn019Parser';
+import {
+  DEFAULT_TESOURARIA_ACCOUNT,
+  TESOURARIA_ACCOUNTS,
+  buildBankDedupeKey,
+} from '../utils/statementKeys';
 
 interface FinancialStatementViewProps {
   entries: FinancialStatementEntry[];
@@ -78,7 +84,7 @@ const SOURCE_META: Record<StatementSource, { label: string; shortLabel: string; 
     shortLabel: 'Caixa/Tesouraria',
     origin: 'caixa',
     accept: '.xlsx,.xls',
-    hint: 'Planilha RFN019 de movimentação de tesouraria. Lê Tesouraria_DataCaixa (data), Tesouraria_Valor (valor recebido em dinheiro), Tesouraria_TipoDocumentoDes (ex: DINHEIRO) e ClienteBeneficiario (cliente).',
+    hint: 'Planilha RFN019 de movimentação de caixa/tesouraria. Lê Tesouraria_DataCaixa (data), Tesouraria_Observacao (descrição), Credito (entrada) e Debito (valor pago/saída), Tesouraria_TipoDocumentoDes (DINHEIRO) e ClienteBeneficiario (cliente/beneficiário). Tesouraria_Codigo é usado como chave: reimportar a mesma planilha atualiza os lançamentos, nunca duplica.',
     icon: Wallet,
   },
 };
@@ -95,6 +101,12 @@ interface RawStatementRow {
   exitAmount: number;
   balance?: number;
   notes: string;
+  // Preenchidos só pelo RFN019 (caixa/tesouraria)
+  dedupeKey?: string;          // chave já pronta, vinda do Tesouraria_Codigo
+  accountCode?: string;
+  accountLabel?: string;
+  managementAccount?: string;
+  isInternalTransfer?: boolean;
 }
 
 const monthKeyFromIso = (dateStr: string): string => {
@@ -227,60 +239,26 @@ const parsePagSeguroRows = (aoa: any[][]): RawStatementRow[] => {
 };
 
 // ── Parser Caixa/Tesouraria (RFN019 .xlsx) ──────────────────────────────────
-// Lê pelas colunas nomeadas: Tesouraria_DataCaixa (data), Tesouraria_Valor
-// (valor movimentado em dinheiro), Tesouraria_TipoDocumentoDes ("DINHEIRO"),
-// ClienteBeneficiario (cliente/credor). Este mesmo parser cobre dois cenários:
-//   1) Recebimentos de caixa (RFN019 padrão): Credito preenchido, Debito = 0.
-//   2) Saídas de caixa / pagamentos em dinheiro (planilha futura de tesouraria
-//      de saída): identificadas por Debito preenchido OU por
-//      Tesouraria_Multiplicador = -1 (convenção do ERP para lançamentos a
-//      débito, igual à usada em RFN006 de contas a pagar).
-// Prioridade de decisão: Debito explícito > Credito explícito >
-// Tesouraria_Multiplicador (-1 = saída) > default (entrada, valor recebido).
-const parseTesourariaRows = (rows: any[]): RawStatementRow[] => {
-  const out: RawStatementRow[] = [];
-  for (const row of rows) {
-    const rawDate = row['Tesouraria_DataCaixa'];
-    const date = normalizeDate(rawDate);
-    if (!date) continue;
-
-    const valor = Math.abs(parseNumberPtBr(row['Tesouraria_Valor'] ?? 0));
-    const hasCredito = row['Credito'] !== undefined && row['Credito'] !== '';
-    const hasDebito = row['Debito'] !== undefined && row['Debito'] !== '';
-    const multiplicador = row['Tesouraria_Multiplicador'];
-
-    let credito = 0;
-    let debito = 0;
-    if (hasDebito && Math.abs(Number(row['Debito']) || 0) > 0) {
-      debito = Math.abs(Number(row['Debito']) || 0);
-    } else if (hasCredito && Math.abs(Number(row['Credito']) || 0) > 0) {
-      credito = Math.abs(Number(row['Credito']) || 0);
-    } else if (multiplicador !== undefined && multiplicador !== '') {
-      if (Number(multiplicador) < 0) debito = valor;
-      else credito = valor;
-    } else {
-      credito = valor;
-    }
-    if (credito === 0 && debito === 0) continue;
-
-    const tipoDoc = (row['Tesouraria_TipoDocumentoDes'] || row['Tesouraria_TipoCDDes'] || 'DINHEIRO').toString().trim();
-    const cliente = (row['ClienteBeneficiario'] || '').toString().trim();
-    const docRef = (row['Tesouraria_Codigo'] || row['Tesouraria_NroDocumento'] || '').toString().trim();
-    const obs = (row['Tesouraria_Observacao'] || '').toString().trim();
-
-    out.push({
-      date,
-      description: `${tipoDoc}${cliente ? ' — ' + cliente : ''}`,
-      clientName: cliente,
-      documentType: tipoDoc,
-      documentRef: docRef,
-      entryAmount: credito,
-      exitAmount: debito,
-      notes: obs,
-    });
-  }
-  return out;
-};
+// A leitura em si mora em utils/rfn019Parser.ts, compartilhada com o seeder
+// (scripts/seedTesouraria.mjs) para que os dois gerem exatamente as mesmas
+// chaves — é o que garante que rodar o script e depois reimportar pela tela não
+// duplique nada. Aqui só adaptamos o resultado ao formato da prévia.
+const parseTesourariaRows = (rows: any[], accountCode: string): RawStatementRow[] =>
+  parseRfn019Rows(rows, accountCode).map((r) => ({
+    date: r.date,
+    description: r.description,
+    clientName: r.clientName,
+    documentType: r.documentType,
+    documentRef: r.documentRef,
+    entryAmount: r.entryAmount,
+    exitAmount: r.exitAmount,
+    notes: r.notes,
+    dedupeKey: r.dedupeKey,
+    accountCode: r.accountCode,
+    accountLabel: r.accountLabel,
+    managementAccount: r.managementAccount,
+    isInternalTransfer: r.isInternalTransfer,
+  }));
 
 // ─── Componente ──────────────────────────────────────────────────────────────
 
@@ -295,6 +273,9 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
   userRole,
 }) => {
   const [sourceType, setSourceType] = useState<StatementSource>('bradesco');
+  // Conta do RFN019. Obrigatória porque o relatório não diz de qual conta é —
+  // ver comentário em utils/statementKeys.ts.
+  const [tesourariaAccount, setTesourariaAccount] = useState<string>(DEFAULT_TESOURARIA_ACCOUNT);
   const [fileName, setFileName] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([]);
@@ -302,7 +283,8 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
   const [importSuccessMsg, setImportSuccessMsg] = useState<string | null>(null);
 
   // Filtros da tabela de lançamentos já importados
-  const [sourceFilter, setSourceFilter] = useState<'all' | StatementSource>('all');
+  // 'all' | fonte | 'conta:30108' | 'conta:30101' | 'transferencias'
+  const [sourceFilter, setSourceFilter] = useState<string>('all');
   const [monthFilter, setMonthFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [detailsEntry, setDetailsEntry] = useState<FinancialStatementEntry | null>(null);
@@ -387,7 +369,7 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
           buildPreview(parsePagSeguroRows(aoa));
         } else {
           const jsonRows = XLSX.utils.sheet_to_json<any>(ws, { defval: '' });
-          buildPreview(parseTesourariaRows(jsonRows));
+          buildPreview(parseTesourariaRows(jsonRows, tesourariaAccount));
         }
       } catch (err: any) {
         alert(`Erro ao processar planilha: ${err.message}`);
@@ -420,20 +402,37 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
       return;
     }
 
-    // Chave de deduplicação determinística; usa contador de ocorrências para
-    // permitir lançamentos legitimamente idênticos (mesma data/valor/descrição)
-    // sem colidir, mantendo estabilidade em reimportações do mesmo arquivo.
+    // CHAVE DE DEDUPLICAÇÃO — regra única, centralizada em utils/statementKeys.ts
+    // (o seeder usa a mesma). O RFN019 já chega com a chave pronta, derivada do
+    // Tesouraria_Codigo, que é o ID do movimento no ERP. Os extratos bancários,
+    // que não têm identificador, usam a chave composta com contador de
+    // ocorrência para permitir duas linhas legitimamente idênticas no mesmo dia.
     const seenCount = new Map<string, number>();
     const toSave: Omit<FinancialStatementEntry, 'id'>[] = validRows.map((r) => {
-      const baseKey = `${sourceType}|${r.documentRef}|${r.date}|${r.description}|${r.entryAmount}|${r.exitAmount}`.toLowerCase();
-      const n = seenCount.get(baseKey) || 0;
-      seenCount.set(baseKey, n + 1);
-      const dedupeKey = `${baseKey}#${n}`;
+      let dedupeKey = r.dedupeKey || '';
+      if (!dedupeKey) {
+        const probe = buildBankDedupeKey({
+          source: sourceType,
+          date: r.date,
+          documentRef: r.documentRef,
+          description: r.description,
+          entryAmount: r.entryAmount,
+          exitAmount: r.exitAmount,
+          occurrence: 0,
+        });
+        const base = probe.slice(0, probe.lastIndexOf('#'));
+        const n = seenCount.get(base) || 0;
+        seenCount.set(base, n + 1);
+        dedupeKey = `${base}#${n}`;
+      }
 
+      const isTesouraria = sourceType === 'tesouraria';
       return {
         origin: meta.origin,
         source: sourceType,
-        sourceLabel: meta.shortLabel,
+        // No caixa, o rótulo mostra a conta (Caixa 30108 / Tesouraria 30101):
+        // sem isso as duas contas ficam indistinguíveis na tela e no export.
+        sourceLabel: isTesouraria ? r.accountLabel || meta.shortLabel : meta.shortLabel,
         date: r.date,
         year: parseInt(r.date.slice(0, 4), 10),
         monthKey: monthKeyFromIso(r.date),
@@ -446,6 +445,14 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
         balance: r.balance,
         notes: r.notes,
         dedupeKey,
+        ...(isTesouraria
+          ? {
+              accountCode: r.accountCode,
+              accountLabel: r.accountLabel,
+              managementAccount: r.managementAccount,
+              isInternalTransfer: !!r.isInternalTransfer,
+            }
+          : {}),
       };
     });
 
@@ -463,6 +470,9 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
   const invalidCount = previewRows.filter((r) => !r.valid).length;
   const previewTotalEntrada = previewRows.filter((r) => r.valid).reduce((a, r) => a + r.entryAmount, 0);
   const previewTotalSaida = previewRows.filter((r) => r.valid).reduce((a, r) => a + r.exitAmount, 0);
+  const previewTransfers = previewRows.filter((r) => r.valid && r.isInternalTransfer);
+  const previewTransferCount = previewTransfers.length;
+  const previewTransferValue = previewTransfers.reduce((a, r) => a + r.entryAmount + r.exitAmount, 0);
 
   const filteredPreview = previewRows.filter((r) => {
     if (previewFilter === 'valid') return r.valid;
@@ -474,7 +484,16 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
 
   const filteredEntries = useMemo(() => {
     return entries.filter((e) => {
-      const matchesSource = sourceFilter === 'all' || e.source === sourceFilter;
+      // O filtro de fonte também atende às contas de caixa (conta:30108 /
+      // conta:30101) e ao recorte de transferências internas.
+      const matchesSource =
+        sourceFilter === 'all'
+          ? true
+          : sourceFilter === 'transferencias'
+          ? !!e.isInternalTransfer
+          : sourceFilter.startsWith('conta:')
+          ? e.accountCode === sourceFilter.slice(6)
+          : e.source === sourceFilter;
       const matchesMonth = monthFilter === 'all' || e.monthKey === monthFilter;
       const q = searchQuery.trim().toLowerCase();
       const matchesSearch =
@@ -620,6 +639,48 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
             );
           })}
         </div>
+        {/* Seleção da conta — obrigatória no RFN019, que não traz a conta no arquivo */}
+        {sourceType === 'tesouraria' && (
+          <div className="border border-[#C19A6B]/40 bg-[#C19A6B]/5 rounded-lg p-3 space-y-2">
+            <div className="flex items-start gap-2">
+              <Wallet className="w-4 h-4 text-[#C19A6B] flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-xs font-bold text-[#2D2A26]">De qual conta é este extrato?</p>
+                <p className="text-[10px] text-[#8B7D6B]">
+                  O RFN019 não informa a conta em nenhuma coluna — é preciso indicar. A escolha entra na chave do
+                  lançamento, então importar na conta errada lança o dinheiro no caixa errado.
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {Object.values(TESOURARIA_ACCOUNTS).map((acc) => {
+                const active = tesourariaAccount === acc.code;
+                return (
+                  <button
+                    key={acc.code}
+                    onClick={() => {
+                      setTesourariaAccount(acc.code);
+                      setPreviewRows([]);
+                      setFileName(null);
+                      setImportSuccessMsg(null);
+                    }}
+                    className={`text-left p-2.5 rounded-lg border transition-all ${
+                      active
+                        ? 'bg-[#2D2A26] border-[#2D2A26] text-white shadow-xs'
+                        : 'bg-white border-[#EAE6DF] text-[#433E37] hover:border-[#C19A6B]'
+                    }`}
+                  >
+                    <p className="text-xs font-bold">{acc.label}</p>
+                    <p className={`text-[10px] mt-0.5 ${active ? 'text-white/70' : 'text-[#8B7D6B]'}`}>
+                      {acc.description}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-lg p-3">
           <FileCode2 className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
           <p className="text-[11px] text-blue-800">{meta.hint}</p>
@@ -686,10 +747,38 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
             </div>
           </div>
 
+          {/* ALERTA DE TRANSFERÊNCIA INTERNA
+              Dinheiro que vai da tesouraria para o caixa da mesma empresa não é
+              recebimento. Se entrasse como "Entradas de Tesouraria", o Resultado
+              Financeiro mostraria caixa que nenhum cliente pagou. Os lançamentos
+              são gravados (o extrato precisa fechar com o saldo da conta), mas
+              ficam marcados e fora do cálculo de entradas. */}
+          {previewTransferCount > 0 && (
+            <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-lg p-3">
+              <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+              <div className="text-[11px] text-amber-900 leading-relaxed">
+                <p className="font-bold">
+                  {previewTransferCount} lançamento(s) são transferência interna entre contas da empresa
+                  ({formatCurrency(previewTransferValue)}).
+                </p>
+                <p className="mt-0.5">
+                  São remanejos caixa ↔ tesouraria, não recebimento de cliente. Serão importados e marcados para
+                  conciliação, mas <span className="font-bold">não entram como Entradas</span> no Resultado Financeiro —
+                  contá-los infla o caixa com dinheiro que a empresa apenas trocou de bolso.
+                </p>
+              </div>
+            </div>
+          )}
+
           <div className="flex items-center justify-between gap-3">
             <h3 className="text-sm font-bold text-[#2D2A26] flex items-center gap-2">
               <FileSpreadsheet className="w-4 h-4 text-[#C19A6B]" />
               Validação dos Lançamentos — {meta.shortLabel}
+              {sourceType === 'tesouraria' && (
+                <span className="text-[10px] px-2 py-0.5 rounded bg-[#C19A6B]/15 text-[#C19A6B] border border-[#C19A6B]/30 font-bold">
+                  {TESOURARIA_ACCOUNTS[tesourariaAccount]?.label || tesourariaAccount}
+                </span>
+              )}
             </h3>
             <div className="flex items-center space-x-2">
               {(['all', 'valid', 'invalid'] as const).map((f) => (
@@ -801,7 +890,12 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
               <option value="all">Todas as Fontes</option>
               <option value="bradesco">Bradesco</option>
               <option value="pagseguro">PagSeguro</option>
-              <option value="tesouraria">Caixa/Tesouraria</option>
+              <option value="tesouraria">Caixa/Tesouraria (todas)</option>
+              {/* As duas contas de dinheiro precisam ser filtráveis separadamente:
+                  sem isso não há como conferir o saldo de cada caixa. */}
+              <option value="conta:30108">— Caixa 30108</option>
+              <option value="conta:30101">— Tesouraria 30101</option>
+              <option value="transferencias">— Só transferências internas</option>
             </select>
             <select
               value={monthFilter}

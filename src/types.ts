@@ -234,6 +234,16 @@ export interface FinancialStatementEntry {
   notes?: string;
   dedupeKey: string;             // Chave determinística para evitar duplicidade em reimportações
   importedAt?: string;
+  // ── Conta de caixa (só para origin='caixa' / RFN019) ─────────────────────
+  // O RFN019 não traz a conta em nenhuma coluna: quem exporta o relatório é que
+  // sabe se ele é do Caixa 30108 ou da Tesouraria 30101. Sem guardar isso, os
+  // dois extratos viram um só e não há como conferir o saldo de cada conta.
+  accountCode?: string;          // '30108' (Caixa) | '30101' (Tesouraria)
+  accountLabel?: string;         // 'Caixa 30108' | 'Tesouraria 30101'
+  // Classificação gerencial do movimento, vinda do próprio RFN019. Serve para
+  // separar transferência interna (caixa↔tesouraria) de movimento de verdade.
+  managementAccount?: string;    // Tesouraria_ContagerencialDesClassificacao
+  isInternalTransfer?: boolean;  // true quando é só remanejo entre contas da casa
 }
 
 // ─── Contas a Pagar ──────────────────────────────────────────────────────────

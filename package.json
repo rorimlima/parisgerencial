@@ -10,7 +10,12 @@
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "seed:tesouraria": "node scripts/seedTesouraria.mjs",
+    "seed:tesouraria:dry": "node scripts/seedTesouraria.mjs --dry",
+    "test:extrato": "node scripts/testRfn019Parser.mjs",
+    "test:auditoria": "node scripts/testFinancialAudit.mjs",
+    "test": "node scripts/testRfn019Parser.mjs && node scripts/testFinancialAudit.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
