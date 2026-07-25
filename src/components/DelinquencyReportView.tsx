@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
@@ -20,6 +20,8 @@ import {
   Trash2,
   X,
   Check,
+  Calculator,
+  RotateCcw,
 } from 'lucide-react';
 import { Customer, DelinquentTitle } from '../types';
 import { exportReportToExcel, exportReportToPdf, formatCurrency } from '../utils/exportUtils';
@@ -84,6 +86,57 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
   const [form, setForm] = useState({ ...emptyForm });
 
   const canEdit = userRole !== 'analista' && !!(onAddTitle || onUpdateTitle);
+
+  // ─── Simulação Financeira de Juros e Multa ─────────────────────────────────
+  // Convenção padrão de mercado para títulos vencidos (boletos/duplicatas):
+  // multa fixa de 2% sobre o valor original + juros de mora de 1% ao mês,
+  // aplicados pro-rata die (juros simples, não compostos) sobre os dias em
+  // atraso. Os percentuais ficam editáveis para o financeiro poder ajustar
+  // conforme a política de cobrança da empresa, e o cálculo é refeito ao vivo.
+  const DEFAULT_MULTA_PERCENT = 2;
+  const DEFAULT_JUROS_MENSAL_PERCENT = 1;
+
+  const [multaPercent, setMultaPercent] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('pdg_multa_percent'));
+    return saved > 0 ? saved : DEFAULT_MULTA_PERCENT;
+  });
+  const [jurosMensalPercent, setJurosMensalPercent] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('pdg_juros_mensal_percent'));
+    return saved > 0 ? saved : DEFAULT_JUROS_MENSAL_PERCENT;
+  });
+
+  useEffect(() => {
+    localStorage.setItem('pdg_multa_percent', String(multaPercent));
+  }, [multaPercent]);
+  useEffect(() => {
+    localStorage.setItem('pdg_juros_mensal_percent', String(jurosMensalPercent));
+  }, [jurosMensalPercent]);
+
+  const jurosDiarioPercent = jurosMensalPercent / 30;
+
+  // Valor Atualizado = Original + (Original × Multa%) + (Original × Juros dia% × Dias em Atraso)
+  const simulateTitle = (t: DelinquentTitle) => {
+    const dias = Math.max(0, t.daysOverdue || 0);
+    const multaValor = t.originalAmount * (multaPercent / 100);
+    const jurosValor = t.originalAmount * (jurosDiarioPercent / 100) * dias;
+    return {
+      multaValor,
+      jurosValor,
+      updatedAmount: t.originalAmount + multaValor + jurosValor,
+    };
+  };
+
+  // Lista dos títulos com Juros/Multa/Valor Atualizado recalculados ao vivo
+  // conforme os parâmetros acima — usada em todo o restante da tela (KPIs,
+  // aging list, tabela e exportações) para que tudo fique consistente.
+  const simulatedTitles = useMemo<DelinquentTitle[]>(
+    () =>
+      titles.map((t) => {
+        const { multaValor, jurosValor, updatedAmount } = simulateTitle(t);
+        return { ...t, multa: multaValor, juros: jurosValor, updatedAmount };
+      }),
+    [titles, multaPercent, jurosMensalPercent]
+  );
 
   const openAddForm = () => {
     setEditingTitle(null);
@@ -169,23 +222,23 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
     setDeleteConfirmId(null);
   };
 
-  const totalDelinquent = titles.reduce((acc, t) => acc + t.updatedAmount, 0);
-  const uniqueCustomersCount = new Set(titles.map((t) => t.customerCode)).size;
-  const averageTicket = titles.length > 0 ? totalDelinquent / titles.length : 0;
+  const totalDelinquent = simulatedTitles.reduce((acc, t) => acc + t.updatedAmount, 0);
+  const uniqueCustomersCount = new Set(simulatedTitles.map((t) => t.customerCode)).size;
+  const averageTicket = simulatedTitles.length > 0 ? totalDelinquent / simulatedTitles.length : 0;
 
   // Lista de vendedores únicos presentes nos títulos
   const uniqueSellers = Array.from(
-    new Set(titles.map((t) => t.sellerName).filter(Boolean))
+    new Set(simulatedTitles.map((t) => t.sellerName).filter(Boolean))
   );
 
   const agingBuckets = {
-    '1-30': titles.filter((t) => t.agingBucket === '1-30').reduce((a, b) => a + b.updatedAmount, 0),
-    '31-60': titles.filter((t) => t.agingBucket === '31-60').reduce((a, b) => a + b.updatedAmount, 0),
-    '61-90': titles.filter((t) => t.agingBucket === '61-90').reduce((a, b) => a + b.updatedAmount, 0),
-    '>90': titles.filter((t) => t.agingBucket === '>90').reduce((a, b) => a + b.updatedAmount, 0),
+    '1-30': simulatedTitles.filter((t) => t.agingBucket === '1-30').reduce((a, b) => a + b.updatedAmount, 0),
+    '31-60': simulatedTitles.filter((t) => t.agingBucket === '31-60').reduce((a, b) => a + b.updatedAmount, 0),
+    '61-90': simulatedTitles.filter((t) => t.agingBucket === '61-90').reduce((a, b) => a + b.updatedAmount, 0),
+    '>90': simulatedTitles.filter((t) => t.agingBucket === '>90').reduce((a, b) => a + b.updatedAmount, 0),
   };
 
-  const filteredTitles = titles.filter((t) => {
+  const filteredTitles = simulatedTitles.filter((t) => {
     const matchesStatus = statusFilter === 'all' || t.collectionStatus === statusFilter;
     const matchesAging = agingFilter === 'all' || t.agingBucket === agingFilter;
     const matchesSeller = sellerFilter === 'all' || t.sellerName === sellerFilter;
@@ -347,6 +400,56 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
         </div>
       </div>
 
+      {/* Simulação Financeira de Juros e Multa */}
+      <div className="bg-white border border-[#EAE6DF] p-4 rounded-xl shadow-xs">
+        <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+          <div className="flex items-center gap-2 lg:w-64 shrink-0">
+            <Calculator className="w-4 h-4 text-[#C19A6B]" />
+            <div>
+              <p className="text-xs font-black text-[#2D2A26]">Simulação de Juros e Multa</p>
+              <p className="text-[10px] text-[#8B7D6B]">Recalcula o Valor Atualizado com base nos dias em atraso</p>
+            </div>
+          </div>
+
+          <div className="flex flex-1 flex-wrap items-end gap-4">
+            <div>
+              <label className="block text-[10px] font-bold text-[#8B7D6B] mb-1 uppercase">Multa (%)</label>
+              <input
+                type="number" min={0} step="0.1"
+                value={multaPercent}
+                onChange={(e) => setMultaPercent(Math.max(0, parseFloat(e.target.value) || 0))}
+                className="w-28 bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2 text-xs font-mono font-bold focus:outline-none focus:border-[#C19A6B]"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold text-[#8B7D6B] mb-1 uppercase">Juros de Mora (% ao mês)</label>
+              <input
+                type="number" min={0} step="0.1"
+                value={jurosMensalPercent}
+                onChange={(e) => setJurosMensalPercent(Math.max(0, parseFloat(e.target.value) || 0))}
+                className="w-28 bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2 text-xs font-mono font-bold focus:outline-none focus:border-[#C19A6B]"
+              />
+            </div>
+            <div className="text-[10px] text-[#8B7D6B] font-mono bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2 flex-1 min-w-[260px]">
+              Pro-rata dia: <strong className="text-[#2D2A26]">{jurosDiarioPercent.toFixed(4)}% / dia</strong>
+              {' • '}Fórmula: Original + (Original × Multa%) + (Original × Juros dia% × Dias Atraso)
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setMultaPercent(DEFAULT_MULTA_PERCENT);
+                setJurosMensalPercent(DEFAULT_JUROS_MENSAL_PERCENT);
+              }}
+              title="Restaurar padrão de mercado (Multa 2% + Juros 1% a.m.)"
+              className="px-3 py-2 text-xs font-bold bg-[#F3F1ED] hover:bg-[#2D2A26] text-[#433E37] hover:text-white rounded-lg transition-colors flex items-center gap-1.5"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Padrão</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
       {/* Aging List KPI Boxes */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white border border-[#EAE6DF] p-4 rounded-xl shadow-xs">
@@ -477,9 +580,8 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
           <table className="w-full text-left border-collapse text-xs">
             <thead className="bg-[#F9F7F2] text-[#8B7D6B] font-bold border-b border-[#EAE6DF]">
               <tr>
+                <th className="p-3 text-center whitespace-nowrap">Ações</th>
                 <th className="p-3">Lançamento</th>
-                <th className="p-3">Código Cliente</th>
-                <th className="p-3">Nº Título</th>
                 <th className="p-3">Cliente / CNPJ</th>
                 <th className="p-3">Contato (WhatsApp)</th>
                 <th className="p-3">Vendedor Responsável</th>
@@ -489,18 +591,44 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
                 <th className="p-3 text-right">Valor Atualizado (Juros/Multa)</th>
                 <th className="p-3 text-center">Status Cobrança</th>
                 <th className="p-3">Observações de Campo</th>
-                <th className="p-3 text-center whitespace-nowrap">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#EAE6DF] text-[#433E37]">
               {filteredTitles.map((t) => (
                 <tr key={t.id} className="hover:bg-[#FDFBF7] transition-colors">
+                  <td className="p-3 text-center whitespace-nowrap">
+                    <div className="flex items-center justify-center space-x-1.5">
+                      <button
+                        onClick={() => setDetailsTitle(t)}
+                        title="Ver Detalhes do Título"
+                        className="p-1.5 rounded-lg bg-[#F3F1ED] hover:bg-[#2D2A26] text-[#433E37] hover:text-white transition-colors"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                      </button>
+                      {canEdit && onUpdateTitle && (
+                        <button
+                          onClick={() => openEditForm(t)}
+                          title="Editar Título"
+                          className="p-1.5 rounded-lg bg-[#F3F1ED] hover:bg-[#C19A6B] text-[#433E37] hover:text-white transition-colors"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {userRole !== 'analista' && onDeleteTitle && (
+                        <button
+                          onClick={() => setDeleteConfirmId(t.id)}
+                          title="Excluir Título"
+                          className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </td>
                   <td className="p-3 font-mono text-[11px] text-[#8B7D6B]">
-                    {t.lancamento || '-'}
+                    {t.lancamento || t.titleNumber || '-'}
                     {t.parcela && <span className="block text-[10px]">parc. {t.parcela}</span>}
                   </td>
-                  <td className="p-3 font-mono font-bold text-[#C19A6B]">{t.customerCode}</td>
-                  <td className="p-3 font-mono font-bold text-[#2D2A26]">{t.titleNumber}</td>
                   <td className="p-3">
                     <p className="font-bold text-[#2D2A26]">{t.customerName}</p>
                     <p className="text-[10px] text-[#8B7D6B] font-mono">{t.cnpjCpf}</p>
@@ -531,35 +659,6 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
                   </td>
                   <td className="p-3 text-[#8B7D6B] text-[11px] max-w-xs line-clamp-2">
                     {t.notes || 'Sem observações registradas'}
-                  </td>
-                  <td className="p-3 text-center whitespace-nowrap">
-                    <div className="flex items-center justify-center space-x-1.5">
-                      <button
-                        onClick={() => setDetailsTitle(t)}
-                        title="Ver Detalhes do Título"
-                        className="p-1.5 rounded-lg bg-[#F3F1ED] hover:bg-[#2D2A26] text-[#433E37] hover:text-white transition-colors"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                      </button>
-                      {canEdit && onUpdateTitle && (
-                        <button
-                          onClick={() => openEditForm(t)}
-                          title="Editar Título"
-                          className="p-1.5 rounded-lg bg-[#F3F1ED] hover:bg-[#C19A6B] text-[#433E37] hover:text-white transition-colors"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                      {userRole !== 'analista' && onDeleteTitle && (
-                        <button
-                          onClick={() => setDeleteConfirmId(t.id)}
-                          title="Excluir Título"
-                          className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white transition-colors"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
                   </td>
                 </tr>
               ))}

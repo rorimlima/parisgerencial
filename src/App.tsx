@@ -6,7 +6,7 @@
  * Todos os dados vêm do Firestore (Firebase). Sem dados hardcoded.
  */
 
-import React, { useEffect, useState, useCallback, Suspense, lazy } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, Suspense, lazy } from 'react';
 import { DashboardView } from './components/DashboardView';
 import { LaunchModal } from './components/LaunchModal';
 import { LoginModal } from './components/LoginModal';
@@ -269,8 +269,13 @@ export default function App() {
   // Carregá-las no login pesaria em todo mundo, inclusive em quem só quer ver
   // o DRE. Então elas ficam adormecidas até a aba correspondente ser aberta —
   // e mesmo aí, o Faturamento lê apenas os resumos mensais, nunca as notas.
+  // `force` precisa VENCER o guard de "já está carregando".
+  // O bug anterior: `if (isBillingLoading || ...)` abortava silenciosamente o
+  // recarregamento pedido logo após a importação, porque a tela ainda estava
+  // com o flag de carga ligado. O usuário terminava de importar 29 mil notas e
+  // continuava vendo R$ 0,00, sem nenhum erro no console.
   const loadBilling = useCallback(async (force = false) => {
-    if (isBillingLoading || (billingLoaded && !force)) return;
+    if (!force && (isBillingLoading || billingLoaded)) return;
     setIsBillingLoading(true);
     try {
       const [sums, custs] = await Promise.all([fetchBillingSummaries(), fetchBillingCustomers()]);
@@ -285,7 +290,7 @@ export default function App() {
   }, [isBillingLoading, billingLoaded]);
 
   const loadStock = useCallback(async (force = false) => {
-    if (isStockLoading || (stockLoaded && !force)) return;
+    if (!force && (isStockLoading || stockLoaded)) return;
     setIsStockLoading(true);
     try {
       const [items, summary] = await Promise.all([fetchStockItems(), fetchStockSummary()]);
@@ -306,7 +311,7 @@ export default function App() {
    * sob demanda pelo seletor "Carregar ano" da própria tela.
    */
   const loadSales = useCallback(async (force = false) => {
-    if (isSalesLoading || (salesLoaded && !force)) return;
+    if (!force && (isSalesLoading || salesLoaded)) return;
     setIsSalesLoading(true);
     try {
       const years = await fetchSalesYears();
@@ -420,14 +425,49 @@ export default function App() {
   }, [activeTab, currentUser, loadBilling, loadStock, loadSales]);
 
   // ── Handler: importação do RPR014 (Faturamento) ──────────────────────────
-  const handleImportInvoices = useCallback(async (records: InvoiceRecord[]) => {
-    const result = await upsertInvoicesBatch(records);
+  /**
+   * Importação do RPR014.
+   *
+   * Três coisas acontecem aqui, e a ordem importa:
+   *  1. grava e recebe de volta os resumos JÁ CALCULADOS;
+   *  2. aplica esses resumos no estado na hora — os cartões atualizam antes de
+   *     qualquer releitura do Firestore. Depender da releitura era a causa dos
+   *     cartões continuarem zerados: a escrita em lote ainda não tinha
+   *     propagado quando o `getDocs` seguinte era disparado;
+   *  3. só então relê do banco, para pegar meses de outras cargas que não
+   *     estavam nesta planilha.
+   */
+  const handleImportInvoices = useCallback(async (
+    records: InvoiceRecord[],
+    onProgress?: (stage: string, done: number, total: number) => void
+  ) => {
+    const result = await upsertInvoicesBatch(records, onProgress);
     console.info(
       `[Faturamento] ${result.added} novos, ${result.updated} atualizados, ` +
       `${result.unchanged} sem alteração, ${result.errors} erros.`
     );
+
+    // (2) atualização otimista: mescla por id, mantendo os meses que já estavam
+    // na tela e substituindo os que acabaram de ser recalculados.
+    if (result.summaries.length) {
+      setBillingSummaries((prev) => {
+        const map = new Map(prev.map((m) => [m.id, m]));
+        result.summaries.forEach((m) => map.set(m.id, m));
+        return [...map.values()];
+      });
+    }
+
+    // (3) e o ano em foco: se o usuário estava em um ano sem movimento e a
+    // planilha trouxe outros, levamos a tela para o ano mais recente que tem
+    // dados. Sem isso, o resultado visível de importar seis anos de histórico
+    // é uma tela vazia, porque o seletor continuou onde estava.
+    const importedYears = [...new Set(result.summaries.filter((m) => m.grossRevenue > 0).map((m) => m.year))];
+    if (importedYears.length && !importedYears.includes(selectedYear)) {
+      setSelectedYear(Math.max(...importedYears));
+    }
+
     await loadBilling(true);
-  }, [loadBilling]);
+  }, [loadBilling, selectedYear]);
 
   // ── Handler: importação do RPR053 (Estoque / Lista de Preço) ─────────────
   const handleImportStock = useCallback(async (items: StockItem[]) => {
@@ -446,6 +486,22 @@ export default function App() {
   );
 
 
+
+  /**
+   * Anos que têm dados de fato, para o seletor de ano oferecer como atalho.
+   *
+   * Reúne todas as fontes que já foram carregadas: resumos de faturamento,
+   * partições de vendas e os lançamentos de DRE/financeiro do ano corrente.
+   * Não dispara nenhuma leitura nova — usa só o que está em memória, senão o
+   * cabeçalho passaria a custar consultas ao Firestore em todo render.
+   */
+  const yearsWithData = useMemo(() => {
+    const set = new Set<number>();
+    billingSummaries.forEach((m) => { if (m.grossRevenue > 0) set.add(m.year); });
+    salesYears.forEach((y) => set.add(y));
+    saleItems.forEach((i) => { if (i.year) set.add(i.year); });
+    return [...set].filter(Boolean).sort((a, b) => b - a);
+  }, [billingSummaries, salesYears, saleItems]);
 
   // ── Handler: Login via Firebase Auth ─────────────────────────────────────
   // O perfil de acesso (role) vem SEMPRE do registro do usuário no Firestore
@@ -1529,6 +1585,7 @@ export default function App() {
         setActiveTab={setActiveTab}
         selectedYear={selectedYear}
         setSelectedYear={setSelectedYear}
+        yearsWithData={yearsWithData}
         currentUser={currentUser}
         onOpenLoginModal={() => setIsLoginModalOpen(true)}
         onOpenLaunchModal={() => setIsLaunchModalOpen(true)}

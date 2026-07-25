@@ -54,20 +54,54 @@ export const salesCollectionForYear = (year: number) => `vendas_${year}`;
 const sanitizeDocId = (raw: string): string =>
   (raw || '').toString().trim().replace(/[\/\\#?\s]+/g, '_').replace(/^_+|_+$/g, '') || 'sem_id';
 
+/**
+ * Lotes simultâneos. Ver a nota extensa em `billingStockService`: o custo de um
+ * commit é latência de rede, não processamento, então serializar 37 lotes
+ * desperdiça 30 segundos esperando. Seis é o ponto onde o Firestore ainda
+ * absorve a concorrência sem devolver RESOURCE_EXHAUSTED.
+ */
+const BATCH_CONCURRENCY = 6;
+
 async function commitInBatches(
   writes: { path: string; id: string; data: Record<string, any> }[],
   onProgress?: (done: number, total: number) => void
 ): Promise<number> {
+  if (!writes.length) return 0;
   const db = getFirestoreDb();
+
+  const chunks: typeof writes[] = [];
+  for (let i = 0; i < writes.length; i += BATCH_LIMIT) chunks.push(writes.slice(i, i + BATCH_LIMIT));
+
   let done = 0;
-  for (let i = 0; i < writes.length; i += BATCH_LIMIT) {
-    const slice = writes.slice(i, i + BATCH_LIMIT);
-    const batch = writeBatch(db);
-    slice.forEach((w) => batch.set(doc(db, w.path, w.id), w.data, { merge: true }));
-    await batch.commit();
-    done += slice.length;
-    onProgress?.(done, writes.length);
-  }
+  let next = 0;
+
+  const commitChunk = async (chunk: typeof writes): Promise<void> => {
+    const run = async () => {
+      const batch = writeBatch(db);
+      chunk.forEach((w) => batch.set(doc(db, w.path, w.id), w.data, { merge: true }));
+      await batch.commit();
+    };
+    try {
+      await run();
+    } catch (err) {
+      // Uma falha de rede em 1 de 37 lotes não pode perder a importação toda.
+      console.warn('Lote de vendas falhou, tentando uma segunda vez:', err);
+      await new Promise((r) => setTimeout(r, 800));
+      await run();
+    }
+  };
+
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const idx = next++;
+      if (idx >= chunks.length) return;
+      await commitChunk(chunks[idx]);
+      done += chunks[idx].length;
+      onProgress?.(done, writes.length);
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(BATCH_CONCURRENCY, chunks.length) }, () => worker()));
   return done;
 }
 

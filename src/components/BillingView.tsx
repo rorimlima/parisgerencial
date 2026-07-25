@@ -58,7 +58,10 @@ interface BillingViewProps {
   delinquentTitles: DelinquentTitle[];
   selectedYear: number;
   isLoading: boolean;
-  onImportInvoices: (records: InvoiceRecord[]) => Promise<void> | void;
+  onImportInvoices: (
+    records: InvoiceRecord[],
+    onProgress?: (stage: string, done: number, total: number) => void
+  ) => Promise<void> | void;
   onLoadYearDetail: (year: number) => Promise<InvoiceRecord[]>;
   onReload: () => void;
   userRole: string;
@@ -95,6 +98,12 @@ export const BillingView: React.FC<BillingViewProps> = ({
   const [riskFilter, setRiskFilter] = useState<string>('all');
   const [importStatus, setImportStatus] = useState('');
   const [importProgress, setImportProgress] = useState('');
+  // Progresso quantitativo da gravação. Fica separado da mensagem de texto
+  // porque uma barra que anda é a única coisa que distingue "processando 29 mil
+  // linhas" de "travou" — e a diferença entre o usuário esperar ou fechar a aba
+  // no meio, deixando a base pela metade.
+  const [importPct, setImportPct] = useState<{ done: number; total: number } | null>(null);
+  const importStartRef = React.useRef<number>(0);
   const [isImporting, setIsImporting] = useState(false);
   const [detail, setDetail] = useState<InvoiceRecord[]>([]);
   const [detailLoaded, setDetailLoaded] = useState<number | null>(null);
@@ -255,7 +264,16 @@ export const BillingView: React.FC<BillingViewProps> = ({
         `Gravando ${formatInt(parsed.records.length)} linhas de ${years.length} ano(s): ${years.join(', ')}. ` +
         'Registros já existentes são atualizados, não duplicados.'
       );
-      await onImportInvoices(parsed.records);
+      importStartRef.current = Date.now();
+      await onImportInvoices(parsed.records, (stage, done, total) => {
+        setImportProgress(
+          total > 0
+            ? `${stage}: ${formatInt(done)} de ${formatInt(total)}`
+            : stage
+        );
+        setImportPct(total > 0 ? { done, total } : null);
+      });
+      setImportPct(null);
 
       const warn = parsed.missingHeaders.length
         ? ` Atenção: colunas ausentes no arquivo (${parsed.missingHeaders.slice(0, 4).join(', ')}${parsed.missingHeaders.length > 4 ? '...' : ''}).`
@@ -266,14 +284,17 @@ export const BillingView: React.FC<BillingViewProps> = ({
         `${formatInt(new Set(parsed.records.map((r) => r.personCode)).size)} clientes.` +
         (parsed.duplicateKeys ? ` ${parsed.duplicateKeys} chaves repetidas no próprio arquivo foram consolidadas.` : '') +
         (parsed.errors.length ? ` ${parsed.errors.length} linhas ignoradas por erro.` : '') +
+        ` Tempo: ${((Date.now() - importStartRef.current) / 1000).toFixed(1)}s.` +
         warn
       );
       setImportProgress('');
+      setImportPct(null);
       setDetail([]);
       setDetailLoaded(null);
     } catch (err: any) {
       setImportStatus(`Erro ao importar: ${err?.message || err}`);
       setImportProgress('');
+      setImportPct(null);
     } finally {
       setIsImporting(false);
     }
@@ -332,9 +353,31 @@ export const BillingView: React.FC<BillingViewProps> = ({
       </div>
 
       {(importProgress || importStatus) && (
-        <div className="rounded-lg border border-[#C19A6B]/40 bg-[#C19A6B]/10 px-4 py-2.5 text-xs font-semibold text-[#6B5A45] flex items-start justify-between gap-3">
-          <span>{importProgress || importStatus}</span>
-          {!isImporting && <button onClick={() => { setImportStatus(''); setImportProgress(''); }} className="shrink-0"><X className="w-3.5 h-3.5" /></button>}
+        <div className="rounded-lg border border-[#C19A6B]/40 bg-[#C19A6B]/10 px-4 py-2.5 text-xs font-semibold text-[#6B5A45] space-y-2">
+          <div className="flex items-start justify-between gap-3">
+            <span>{importProgress || importStatus}</span>
+            {!isImporting && (
+              <button
+                onClick={() => { setImportStatus(''); setImportProgress(''); setImportPct(null); }}
+                className="shrink-0"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+          {importPct && importPct.total > 0 && (
+            <div className="flex items-center gap-2">
+              <div className="flex-1 h-1.5 rounded-full bg-[#C19A6B]/20 overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-[#C19A6B] transition-[width] duration-200"
+                  style={{ width: `${Math.min(100, (importPct.done / importPct.total) * 100)}%` }}
+                />
+              </div>
+              <span className="text-[10px] tabular-nums shrink-0">
+                {Math.round((importPct.done / importPct.total) * 100)}%
+              </span>
+            </div>
+          )}
         </div>
       )}
 

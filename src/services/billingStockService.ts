@@ -74,25 +74,77 @@ const sanitizeDocId = (raw: string): string =>
 const BATCH_LIMIT = 450;
 
 /**
- * Grava um conjunto de documentos em lotes. Substitui o padrão antigo de
- * `await setDoc(...)` dentro de um `for` — que fazia uma viagem de rede por
- * documento e deixava a importação de milhares de linhas insuportavelmente
- * lenta. Em lote, 450 documentos vão em uma única requisição.
+ * Quantos lotes viajam simultaneamente.
+ *
+ * O gargalo da importação nunca foi o Firestore processar a escrita — é a
+ * LATÊNCIA. Um `commit()` leva ~400–800 ms de ida e volta independentemente de
+ * conter 1 ou 450 documentos. Com 29.320 notas são 66 lotes; em série isso dá
+ * 30 a 50 segundos parados esperando rede, com a CPU ociosa.
+ *
+ * Seis em paralelo transformam 66 viagens sequenciais em ~11 ondas. Por que
+ * seis e não trinta: o Firestore aplica backpressure por conexão e, acima de
+ * ~10 commits concorrentes, começa a devolver RESOURCE_EXHAUSTED em vez de
+ * ficar mais rápido. Seis é a faixa em que ganho de tempo e estabilidade ainda
+ * andam juntos.
+ */
+const BATCH_CONCURRENCY = 6;
+
+/**
+ * Grava um conjunto de documentos em lotes PARALELOS.
+ *
+ * O progresso é reportado a cada lote concluído, não ao final — importação de
+ * dezenas de milhares de linhas sem sinal de vida é indistinguível de
+ * travamento, e o usuário fecha a aba no meio, deixando a base pela metade.
+ *
+ * Um lote que falha é reprocessado uma vez antes de propagar o erro: falha de
+ * rede momentânea em 1 de 66 lotes não deve perder a importação inteira.
  */
 async function commitInBatches(
   writes: { path: string; id: string; data: Record<string, any> }[],
   onProgress?: (done: number, total: number) => void
 ): Promise<number> {
+  if (!writes.length) return 0;
   const db = getFirestoreDb();
-  let done = 0;
+
+  // Fatia o trabalho em lotes antes de disparar, para que os workers só
+  // precisem consumir de um índice compartilhado.
+  const chunks: typeof writes[] = [];
   for (let i = 0; i < writes.length; i += BATCH_LIMIT) {
-    const slice = writes.slice(i, i + BATCH_LIMIT);
-    const batch = writeBatch(db);
-    slice.forEach((w) => batch.set(doc(db, w.path, w.id), w.data, { merge: true }));
-    await batch.commit();
-    done += slice.length;
-    onProgress?.(done, writes.length);
+    chunks.push(writes.slice(i, i + BATCH_LIMIT));
   }
+
+  let done = 0;
+  let next = 0;
+
+  const commitChunk = async (chunk: typeof writes): Promise<void> => {
+    const run = async () => {
+      const batch = writeBatch(db);
+      chunk.forEach((w) => batch.set(doc(db, w.path, w.id), w.data, { merge: true }));
+      await batch.commit();
+    };
+    try {
+      await run();
+    } catch (err) {
+      console.warn('Lote falhou, tentando uma segunda vez:', err);
+      await new Promise((r) => setTimeout(r, 800));
+      await run();
+    }
+  };
+
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const idx = next++;
+      if (idx >= chunks.length) return;
+      await commitChunk(chunks[idx]);
+      done += chunks[idx].length;
+      onProgress?.(done, writes.length);
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(BATCH_CONCURRENCY, chunks.length) }, () => worker())
+  );
+
   return done;
 }
 
@@ -359,6 +411,17 @@ export interface BillingImportResult {
   monthsAffected: string[];
   customersTouched: number;
   totalValue: number;
+  /**
+   * Resumos mensais recém-calculados, já no formato que as telas consomem.
+   *
+   * Devolvê-los aqui é o que faz os cartões atualizarem NA HORA. Antes, a tela
+   * dependia de reler `faturamento_resumo` do Firestore logo após gravar — e
+   * essa releitura frequentemente devolvia o estado anterior, porque a escrita
+   * em lote ainda não tinha propagado. O resultado prático era o usuário
+   * terminar uma importação de 29 mil linhas e continuar vendo "R$ 0,00".
+   * Como já temos os números em memória, não há motivo para ir buscá-los.
+   */
+  summaries: BillingMonthSummary[];
 }
 
 /**
@@ -380,6 +443,7 @@ export const upsertInvoicesBatch = async (
   const result: BillingImportResult = {
     added: 0, updated: 0, unchanged: 0, errors: 0,
     years: [], monthsAffected: [], customersTouched: 0, totalValue: 0,
+    summaries: [],
   };
   if (!invoices.length) return result;
 
@@ -398,21 +462,38 @@ export const upsertInvoicesBatch = async (
   // recálculo dos agregados.
   const mergedByYear = new Map<number, Map<string, InvoiceRecord>>();
 
+  // 2) estado atual de TODOS os anos tocados, lidos em paralelo.
+  //    Sete anos lidos em série somam sete esperas de rede antes de a primeira
+  //    gravação começar. Em paralelo, o custo é o do ano mais lento.
+  onProgress?.('Lendo faturamento já cadastrado', 0, invoices.length);
+  const existingByYear = new Map<number, { hashes: Map<string, string>; merged: Map<string, InvoiceRecord> }>();
+  await Promise.all(
+    [...byYear.keys()].map(async (year) => {
+      const hashes = new Map<string, string>();
+      const merged = new Map<string, InvoiceRecord>();
+      try {
+        const snap = await getDocs(collection(db, billingCollectionForYear(year)));
+        snap.forEach((d) => {
+          const data = d.data();
+          hashes.set(d.id, data.hash || '');
+          merged.set(d.id, invoiceFromFirestore(d.id, data));
+        });
+      } catch {
+        /* coleção ainda não existe — primeira carga deste ano */
+      }
+      existingByYear.set(year, { hashes, merged });
+    })
+  );
+
+  // 3) mescla tudo e junta as gravações de todos os anos numa fila só, para que
+  //    a paralelização do commit trabalhe com o volume total em vez de reiniciar
+  //    a cada ano (anos pequenos desperdiçavam a concorrência disponível).
+  const allWrites: { path: string; id: string; data: Record<string, any> }[] = [];
+
   for (const [year, rows] of byYear) {
     const path = billingCollectionForYear(year);
-    onProgress?.(`Lendo faturamento de ${year} já cadastrado`, 0, rows.length);
+    const { hashes: existingHash, merged } = existingByYear.get(year)!;
 
-    // 2) estado atual do ano no Firestore
-    const existingSnap = await getDocs(collection(db, path));
-    const existingHash = new Map<string, string>();
-    const merged = new Map<string, InvoiceRecord>();
-    existingSnap.forEach((d) => {
-      const data = d.data();
-      existingHash.set(d.id, data.hash || '');
-      merged.set(d.id, invoiceFromFirestore(d.id, data));
-    });
-
-    // 3) mescla e separa apenas o que precisa ser gravado
     const writes: { path: string; id: string; data: Record<string, any> }[] = [];
     for (const inv of rows) {
       try {
@@ -435,10 +516,12 @@ export const upsertInvoicesBatch = async (
       }
     }
 
-    onProgress?.(`Gravando faturamento de ${year}`, 0, writes.length);
-    await commitInBatches(writes, (d, t) => onProgress?.(`Gravando faturamento de ${year}`, d, t));
+    allWrites.push(...writes);
     mergedByYear.set(year, merged);
   }
+
+  onProgress?.('Gravando notas fiscais', 0, allWrites.length);
+  await commitInBatches(allWrites, (d, t) => onProgress?.('Gravando notas fiscais', d, t));
 
   // 4) recalcula os resumos mensais a partir do conjunto mesclado
   const summaryWrites: { path: string; id: string; data: Record<string, any> }[] = [];
@@ -453,6 +536,7 @@ export const upsertInvoicesBatch = async (
       const summary = buildMonthSummary(year, monthKey, list);
       result.monthsAffected.push(summary.id);
       result.totalValue += summary.grossRevenue;
+      result.summaries.push(summary);
       summaryWrites.push({
         path: BILLING_SUMMARY_COLLECTION,
         id: summary.id,
