@@ -6,24 +6,50 @@
  * Todos os dados vêm do Firestore (Firebase). Sem dados hardcoded.
  */
 
-import React, { useEffect, useState, useCallback } from 'react';
-import { CustomerManagementView } from './components/CustomerManagementView';
+import React, { useEffect, useState, useCallback, Suspense, lazy } from 'react';
 import { DashboardView } from './components/DashboardView';
-import { DelinquencyReportView } from './components/DelinquencyReportView';
-import { EconomicView } from './components/EconomicView';
-import { FinancialView } from './components/FinancialView';
-import { ImportDataView } from './components/ImportDataView';
 import { LaunchModal } from './components/LaunchModal';
 import { LoginModal } from './components/LoginModal';
 import { Navbar } from './components/Navbar';
 import { PwaInstallBanner } from './components/PwaBanners';
 import { Sidebar } from './components/Sidebar';
-import { SellersManagementView } from './components/SellersManagementView';
-import { ApiIntegrationDocsView } from './components/ApiIntegrationDocsView';
-import { PostgresSettingsView } from './components/PostgresSettingsView';
-import { FinancialStatementView } from './components/FinancialStatementView';
-import { PayablesView, RawPayableRow } from './components/PayablesView';
-import { CashFlowView } from './components/CashFlowView';
+import type { RawPayableRow } from './components/PayablesView';
+
+/**
+ * CARREGAMENTO SOB DEMANDA DAS TELAS
+ * ----------------------------------
+ * Antes, todas as 14 telas entravam em um único pacote JavaScript: abrir o
+ * sistema baixava e interpretava o código de Fluxo de Caixa, Contas a Pagar,
+ * Extrato, PDF, gráficos — mesmo que a pessoa só quisesse ver o Dashboard. Com
+ * `lazy`, cada tela vira um arquivo separado, baixado apenas quando aquela aba
+ * é aberta pela primeira vez (e depois fica em cache). O Dashboard continua no
+ * pacote principal porque é a tela inicial — adiá-lo só adicionaria um piscar.
+ */
+const CustomerManagementView = lazy(() => import('./components/CustomerManagementView').then((m) => ({ default: m.CustomerManagementView })));
+const DelinquencyReportView = lazy(() => import('./components/DelinquencyReportView').then((m) => ({ default: m.DelinquencyReportView })));
+const EconomicView = lazy(() => import('./components/EconomicView').then((m) => ({ default: m.EconomicView })));
+const FinancialView = lazy(() => import('./components/FinancialView').then((m) => ({ default: m.FinancialView })));
+const ImportDataView = lazy(() => import('./components/ImportDataView').then((m) => ({ default: m.ImportDataView })));
+const SellersManagementView = lazy(() => import('./components/SellersManagementView').then((m) => ({ default: m.SellersManagementView })));
+const ApiIntegrationDocsView = lazy(() => import('./components/ApiIntegrationDocsView').then((m) => ({ default: m.ApiIntegrationDocsView })));
+const PostgresSettingsView = lazy(() => import('./components/PostgresSettingsView').then((m) => ({ default: m.PostgresSettingsView })));
+const FinancialStatementView = lazy(() => import('./components/FinancialStatementView').then((m) => ({ default: m.FinancialStatementView })));
+const PayablesView = lazy(() => import('./components/PayablesView').then((m) => ({ default: m.PayablesView })));
+const CashFlowView = lazy(() => import('./components/CashFlowView').then((m) => ({ default: m.CashFlowView })));
+const BillingView = lazy(() => import('./components/BillingView').then((m) => ({ default: m.BillingView })));
+const StockView = lazy(() => import('./components/StockView').then((m) => ({ default: m.StockView })));
+const SalesView = lazy(() => import('./components/SalesView').then((m) => ({ default: m.SalesView })));
+
+/** Esqueleto mostrado enquanto o código de uma tela é baixado. */
+const ViewSkeleton: React.FC = () => (
+  <div className="space-y-4 animate-pulse">
+    <div className="h-7 w-64 bg-[#E5E0D8] rounded-lg" />
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      {[0, 1, 2, 3].map((i) => <div key={i} className="h-24 bg-[#E5E0D8]/70 rounded-xl" />)}
+    </div>
+    <div className="h-64 bg-[#E5E0D8]/50 rounded-xl" />
+  </div>
+);
 
 import {
   getEconomicData,
@@ -68,18 +94,45 @@ import {
 } from './firebaseService';
 
 import {
+  fetchBillingSummaries,
+  fetchBillingCustomers,
+  fetchInvoicesByYear,
+  upsertInvoicesBatch,
+  fetchStockItems,
+  fetchStockSummary,
+  upsertStockBatch,
+} from './services/billingStockService';
+
+import {
+  fetchSalesByYear,
+  fetchSalesYears,
+  saveSalesAuditSnapshot,
+  saveSalesSummaries,
+  syncSellersFromSales,
+  upsertSalesBatch,
+} from './services/salesService';
+import type { SellerSyncResult } from './services/salesService';
+import { auditSales, buildSalesMonthSummaries } from './utils/salesAudit';
+
+import {
   ApiToken,
+  BillingCustomerSummary,
+  BillingMonthSummary,
   Customer,
   DelinquentTitle,
   DelinquencyValidationRowResult,
   EconomicMonthData,
   FinancialMonthData,
   FinancialStatementEntry,
+  InvoiceRecord,
   PayableTitle,
   CashFlowPlan,
   PostgresConfig,
+  SaleItem,
   Seller,
   StatementSource,
+  StockItem,
+  StockSummary,
   ValidationRowResult,
   ViewTab,
   User,
@@ -89,7 +142,7 @@ import {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ViewTab>('dashboard');
-  const [importTargetModule, setImportTargetModule] = useState<'financial' | 'economic' | 'customers' | 'delinquency'>('financial');
+  const [importTargetModule, setImportTargetModule] = useState<'financial' | 'economic' | 'customers' | 'delinquency' | 'sales'>('financial');
   const [selectedYear, setSelectedYear] = useState<number>(2026);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
     return typeof window !== 'undefined' ? window.innerWidth >= 768 : true;
@@ -115,6 +168,26 @@ export default function App() {
   const [payables, setPayables] = useState<PayableTitle[]>([]);
   const [cashFlowPlans, setCashFlowPlans] = useState<CashFlowPlan[]>([]);
   const [loginError, setLoginError] = useState<string>('');
+
+  // ── Faturamento e Estoque (carregados sob demanda, ver loadBilling/loadStock)
+  const [billingSummaries, setBillingSummaries] = useState<BillingMonthSummary[]>([]);
+  const [billingCustomers, setBillingCustomers] = useState<BillingCustomerSummary[]>([]);
+  const [stockItems, setStockItems] = useState<StockItem[]>([]);
+  const [stockSummary, setStockSummary] = useState<StockSummary | null>(null);
+  const [isBillingLoading, setIsBillingLoading] = useState(false);
+  const [isStockLoading, setIsStockLoading] = useState(false);
+  const [billingLoaded, setBillingLoaded] = useState(false);
+  const [stockLoaded, setStockLoaded] = useState(false);
+
+  // ── Vendas de Produtos (RPR001) ──────────────────────────────────────────
+  // Mesma política do Faturamento e do Estoque: 16 mil linhas não entram na
+  // memória no login. A carga acontece ao abrir a aba, e traz os anos mais
+  // recentes primeiro — que é o recorte que responde 90% das perguntas.
+  const [saleItems, setSaleItems] = useState<SaleItem[]>([]);
+  const [salesYears, setSalesYears] = useState<number[]>([]);
+  const [loadedSalesYears, setLoadedSalesYears] = useState<number[]>([]);
+  const [isSalesLoading, setIsSalesLoading] = useState(false);
+  const [salesLoaded, setSalesLoaded] = useState(false);
 
   // Config Postgres mantida apenas para exibição da tela de configurações
   const [postgresConfig] = useState<PostgresConfig>({
@@ -190,6 +263,187 @@ export default function App() {
     }
     loadYearData(selectedYear);
   }, [selectedYear, loadYearData, currentUser]);
+
+  // ── Faturamento e Estoque: carregam SÓ quando a aba é aberta ──────────────
+  // Estas duas bases são as maiores do sistema (29 mil notas, 5 mil SKUs).
+  // Carregá-las no login pesaria em todo mundo, inclusive em quem só quer ver
+  // o DRE. Então elas ficam adormecidas até a aba correspondente ser aberta —
+  // e mesmo aí, o Faturamento lê apenas os resumos mensais, nunca as notas.
+  const loadBilling = useCallback(async (force = false) => {
+    if (isBillingLoading || (billingLoaded && !force)) return;
+    setIsBillingLoading(true);
+    try {
+      const [sums, custs] = await Promise.all([fetchBillingSummaries(), fetchBillingCustomers()]);
+      setBillingSummaries(sums);
+      setBillingCustomers(custs);
+      setBillingLoaded(true);
+    } catch (err: any) {
+      console.error('Erro ao carregar faturamento:', err.message);
+    } finally {
+      setIsBillingLoading(false);
+    }
+  }, [isBillingLoading, billingLoaded]);
+
+  const loadStock = useCallback(async (force = false) => {
+    if (isStockLoading || (stockLoaded && !force)) return;
+    setIsStockLoading(true);
+    try {
+      const [items, summary] = await Promise.all([fetchStockItems(), fetchStockSummary()]);
+      setStockItems(items);
+      setStockSummary(summary);
+      setStockLoaded(true);
+    } catch (err: any) {
+      console.error('Erro ao carregar estoque:', err.message);
+    } finally {
+      setIsStockLoading(false);
+    }
+  }, [isStockLoading, stockLoaded]);
+
+  /**
+   * Carga das vendas. Traz os DOIS anos mais recentes por padrão, não o
+   * histórico inteiro: seis anos são ~16 mil documentos e a análise de margem
+   * corrente raramente precisa de 2020. Os anos anteriores ficam disponíveis
+   * sob demanda pelo seletor "Carregar ano" da própria tela.
+   */
+  const loadSales = useCallback(async (force = false) => {
+    if (isSalesLoading || (salesLoaded && !force)) return;
+    setIsSalesLoading(true);
+    try {
+      const years = await fetchSalesYears();
+      setSalesYears(years);
+      const target = years.slice(0, 2);
+      const chunks = await Promise.all(target.map((y) => fetchSalesByYear(y)));
+      setSaleItems(chunks.flat());
+      setLoadedSalesYears(target);
+      setSalesLoaded(true);
+    } catch (err: any) {
+      console.error('Erro ao carregar vendas:', err.message);
+    } finally {
+      setIsSalesLoading(false);
+    }
+  }, [isSalesLoading, salesLoaded]);
+
+  /** Acrescenta um ano ao que já está em memória, sem recarregar o resto. */
+  const handleLoadSalesYear = useCallback(async (year: number) => {
+    if (loadedSalesYears.includes(year)) return;
+    setIsSalesLoading(true);
+    try {
+      const rows = await fetchSalesByYear(year);
+      setSaleItems((prev) => {
+        const seen = new Set(prev.map((p) => p.dedupeKey));
+        return [...prev, ...rows.filter((r) => !seen.has(r.dedupeKey))];
+      });
+      setLoadedSalesYears((prev) => [...prev, year]);
+    } catch (err: any) {
+      console.error(`Erro ao carregar vendas de ${year}:`, err.message);
+    } finally {
+      setIsSalesLoading(false);
+    }
+  }, [loadedSalesYears]);
+
+  // ── Handler: importação do RPR001 (Vendas de Produtos) ───────────────────
+  // Grava o detalhe, recalcula os resumos mensais com o MESMO motor que a tela
+  // usa (salesAudit) e guarda o retrato da auditoria. Reusar o motor é
+  // deliberado: se o serviço tivesse a própria fórmula de margem, painel e
+  // banco divergiriam na primeira mudança de regra.
+  const handleImportSales = useCallback(async (items: SaleItem[]) => {
+    const result = await upsertSalesBatch(items);
+    console.info(
+      `[Vendas] ${result.added} novas, ${result.updated} atualizadas, ` +
+      `${result.unchanged} sem alteração, ${result.errors} erros.`
+    );
+
+    const audit = auditSales(items, stockItems, customers);
+    await saveSalesSummaries(buildSalesMonthSummaries(audit.audited));
+
+    for (const year of result.years.filter(Boolean)) {
+      const yearAudit = auditSales(
+        items.filter((i) => i.year === year),
+        stockItems,
+        customers
+      );
+      await saveSalesAuditSnapshot({
+        year,
+        totalRiskAmount: yearAudit.risk.totalRiskAmount,
+        negativeMarginAmount: yearAudit.risk.negativeMarginAmount,
+        negativeMarginLines: yearAudit.risk.negativeMarginLines,
+        excessDiscountAmount: yearAudit.risk.excessDiscountAmount,
+        excessDiscountLines: yearAudit.risk.excessDiscountLines,
+        marginGapAmount: yearAudit.risk.marginGapAmount,
+        priceGapAmount: yearAudit.risk.priceGapAmount,
+        relatedPartyRevenue: yearAudit.risk.relatedPartyRevenue,
+        thresholds: {},
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    await loadSales(true);
+  }, [stockItems, customers, loadSales]);
+
+  /**
+   * Cadastra a equipe de vendas a partir das notas.
+   *
+   * É o passo que faz a inadimplência encontrar o responsável: o RFN029 traz o
+   * vendedor por nome, o RPR001 traz por código, e só o cadastro `vendedores`
+   * casa os dois. Depois de sincronizar, recarregamos os dados mestre para que
+   * a tela de Vendedores e o cruzamento de inadimplência já enxerguem os novos.
+   */
+  const handleSyncSellersFromSales = useCallback(
+    async (items: SaleItem[]): Promise<SellerSyncResult | null> => {
+      try {
+        const result = await syncSellersFromSales(items, sellers);
+        if (result.created.length || result.codeFilled.length) {
+          const refreshed = await getVendedores();
+          setSellers(refreshed);
+        }
+        console.info(
+          `[Vendedores] ${result.created.length} cadastrados, ${result.existing} já existiam, ` +
+          `${result.codeFilled.length} com código preenchido, ${result.duplicates.length} duplicidades na origem.`
+        );
+        return result;
+      } catch (err: any) {
+        console.error('Erro ao sincronizar vendedores:', err.message);
+        return null;
+      }
+    },
+    [sellers]
+  );
+
+  useEffect(() => {
+    if (!currentUser) return;
+    if (activeTab === 'billing') loadBilling();
+    if (activeTab === 'stock') loadStock();
+    // Vendas depende do Estoque e dos Clientes para os vínculos; o Estoque é
+    // carregado junto para que a coluna "custo atual" não apareça vazia na
+    // primeira abertura da aba.
+    if (activeTab === 'sales') { loadSales(); loadStock(); }
+  }, [activeTab, currentUser, loadBilling, loadStock, loadSales]);
+
+  // ── Handler: importação do RPR014 (Faturamento) ──────────────────────────
+  const handleImportInvoices = useCallback(async (records: InvoiceRecord[]) => {
+    const result = await upsertInvoicesBatch(records);
+    console.info(
+      `[Faturamento] ${result.added} novos, ${result.updated} atualizados, ` +
+      `${result.unchanged} sem alteração, ${result.errors} erros.`
+    );
+    await loadBilling(true);
+  }, [loadBilling]);
+
+  // ── Handler: importação do RPR053 (Estoque / Lista de Preço) ─────────────
+  const handleImportStock = useCallback(async (items: StockItem[]) => {
+    const result = await upsertStockBatch(items);
+    console.info(
+      `[Estoque] ${result.added} novos, ${result.updated} atualizados, ` +
+      `${result.unchanged} sem alteração, ${result.errors} erros.`
+    );
+    await loadStock(true);
+  }, [loadStock]);
+
+  // Detalhe nota a nota de um ano — só quando o usuário pede explicitamente.
+  const handleLoadInvoiceDetail = useCallback(
+    async (year: number): Promise<InvoiceRecord[]> => fetchInvoicesByYear(year),
+    []
+  );
 
 
 
@@ -535,55 +789,88 @@ export default function App() {
     return updated;
   };
 
-  // ── Handler: Importação de Inadimplência (UPSERT + recálculo por cod_cliente) ─
+  // ── Handler: Importação de Inadimplência ────────────────────────────────────
+  //
+  // `Pessoa_CodigoDevedor` da planilha é gravado em `customerCode` e é a chave
+  // que amarra o título ao cadastro (`Customer.code`). Devedor que ainda não
+  // existe no cadastro é criado na hora com os dados da própria planilha (nome,
+  // CPF/CNPJ, telefone) — sem isso o título ficaria órfão e a dívida não
+  // apareceria no cadastro do cliente, que é justamente o relatório que o
+  // pessoal de cobrança abre.
   const handleCommitDelinquencyImport = async (
     validEntries: DelinquencyValidationRowResult[]
   ) => {
-    const titlesToSave: Omit<DelinquentTitle, 'id'>[] = validEntries
-      .filter((e) => e.parsedTitle)
-      .map((e) => {
-        const p = e.parsedTitle!;
-        const customerCode = (p.customerCode as string) || (e as any).rawCustomerCode || '';
+    const parsedTitles = validEntries.map((e) => e.parsedTitle).filter(Boolean) as Partial<DelinquentTitle>[];
+    if (parsedTitles.length === 0) return;
 
-        // Vincula cliente por cod_cliente e, como fallback, por nome
-        const matchedCustomer = customers.find(
-          (c) =>
-            (customerCode && c.code.toLowerCase() === customerCode.toLowerCase()) ||
-            c.name.toLowerCase() === e.rawCustomerName.toLowerCase()
-        );
+    try {
+      // 1) Descobre quais devedores ainda não têm cadastro
+      const byCode = new Map(customers.filter((c) => c.code).map((c) => [c.code.toLowerCase(), c]));
+      const byName = new Map(customers.map((c) => [c.name.trim().toLowerCase(), c]));
+
+      const missing = new Map<string, Partial<Customer>>();
+      parsedTitles.forEach((p) => {
+        const code = (p.customerCode || '').trim();
+        const name = (p.customerName || '').trim();
+        if (!code) return;
+        const exists = byCode.get(code.toLowerCase()) || byName.get(name.toLowerCase());
+        if (exists || missing.has(code.toLowerCase())) return;
+        missing.set(code.toLowerCase(), {
+          code,
+          name,
+          cnpjCpf: p.cnpjCpf || '',
+          phone: p.customerPhone || '',
+          cellphone: p.customerPhone || '',
+          contactName: '',
+          email: '',
+          city: '',
+          state: '',
+          creditLimit: 0,
+          currentBalance: 0,
+          delinquentAmount: 0,
+          status: 'Inadimplente',
+          sellerResponsible: p.sellerName || '',
+          relationshipType: 'Cliente',
+          // CPF tem 11 dígitos; acima disso é CNPJ. Serve só de palpite inicial —
+          // o cadastro completo do cliente sobrescreve na próxima importação.
+          personType: (p.cnpjCpf || '').replace(/\D/g, '').length > 11 ? 'J' : 'F',
+        });
+      });
+
+      let workingCustomers = customers;
+      if (missing.size > 0) {
+        await upsertClientes([...missing.values()]);
+        workingCustomers = await getClientes();
+        setCustomers(workingCustomers);
+        console.log(`Clientes criados a partir da inadimplência: ${missing.size}`);
+      }
+
+      // 2) Vincula cada título ao cliente (por código e, como rede, por nome)
+      const codeIndex = new Map(workingCustomers.filter((c) => c.code).map((c) => [c.code.toLowerCase(), c]));
+      const nameIndex = new Map(workingCustomers.map((c) => [c.name.trim().toLowerCase(), c]));
+
+      const titlesToSave: Omit<DelinquentTitle, 'id'>[] = parsedTitles.map((p) => {
+        const code = (p.customerCode || '').trim();
+        const matched =
+          (code ? codeIndex.get(code.toLowerCase()) : undefined) ||
+          nameIndex.get((p.customerName || '').trim().toLowerCase());
 
         return {
-          titleNumber: p.titleNumber || `IMP-${Date.now()}`,
-          parcela: p.parcela || '',
-          customerId: matchedCustomer?.id || p.customerId || '',
-          customerCode: matchedCustomer?.code || customerCode,
-          customerName: matchedCustomer?.name || e.rawCustomerName,
-          sellerId: p.sellerId || '',
-          sellerCode: p.sellerCode || '',
-          sellerName: p.sellerName || '',
-          cnpjCpf: p.cnpjCpf || e.rawCnpjCpf || matchedCustomer?.cnpjCpf || '',
-          issueDate: p.issueDate || '',
-          dueDate: p.dueDate || e.rawDueDate,
-          originalAmount: p.originalAmount || 0,
-          updatedAmount: p.updatedAmount || p.originalAmount || 0,
-          juros: p.juros || 0,
-          multa: p.multa || 0,
-          daysOverdue: p.daysOverdue || 0,
-          agingBucket: (p.agingBucket as DelinquentTitle['agingBucket']) || '1-30',
-          collectionStatus: (p.collectionStatus as DelinquentTitle['collectionStatus']) || 'Aguardando',
-          notes: p.notes || '',
+          ...(p as Omit<DelinquentTitle, 'id' | 'customerId'>),
+          customerId: matched?.id || '',
+          customerCode: matched?.code || code,
+          customerName: p.customerName || matched?.name || '',
+          cnpjCpf: p.cnpjCpf || matched?.cnpjCpf || '',
         };
       });
 
-    if (titlesToSave.length === 0) return;
-
-    try {
       const result = await upsertTitulos(titlesToSave);
       console.log(`Títulos importados: ${result.added} novos, ${result.updated} atualizados.`);
-      // Recarrega títulos reais do Firestore e recalcula a dívida dos clientes
+
+      // 3) Recarrega os títulos reais e recalcula a dívida de cada cliente
       const freshTitles = await getTitulosInadimplentes();
       setDelinquentTitles(freshTitles);
-      await applyDelinquencyToCustomers(freshTitles, customers);
+      await applyDelinquencyToCustomers(freshTitles, workingCustomers);
     } catch (err: any) {
       console.error('Erro ao importar inadimplência:', err?.message || err);
     }
@@ -1249,7 +1536,14 @@ export default function App() {
         onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
       />
 
-      <div className="flex-1 flex overflow-hidden">
+      {/*
+        Layout: a rolagem acontece na JANELA, não em um contêiner interno. É o
+        que permite a lateral ficar realmente fixa (`sticky top-16`) enquanto a
+        tabela do meio rola. Com `overflow-hidden` no pai, como era antes, o
+        `sticky` não tem efeito e o menu subia junto com o conteúdo.
+        `min-w-0` no <main> impede que uma tabela larga empurre a lateral.
+      */}
+      <div className="flex-1 flex items-start">
         {/* Sidebar */}
         <Sidebar
           activeTab={activeTab}
@@ -1260,7 +1554,8 @@ export default function App() {
         />
 
         {/* Main Content */}
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6">
+        <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 space-y-6">
+          <Suspense fallback={<ViewSkeleton />}>
           {activeTab === 'dashboard' && (
             <DashboardView
               economicMonths={economicData}
@@ -1327,10 +1622,58 @@ export default function App() {
             />
           )}
 
+          {activeTab === 'billing' && (
+            <BillingView
+              summaries={billingSummaries}
+              billingCustomers={billingCustomers}
+              customers={customers}
+              delinquentTitles={delinquentTitles}
+              selectedYear={selectedYear}
+              isLoading={isBillingLoading}
+              onImportInvoices={handleImportInvoices}
+              onLoadYearDetail={handleLoadInvoiceDetail}
+              onReload={() => loadBilling(true)}
+              userRole={currentUser.role}
+            />
+          )}
+
+          {activeTab === 'stock' && (
+            <StockView
+              items={stockItems}
+              summary={stockSummary}
+              isLoading={isStockLoading}
+              onImportStock={handleImportStock}
+              onReload={() => loadStock(true)}
+              userRole={currentUser.role}
+            />
+          )}
+
+          {activeTab === 'sales' && (
+            <SalesView
+              items={saleItems}
+              stockItems={stockItems}
+              customers={customers}
+              sellers={sellers}
+              delinquentTitles={delinquentTitles}
+              availableYears={salesYears.filter((y) => !loadedSalesYears.includes(y))}
+              selectedYear={selectedYear}
+              isLoading={isSalesLoading}
+              onImportSales={handleImportSales}
+              onSyncSellers={handleSyncSellersFromSales}
+              onReload={() => loadSales(true)}
+              onLoadYear={handleLoadSalesYear}
+              userRole={currentUser.role}
+            />
+          )}
+
           {activeTab === 'import' && (
             <ImportDataView
               onCommitImport={handleCommitImport}
               onCommitDelinquencyImport={handleCommitDelinquencyImport}
+              onCommitSalesImport={async (rows) => {
+                await handleImportSales(rows);
+                await handleSyncSellersFromSales(rows);
+              }}
               selectedYear={selectedYear}
               initialModule={importTargetModule}
             />
@@ -1339,6 +1682,7 @@ export default function App() {
           {activeTab === 'customers' && (
             <CustomerManagementView
               customers={customers}
+              delinquentTitles={delinquentTitles}
               onAddCustomer={handleAddCustomer}
               onUpdateCustomer={handleUpdateCustomer}
               onDeleteCustomer={handleDeleteCustomer}
@@ -1389,6 +1733,7 @@ export default function App() {
               onTestConnection={handleTestPostgresConnection}
             />
           )}
+          </Suspense>
         </main>
       </div>
 

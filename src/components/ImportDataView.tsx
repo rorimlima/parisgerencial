@@ -15,7 +15,15 @@ import {
   Info,
   UploadCloud,
 } from 'lucide-react';
-import { Customer, DelinquencyValidationRowResult, ValidationRowResult } from '../types';
+import { Customer, DelinquencyValidationRowResult, SaleItem, ValidationRowResult } from '../types';
+import {
+  formatPhoneBr,
+  parseDelinquencyRows,
+  parseSalesRows,
+  ParsedSalesSheet,
+  RFN029_EXPECTED_HEADERS,
+  RPR001_EXPECTED_HEADERS,
+} from '../utils/sheetParsers';
 
 interface ImportDataViewProps {
   onCommitImport: (
@@ -26,8 +34,14 @@ interface ImportDataViewProps {
   onCommitDelinquencyImport: (
     validEntries: DelinquencyValidationRowResult[]
   ) => void;
+  /**
+   * Carga das vendas de produto (RPR001). Opcional para não quebrar telas que
+   * montam este componente sem o módulo de vendas — quando ausente, a opção
+   * simplesmente não aparece no seletor.
+   */
+  onCommitSalesImport?: (items: SaleItem[]) => Promise<void> | void;
   selectedYear: number;
-  initialModule?: 'economic' | 'financial' | 'customers' | 'delinquency';
+  initialModule?: 'economic' | 'financial' | 'customers' | 'delinquency' | 'sales';
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -81,46 +95,17 @@ const pick = (row: any, keys: string[]): string => {
   return '';
 };
 
-const normalizeStatus = (raw: string): string => {
-  const map: Record<string, string> = {
-    aguardando: 'Aguardando',
-    'em cobrança': 'Em Cobrança',
-    'em cobranca': 'Em Cobrança',
-    negativado: 'Negativado',
-    'acordo em andamento': 'Acordo em Andamento',
-    judicial: 'Judicial',
-  };
-  return map[raw.toLowerCase().trim()] || 'Aguardando';
-};
-
-const normalizeAging = (raw: string, days: number): string => {
-  if (raw) {
-    const map: Record<string, string> = {
-      '1-30': '1-30',
-      '31-60': '31-60',
-      '61-90': '61-90',
-      '>90': '>90',
-      '+90': '>90',
-      'mais de 90': '>90',
-    };
-    const found = map[raw.trim()];
-    if (found) return found;
-  }
-  if (days <= 30) return '1-30';
-  if (days <= 60) return '31-60';
-  if (days <= 90) return '61-90';
-  return '>90';
-};
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export const ImportDataView: React.FC<ImportDataViewProps> = ({
   onCommitImport,
   onCommitDelinquencyImport,
+  onCommitSalesImport,
   selectedYear,
   initialModule,
 }) => {
-  const [targetModule, setTargetModule] = useState<'economic' | 'financial' | 'customers' | 'delinquency'>(initialModule || 'financial');
+  const [targetModule, setTargetModule] = useState<'economic' | 'financial' | 'customers' | 'delinquency' | 'sales'>(initialModule || 'financial');
   const [year, setYear] = useState<number>(selectedYear || 2026);
   const [isDragOver, setIsDragOver] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -129,6 +114,21 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
   const [validationResults, setValidationResults] = useState<ValidationRowResult[]>([]);
   // Resultados inadimplência
   const [delinquencyResults, setDelinquencyResults] = useState<DelinquencyValidationRowResult[]>([]);
+  // Diagnóstico da leitura do RFN029 (linhas de histórico, duplicatas, layout)
+  const [delinquencyMeta, setDelinquencyMeta] = useState<{
+    totalRows: number;
+    titleRows: number;
+    occurrenceRows: number;
+    duplicateKeys: number;
+    missingHeaders: string[];
+    extraHeaders: string[];
+  } | null>(null);
+
+  // Resultado da leitura do RPR001 (Vendas de Produtos). Guardamos a análise
+  // inteira, não só as linhas: o diagnóstico de integridade é parte do que o
+  // gestor precisa ver ANTES de confirmar a carga.
+  const [salesParsed, setSalesParsed] = useState<ParsedSalesSheet | null>(null);
+  const [isCommittingSales, setIsCommittingSales] = useState(false);
 
   const [filterStatus, setFilterStatus] = useState<'all' | 'valid' | 'invalid'>('all');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -142,6 +142,7 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
     setImportSuccessMsg(null);
     setValidationResults([]);
     setDelinquencyResults([]);
+    setDelinquencyMeta(null);
 
     const ext = file.name.split('.').pop()?.toLowerCase();
 
@@ -193,7 +194,9 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
   };
 
   const handleRows = (rawRows: any[]) => {
-    if (targetModule === 'delinquency') {
+    if (targetModule === 'sales') {
+      setSalesParsed(parseSalesRows(rawRows));
+    } else if (targetModule === 'delinquency') {
       validateDelinquencyRows(rawRows);
     } else if (targetModule === 'customers') {
       validateCustomerRows(rawRows);
@@ -345,159 +348,69 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
 
   // ── Validação de inadimplência ────────────────────────────────────────────
 
+  /**
+   * A leitura do RFN029 é feita pelo parser central (`parseDelinquencyRows`),
+   * que reconhece os cabeçalhos por nome normalizado — acento, caixa e espaços
+   * no export do ERP deixam de quebrar a carga. O que sobra aqui é só a
+   * projeção do título já lido para as linhas de conferência da tela.
+   */
   const validateDelinquencyRows = (rawRows: any[]) => {
     if (!rawRows || rawRows.length === 0) {
       setDelinquencyResults([]);
+      setDelinquencyMeta(null);
       return;
     }
 
-    // A planilha RFN029 traz uma coluna "Registro": 'T' = título; 'O' = ocorrência/histórico.
-    // Importamos APENAS os títulos ('T'); linhas de histórico são ignoradas.
-    // Se a planilha não tiver a coluna Registro, todas as linhas são consideradas títulos.
-    const hasRegistro = rawRows.some((r) => r && (r['Registro'] !== undefined || r['registro'] !== undefined));
-    const titleRows = hasRegistro
-      ? rawRows.filter((r) => {
-          const reg = pick(r, ['Registro', 'registro']).toUpperCase();
-          return reg === 'T';
-        })
-      : rawRows;
+    const parsed = parseDelinquencyRows(rawRows);
 
-    const validated: DelinquencyValidationRowResult[] = titleRows.map((row: any, idx: number) => {
-      const errors: string[] = [];
-
-      const rawTitleNumber = pick(row, [
-        'Titulo_Numero', 'numero_titulo', 'Nº Título', 'N titulo', 'Titulo',
-        'TITULO', 'titulo', 'number', 'Number',
-      ]);
-
-      const rawParcela = pick(row, ['Titulo_Parcela', 'parcela', 'Parcela', 'PARCELA']);
-
-      const rawCustomerName = pick(row, [
-        'Devedor', 'devedor', 'DEVEDOR', 'cliente', 'Cliente', 'CLIENTE',
-        'cliente_nome', 'Nome', 'nome', 'customer',
-      ]);
-
-      // Código do cliente para vínculo — CHAVE = cod_cliente
-      const rawCustomerCode = pick(row, [
-        'cod_cliente', 'Cod_Cliente', 'COD_CLIENTE', 'codigo_cliente',
-        'Código Cliente', 'codigo', 'Cod', 'cod',
-      ]);
-
-      const rawSellerName = pick(row, [
-        'Vendedor', 'vendedor', 'VENDEDOR', 'vendedor_nome',
-        'Nome Vendedor', 'Vendedor Responsável',
-      ]);
-
-      const rawSellerCode = pick(row, [
-        'cod_vendedor', 'Cod Vendedor', 'COD_VENDEDOR', 'codigo_vendedor',
-        'Código Vendedor', 'cod_vend',
-      ]);
-
-      const rawCnpjCpf = pick(row, [
-        'DevedorCpfCnpj', 'cnpj_cpf', 'CNPJ', 'CPF', 'cnpj', 'cpf', 'CNPJ/CPF',
-      ]);
-
-      const rawIssueDate = normalizeDate(pick(row, [
-        'Emissão', 'data_emissao', 'emissao', 'Emissao', 'DATA EMISSAO', 'Lançamento',
-      ]));
-
-      const rawDueDate = normalizeDate(pick(row, [
-        'Vencimento', 'data_vencimento', 'vencimento', 'VENCIMENTO', 'Due Date',
-      ]));
-
-      const rawOriginalAmount = pick(row, [
-        'Valor', 'valor_original', 'Valor Original', 'valor', 'VALOR', 'original', 'amount',
-      ]);
-
-      const rawUpdatedAmount = pick(row, ['valor_atualizado', 'Valor Atualizado', 'valor atualizado']);
-
-      const rawJuros = pick(row, ['Juros', 'juros', 'JUROS']);
-      const rawMulta = pick(row, ['Multa', 'multa', 'MULTA']);
-
-      const rawDaysOverdue = pick(row, [
-        'Atr', 'dias_atraso', 'Dias Atraso', 'dias atraso', 'DIAS ATRASO',
-        'Atraso', 'atraso', 'days',
-      ]);
-
-      const rawAgingBucket = pick(row, ['faixa_aging', 'Aging', 'aging', 'AGING', 'faixa', 'Faixa']);
-
-      const rawCollectionStatus = pick(row, [
-        'status_cobranca', 'Status', 'status', 'STATUS', 'Status Cobrança', 'status cobranca',
-      ]);
-
-      const rawNotes = pick(row, [
-        'observacoes', 'Observações', 'obs', 'Obs', 'notas', 'notes',
-        'TituloHistorico_Observacao', 'Ocorrencia',
-      ]);
-
-      // Validações obrigatórias
-      if (!rawCustomerName) errors.push('Nome do cliente é obrigatório');
-      if (!rawDueDate) errors.push('Data de vencimento é obrigatória');
-      const originalAmount = parseAmount(rawOriginalAmount);
-      if (!rawOriginalAmount) {
-        errors.push('Valor original é obrigatório');
-      } else if (originalAmount <= 0) {
-        errors.push('Valor original deve ser maior que zero');
-      }
-
-      // Calcula dias em atraso se não fornecido
-      let calcDays = parseInt(rawDaysOverdue, 10) || 0;
-      if (!calcDays && rawDueDate) {
-        const due = new Date(rawDueDate);
-        const today = new Date();
-        if (!isNaN(due.getTime())) {
-          calcDays = Math.max(0, Math.floor((today.getTime() - due.getTime()) / (1000 * 60 * 60 * 24)));
-        }
-      }
-
-      const juros = parseAmount(rawJuros);
-      const multa = parseAmount(rawMulta);
-      // Valor atualizado = valor informado OU (original + juros + multa)
-      const updatedAmount = parseAmount(rawUpdatedAmount) || (originalAmount + juros + multa);
-
-      const parsedTitle = errors.length === 0 ? {
-        titleNumber: rawTitleNumber || `IMP-${String(idx + 1).padStart(4, '0')}`,
-        parcela: rawParcela,
-        customerName: rawCustomerName,
-        customerCode: rawCustomerCode,
-        sellerName: rawSellerName,
-        sellerCode: rawSellerCode,
-        cnpjCpf: rawCnpjCpf,
-        issueDate: rawIssueDate,
-        dueDate: rawDueDate,
-        originalAmount,
-        updatedAmount,
-        juros,
-        multa,
-        daysOverdue: calcDays,
-        agingBucket: normalizeAging(rawAgingBucket, calcDays) as any,
-        collectionStatus: normalizeStatus(rawCollectionStatus) as any,
-        notes: rawNotes,
-      } : undefined;
-
-      return {
-        rowNumber: idx + 1,
-        rawTitleNumber,
-        rawCustomerName,
-        rawCustomerCode,
-        rawSellerName,
-        rawSellerCode,
-        rawCnpjCpf,
-        rawIssueDate,
-        rawDueDate,
-        rawOriginalAmount: rawOriginalAmount ? String(originalAmount) : '',
-        rawUpdatedAmount: rawUpdatedAmount || String(updatedAmount),
-        rawDaysOverdue: calcDays ? String(calcDays) : rawDaysOverdue,
-        rawAgingBucket,
-        rawCollectionStatus,
-        rawNotes,
-        status: errors.length === 0 ? 'valid' : 'invalid',
-        errors,
-        parsedTitle,
-      };
+    const errorsByRow = new Map<number, string[]>();
+    parsed.errors.forEach((e) => {
+      errorsByRow.set(e.rowNumber, [...(errorsByRow.get(e.rowNumber) || []), e.message]);
     });
 
-    setDelinquencyResults(validated);
+    const validRows: DelinquencyValidationRowResult[] = parsed.titles.map((t, idx) => ({
+      rowNumber: idx + 1,
+      rawTitleNumber: t.titleNumber,
+      rawCustomerName: t.customerName,
+      rawCustomerCode: t.customerCode,
+      rawSellerName: t.sellerName || '',
+      rawSellerCode: t.sellerCode || '',
+      rawCnpjCpf: t.cnpjCpf,
+      rawIssueDate: t.issueDate,
+      rawDueDate: t.dueDate,
+      rawOriginalAmount: String(t.originalAmount),
+      rawUpdatedAmount: String(t.updatedAmount),
+      rawDaysOverdue: String(t.daysOverdue),
+      rawAgingBucket: t.agingBucket,
+      rawCollectionStatus: t.collectionStatus,
+      rawNotes: t.notes || '',
+      rawLancamento: t.lancamento || '',
+      rawCustomerPhone: t.customerPhone || '',
+      status: 'valid',
+      errors: [],
+      parsedTitle: t,
+    }));
+
+    // Linhas recusadas aparecem na conferência com o motivo, em vez de sumirem.
+    const rejectedRows: DelinquencyValidationRowResult[] = parsed.errors.map((e, i) => ({
+      rowNumber: validRows.length + i + 1,
+      rawTitleNumber: '', rawCustomerName: `Linha ${e.rowNumber} da planilha`, rawCustomerCode: '',
+      rawSellerName: '', rawSellerCode: '', rawCnpjCpf: '', rawIssueDate: '', rawDueDate: '',
+      rawOriginalAmount: '', rawUpdatedAmount: '', rawDaysOverdue: '', rawAgingBucket: '',
+      rawCollectionStatus: '', rawNotes: '', rawLancamento: '', rawCustomerPhone: '',
+      status: 'invalid',
+      errors: [e.message],
+    }));
+
+    setDelinquencyMeta({
+      totalRows: rawRows.length,
+      titleRows: parsed.titles.length,
+      occurrenceRows: parsed.ignoredOccurrenceRows,
+      duplicateKeys: parsed.duplicateKeys,
+      missingHeaders: parsed.missingHeaders,
+      extraHeaders: parsed.extraHeaders,
+    });
+    setDelinquencyResults([...validRows, ...rejectedRows]);
   };
 
   // ── Drag & drop ───────────────────────────────────────────────────────────
@@ -517,6 +430,24 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
   };
 
   // ── Commit ────────────────────────────────────────────────────────────────
+
+  const handleCommitSales = async () => {
+    if (!salesParsed || !onCommitSalesImport) return;
+    setIsCommittingSales(true);
+    try {
+      await onCommitSalesImport(salesParsed.items);
+      setImportSuccessMsg(
+        `${salesParsed.items.length.toLocaleString('pt-BR')} linhas de venda importadas. ` +
+        'A equipe de vendas foi sincronizada com o cadastro de vendedores.'
+      );
+      setSalesParsed(null);
+      setFileName(null);
+    } catch (err: any) {
+      alert(`Erro ao importar vendas: ${err?.message || err}`);
+    } finally {
+      setIsCommittingSales(false);
+    }
+  };
 
   const handleCommit = () => {
     if (targetModule === 'delinquency') {
@@ -596,6 +527,7 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
                 setTargetModule(e.target.value as any);
                 setValidationResults([]);
                 setDelinquencyResults([]);
+                setSalesParsed(null);
                 setFileName(null);
                 setImportSuccessMsg(null);
               }}
@@ -607,10 +539,13 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
               <option value="statement">Extrato Financeiro (Bancos / Tesouraria)</option>
               <option value="customers">Carteira de Clientes</option>
               <option value="delinquency">Inadimplência (Títulos Vencidos)</option>
+              {onCommitSalesImport && (
+                <option value="sales">Vendas de Produtos (Planilha RPR001)</option>
+              )}
             </select>
           </div>
 
-          {targetModule !== 'delinquency' && targetModule !== 'customers' && targetModule !== 'payables' && targetModule !== 'statement' && (
+          {targetModule !== 'delinquency' && targetModule !== 'customers' && targetModule !== 'sales' && targetModule !== 'payables' && targetModule !== 'statement' && (
             <div>
               <label className="block text-[10px] font-bold text-[#8B7D6B] uppercase">Ano Base</label>
               <select
@@ -659,6 +594,65 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
         </div>
       )}
 
+      {/* Guia de colunas para Vendas de Produtos (RPR001) */}
+      {targetModule === 'sales' && (
+        <div className="bg-[#F9F7F2] border border-[#C19A6B]/40 rounded-xl p-4 space-y-3">
+          <div className="flex items-start gap-2">
+            <Info className="w-4 h-4 text-[#C19A6B] flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-xs font-bold text-[#2D2A26]">
+                Layout RPR001 — Venda Produto Intermediário ({RPR001_EXPECTED_HEADERS.length} colunas)
+              </p>
+              <p className="text-[11px] text-[#6B5A45] mt-0.5">
+                Uma linha por ITEM de nota. Nenhuma coluna é descartada. A chave de deduplicação é
+                <span className="font-mono"> NF_EmpresaCod | NF_Codigo | NFItem_Cod</span> — reimportar o mesmo
+                relatório atualiza as linhas em vez de duplicá-las.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px]">
+            {[
+              { col: 'NFItem_ProdutoCod', label: 'Vincula ao Estoque (Produto_Codigo)', key: true },
+              { col: 'NF_PessoaCod', label: 'Vincula ao Cadastro de Clientes (cod_cliente)', key: true },
+              { col: 'NF_VendedorCod / NF_UsuNomVendedor', label: 'Cadastra e vincula o vendedor', key: true },
+              { col: 'NFItem_VlUnit × NFItem_Qtde', label: 'Base do valor bruto da linha', key: false },
+              { col: 'NFItem_VlDesc / NFItem_VlAcres', label: 'Desconto e acréscimo', key: false },
+              { col: 'NF_ProdCusto', label: 'Custo TOTAL da linha (não é unitário)', key: false },
+            ].map((item) => (
+              <div key={item.col} className="bg-white border border-[#EAE6DF] rounded p-2">
+                <p className="font-bold text-[#2D2A26]">
+                  {item.label} {item.key && <span className="text-[#C19A6B]">★</span>}
+                </p>
+                <p className="text-[#8B7D6B] font-mono leading-tight mt-0.5">{item.col}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+            <p className="text-[11px] font-bold text-amber-900 flex items-center gap-1.5">
+              <AlertCircle className="w-3.5 h-3.5" /> Três armadilhas conhecidas deste relatório
+            </p>
+            <ul className="text-[10px] text-amber-800 mt-1 space-y-0.5 list-disc list-inside leading-relaxed">
+              <li>
+                <span className="font-mono">NFItem_VlBruto</span> é o preço <strong>unitário</strong>, não o total da
+                linha — e diverge de <span className="font-mono">NFItem_VlUnit</span> em parte das linhas. O sistema
+                usa <span className="font-mono">NFItem_VlUnit</span>, que é o que fecha com o total da nota.
+              </li>
+              <li>
+                <span className="font-mono">NF_ProdCusto</span> é o custo <strong>total</strong> da linha. Tratá-lo como
+                unitário multiplica o CMV.
+              </li>
+              <li>
+                <span className="font-mono">NFItem_PercMargemGer</span> vem como fração (0,73) e
+                <span className="font-mono"> NFItem_PercMargemCont</span> como percentual (73,56) — mesmo número em
+                escalas diferentes. Só o segundo é usado.
+              </li>
+            </ul>
+          </div>
+        </div>
+      )}
+
       {/* Guia de colunas para clientes */}
       {targetModule === 'customers' && (
         <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 space-y-3">
@@ -701,25 +695,32 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
           <div className="flex items-start gap-2">
             <Info className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
             <div>
-              <p className="text-xs font-bold text-blue-800">Colunas esperadas na planilha de inadimplência</p>
+              <p className="text-xs font-bold text-blue-800">
+                Layout RFN029 — Títulos Atrasados por Vendedor ({RFN029_EXPECTED_HEADERS.length} colunas)
+              </p>
               <p className="text-[11px] text-blue-700 mt-0.5">
-                O sistema aceita variações de nome. Campos obrigatórios marcados com *.
+                As colunas são reconhecidas por nome normalizado (acento, caixa e espaços não importam).
+                Nenhuma coluna do relatório é descartada. Obrigatórias marcadas com *.
               </p>
             </div>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 text-[10px]">
             {[
-              { col: 'Titulo_Numero + Titulo_Parcela', label: 'Nº do Título / Parcela', req: false },
               { col: 'Devedor', label: 'Nome do Devedor/Cliente', req: true },
-              { col: 'cod_cliente (CHAVE de vínculo)', label: 'Código do Cliente', req: false },
-              { col: 'DevedorCpfCnpj', label: 'CNPJ ou CPF', req: false },
-              { col: 'Emissão', label: 'Data Emissão', req: false },
               { col: 'Vencimento', label: 'Data Vencimento', req: true },
               { col: 'Valor', label: 'Valor Original (R$)', req: true },
+              { col: 'Pessoa_CodigoDevedor', label: 'Código do Cliente (CHAVE de vínculo)', req: false },
+              { col: 'Lançamento', label: 'Nº do Lançamento (ERP)', req: false },
+              { col: 'DevedorTelefone', label: 'Telefone / WhatsApp', req: false },
+              { col: 'Emissão', label: 'Data Emissão', req: false },
+              { col: 'Titulo_Numero + Titulo_Parcela', label: 'Nº do Título / Parcela', req: false },
+              { col: 'DevedorCpfCnpj', label: 'CNPJ ou CPF', req: false },
               { col: 'Juros + Multa', label: 'Encargos (Valor Atualizado)', req: false },
               { col: 'Atr', label: 'Dias em Atraso', req: false },
-              { col: 'Vendedor', label: 'Vendedor', req: false },
-              { col: 'status_cobranca / Status', label: 'Status Cobrança', req: false },
+              { col: 'Vendedor + VendedorTelefone', label: 'Vendedor', req: false },
+              { col: 'Titulo_AgenteCobradorDes / Tipo', label: 'Agente e Forma de Cobrança', req: false },
+              { col: 'Departamento / Nro_Pedido / Chassi', label: 'Origem do título', req: false },
+              { col: 'Ocorrencia / TituloHistorico_*', label: 'Última movimentação', req: false },
               { col: 'Registro = "T" (só títulos)', label: 'Filtro automático', req: false },
             ].map((item) => (
               <div key={item.col} className="bg-white border border-blue-100 rounded p-2">
@@ -798,6 +799,150 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
         </div>
       </div>
 
+      {/* ── Resultados: Vendas de Produtos (RPR001) ──────────────────────── */}
+      {targetModule === 'sales' && salesParsed && (
+        <div className="bg-white border border-[#EAE6DF] rounded-xl p-6 shadow-xs space-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pb-4 border-b border-[#EAE6DF]">
+            <div className="bg-[#F9F7F2] rounded-lg p-3 border border-[#EAE6DF]">
+              <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Itens lidos</p>
+              <p className="text-lg font-black text-[#2D2A26]">
+                {salesParsed.items.length.toLocaleString('pt-BR')}
+              </p>
+            </div>
+            <div className="bg-[#F9F7F2] rounded-lg p-3 border border-[#EAE6DF]">
+              <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Notas distintas</p>
+              <p className="text-lg font-black text-[#2D2A26]">
+                {new Set(salesParsed.items.map((i) => `${i.companyCode}|${i.invoiceCode}`)).size.toLocaleString('pt-BR')}
+              </p>
+            </div>
+            <div className="bg-emerald-50 rounded-lg p-3 border border-emerald-200">
+              <p className="text-[10px] font-bold text-emerald-700 uppercase">Receita líquida</p>
+              <p className="text-lg font-black text-emerald-800">
+                {formatCurrency(salesParsed.items.reduce((a, i) => a + i.netAmount, 0))}
+              </p>
+            </div>
+            <div className="bg-amber-50 rounded-lg p-3 border border-amber-200">
+              <p className="text-[10px] font-bold text-amber-700 uppercase">Desconto concedido</p>
+              <p className="text-lg font-black text-amber-800">
+                {formatCurrency(salesParsed.items.reduce((a, i) => a + i.discountAmount, 0))}
+              </p>
+            </div>
+          </div>
+
+          {/* Diagnóstico de integridade — o que o gestor precisa saber antes */}
+          <div>
+            <p className="text-xs font-bold text-[#2D2A26] mb-2">Diagnóstico do arquivo</p>
+            <div className="space-y-1.5 text-[11px]">
+              {salesParsed.missingHeaders.length > 0 && (
+                <DiagLine tone="warn">
+                  Faltam {salesParsed.missingHeaders.length} colunas esperadas (
+                  {salesParsed.missingHeaders.slice(0, 5).join(', ')}
+                  {salesParsed.missingHeaders.length > 5 ? '…' : ''}). Os campos ausentes ficam vazios.
+                </DiagLine>
+              )}
+              {salesParsed.integrity.unitPriceMismatch > 0 && (
+                <DiagLine tone="warn">
+                  <strong>{salesParsed.integrity.unitPriceMismatch.toLocaleString('pt-BR')}</strong> linhas com
+                  NFItem_VlBruto diferente de NFItem_VlUnit. O sistema adota NFItem_VlUnit, que fecha com o total
+                  da nota em 100% dos casos.
+                </DiagLine>
+              )}
+              {salesParsed.integrity.marginMismatch > 0 && (
+                <DiagLine tone="warn">
+                  <strong>{salesParsed.integrity.marginMismatch.toLocaleString('pt-BR')}</strong> linhas em que a
+                  margem informada pelo ERP não fecha com Total − Custo − Impostos. Divergência líquida de{' '}
+                  <strong>{formatCurrency(salesParsed.integrity.marginMismatchAmount)}</strong>. As duas margens
+                  ficam gravadas para conferência na tela de Vendas.
+                </DiagLine>
+              )}
+              {salesParsed.integrity.totalMismatch > 0 && (
+                <DiagLine tone="error">
+                  <strong>{salesParsed.integrity.totalMismatch.toLocaleString('pt-BR')}</strong> linhas em que
+                  NFItem_VlTotal não fecha com Unitário × Qtde − Desconto + Acréscimo.
+                </DiagLine>
+              )}
+              {salesParsed.integrity.zeroCost > 0 && (
+                <DiagLine tone="warn">
+                  <strong>{salesParsed.integrity.zeroCost.toLocaleString('pt-BR')}</strong> linhas com custo zerado —
+                  a margem delas é fictícia e aparecem marcadas na auditoria.
+                </DiagLine>
+              )}
+              {salesParsed.duplicateKeys > 0 && (
+                <DiagLine tone="info">
+                  {salesParsed.duplicateKeys.toLocaleString('pt-BR')} chaves repetidas no arquivo foram consolidadas.
+                </DiagLine>
+              )}
+              {salesParsed.errors.length > 0 && (
+                <DiagLine tone="error">
+                  {salesParsed.errors.length.toLocaleString('pt-BR')} linhas com erro de leitura serão ignoradas
+                  (ex.: {salesParsed.errors[0]?.message}).
+                </DiagLine>
+              )}
+              {salesParsed.missingHeaders.length === 0 &&
+                salesParsed.errors.length === 0 &&
+                salesParsed.integrity.totalMismatch === 0 && (
+                  <DiagLine tone="ok">Layout aderente e totais consistentes.</DiagLine>
+                )}
+            </div>
+          </div>
+
+          {/* Prévia */}
+          <div className="overflow-x-auto border border-[#EAE6DF] rounded-lg">
+            <table className="w-full text-[11px]">
+              <thead className="bg-[#F9F7F2] text-[#8B7D6B]">
+                <tr>
+                  <th className="px-2 py-1.5 text-left font-bold uppercase text-[9px]">Emissão</th>
+                  <th className="px-2 py-1.5 text-left font-bold uppercase text-[9px]">NF</th>
+                  <th className="px-2 py-1.5 text-left font-bold uppercase text-[9px]">Vendedor</th>
+                  <th className="px-2 py-1.5 text-left font-bold uppercase text-[9px]">Cliente</th>
+                  <th className="px-2 py-1.5 text-left font-bold uppercase text-[9px]">Produto</th>
+                  <th className="px-2 py-1.5 text-right font-bold uppercase text-[9px]">Qtd</th>
+                  <th className="px-2 py-1.5 text-right font-bold uppercase text-[9px]">Desc.</th>
+                  <th className="px-2 py-1.5 text-right font-bold uppercase text-[9px]">Total</th>
+                  <th className="px-2 py-1.5 text-right font-bold uppercase text-[9px]">Margem</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#F3F1ED]">
+                {salesParsed.items.slice(0, 25).map((i) => (
+                  <tr key={i.dedupeKey} className="hover:bg-[#F9F7F2]">
+                    <td className="px-2 py-1.5 whitespace-nowrap">{i.issueDate.split('-').reverse().join('/')}</td>
+                    <td className="px-2 py-1.5">{i.invoiceNumber}</td>
+                    <td className="px-2 py-1.5 whitespace-nowrap">{i.sellerName}</td>
+                    <td className="px-2 py-1.5 max-w-[180px] truncate" title={i.customerName}>{i.customerName}</td>
+                    <td className="px-2 py-1.5 max-w-[200px] truncate" title={i.productDescription}>{i.productDescription}</td>
+                    <td className="px-2 py-1.5 text-right">{i.quantity}</td>
+                    <td className="px-2 py-1.5 text-right">{i.discountAmount ? formatCurrency(i.discountAmount) : '—'}</td>
+                    <td className="px-2 py-1.5 text-right font-bold">{formatCurrency(i.netAmount)}</td>
+                    <td className={`px-2 py-1.5 text-right ${i.marginCalculated < 0 ? 'text-red-600 font-bold' : ''}`}>
+                      {formatCurrency(i.marginCalculated)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {salesParsed.items.length > 25 && (
+            <p className="text-[10px] text-[#8B7D6B] text-center">
+              Prévia das 25 primeiras linhas de {salesParsed.items.length.toLocaleString('pt-BR')}.
+            </p>
+          )}
+
+          <div className="flex items-center justify-between gap-3 pt-2 border-t border-[#EAE6DF]">
+            <p className="text-[11px] text-[#8B7D6B]">
+              Ao confirmar, as vendas são gravadas (atualizando as existentes, sem duplicar) e a equipe de
+              vendas é cadastrada automaticamente, para que a inadimplência encontre o responsável.
+            </p>
+            <button
+              onClick={handleCommitSales}
+              disabled={!salesParsed.items.length || isCommittingSales}
+              className="px-4 py-2 rounded-lg text-xs font-bold bg-[#C19A6B] text-white hover:bg-[#A9835A] disabled:opacity-40 whitespace-nowrap transition-colors"
+            >
+              {isCommittingSales ? 'Importando...' : 'Confirmar importação'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── Resultados: Inadimplência ─────────────────────────────────────── */}
       {targetModule === 'delinquency' && delinquencyResults.length > 0 && (
         <div className="bg-white border border-[#EAE6DF] rounded-xl p-6 shadow-xs space-y-4">
@@ -848,6 +993,38 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
             </div>
           </div>
 
+          {/* Diagnóstico da leitura — mostra o que foi lido e o que foi descartado */}
+          {delinquencyMeta && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+              <div className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5">
+                <p className="text-[#8B7D6B] font-bold">Linhas no arquivo</p>
+                <p className="text-sm font-bold text-[#2D2A26]">{delinquencyMeta.totalRows}</p>
+              </div>
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2.5">
+                <p className="text-emerald-700 font-bold">Títulos (Registro = T)</p>
+                <p className="text-sm font-bold text-emerald-900">{delinquencyMeta.titleRows}</p>
+              </div>
+              <div className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5">
+                <p className="text-[#8B7D6B] font-bold">Histórico ignorado</p>
+                <p className="text-sm font-bold text-[#2D2A26]">{delinquencyMeta.occurrenceRows}</p>
+              </div>
+              <div className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5">
+                <p className="text-[#8B7D6B] font-bold">Duplicatas unificadas</p>
+                <p className="text-sm font-bold text-[#2D2A26]">{delinquencyMeta.duplicateKeys}</p>
+              </div>
+              {delinquencyMeta.missingHeaders.length > 0 && (
+                <div className="col-span-2 sm:col-span-4 bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-amber-800">
+                  <strong>Colunas do layout RFN029 ausentes:</strong> {delinquencyMeta.missingHeaders.join(', ')}
+                </div>
+              )}
+              {delinquencyMeta.extraHeaders.length > 0 && (
+                <div className="col-span-2 sm:col-span-4 bg-blue-50 border border-blue-200 rounded-lg p-2.5 text-blue-800">
+                  <strong>Colunas extras (não previstas no layout):</strong> {delinquencyMeta.extraHeaders.join(', ')}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Tabela de inadimplência */}
           <div className="overflow-x-auto max-h-96 border border-[#EAE6DF] rounded-xl">
             <table className="w-full text-left text-xs border-collapse">
@@ -855,9 +1032,13 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
                 <tr className="border-b border-[#EAE6DF] font-bold">
                   <th className="p-2.5 w-10 text-center">#</th>
                   <th className="p-2.5">Status</th>
+                  <th className="p-2.5">Lançamento</th>
                   <th className="p-2.5">Nº Título</th>
+                  <th className="p-2.5">Cód. Cliente</th>
                   <th className="p-2.5">Cliente</th>
+                  <th className="p-2.5">Telefone</th>
                   <th className="p-2.5">CNPJ/CPF</th>
+                  <th className="p-2.5">Emissão</th>
                   <th className="p-2.5">Vencimento</th>
                   <th className="p-2.5 text-center">Dias Atraso</th>
                   <th className="p-2.5 text-center">Aging</th>
@@ -880,9 +1061,13 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
                         <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">ERRO</span>
                       )}
                     </td>
+                    <td className="p-2.5 font-mono text-[10px] text-[#8B7D6B]">{row.rawLancamento || '-'}</td>
                     <td className="p-2.5 font-mono text-[#C19A6B] font-bold">{row.rawTitleNumber || '-'}</td>
+                    <td className="p-2.5 font-mono text-[10px]">{row.rawCustomerCode || '-'}</td>
                     <td className="p-2.5 font-medium">{row.rawCustomerName || '-'}</td>
+                    <td className="p-2.5 font-mono text-[10px]">{formatPhoneBr(row.rawCustomerPhone) || '-'}</td>
                     <td className="p-2.5 font-mono text-[10px]">{row.rawCnpjCpf || '-'}</td>
+                    <td className="p-2.5 font-mono">{row.rawIssueDate || '-'}</td>
                     <td className="p-2.5 font-mono">{row.rawDueDate || '-'}</td>
                     <td className="p-2.5 text-center">
                       {row.rawDaysOverdue ? (
@@ -1014,6 +1199,22 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
           </div>
         </div>
       )}
+    </div>
+  );
+};
+
+const DiagLine: React.FC<{ tone: 'ok' | 'info' | 'warn' | 'error'; children: React.ReactNode }> = ({ tone, children }) => {
+  const styles = {
+    ok: 'bg-emerald-50 border-emerald-200 text-emerald-800',
+    info: 'bg-slate-50 border-slate-200 text-slate-700',
+    warn: 'bg-amber-50 border-amber-200 text-amber-900',
+    error: 'bg-rose-50 border-rose-200 text-rose-900',
+  }[tone];
+  const Icon = tone === 'ok' ? CheckCircle2 : tone === 'error' ? AlertCircle : Info;
+  return (
+    <div className={`rounded-lg border px-3 py-2 flex gap-2 items-start ${styles}`}>
+      <Icon className="w-3.5 h-3.5 shrink-0 mt-px" />
+      <span className="leading-relaxed">{children}</span>
     </div>
   );
 };

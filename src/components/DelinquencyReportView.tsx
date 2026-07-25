@@ -23,6 +23,8 @@ import {
 } from 'lucide-react';
 import { Customer, DelinquentTitle } from '../types';
 import { exportReportToExcel, exportReportToPdf, formatCurrency } from '../utils/exportUtils';
+import { formatPhoneBr, toWhatsAppNumber } from '../utils/sheetParsers';
+import { WhatsAppLink } from './WhatsAppLink';
 
 interface DelinquencyReportViewProps {
   titles: DelinquentTitle[];
@@ -54,6 +56,7 @@ const emptyForm = {
   titleNumber: '', parcela: '', customerCode: '', customerName: '', cnpjCpf: '',
   sellerName: '', issueDate: '', dueDate: '', originalAmount: '', updatedAmount: '',
   collectionStatus: 'Aguardando' as DelinquentTitle['collectionStatus'], notes: '',
+  lancamento: '', customerPhone: '',
 };
 
 export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
@@ -103,6 +106,8 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
       updatedAmount: String(t.updatedAmount ?? ''),
       collectionStatus: t.collectionStatus || 'Aguardando',
       notes: t.notes || '',
+      lancamento: t.lancamento || '',
+      customerPhone: t.customerPhone || '',
     });
     setIsFormOpen(true);
   };
@@ -127,7 +132,11 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
       : originalAmount;
     const daysOverdue = daysFromDue(form.dueDate);
 
+    // Editar um título importado não pode apagar o que veio do RFN029 (agente
+    // cobrador, chassi, histórico...). Por isso o payload parte do título atual
+    // e só sobrescreve o que o formulário realmente edita.
     const payload: Omit<DelinquentTitle, 'id'> = {
+      ...(editingTitle ? (({ id, ...rest }) => rest)(editingTitle) : {}),
       titleNumber: form.titleNumber.trim() || `MAN-${Date.now()}`,
       parcela: form.parcela.trim(),
       customerId: editingTitle?.customerId || '',
@@ -143,6 +152,8 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
       agingBucket: agingFromDays(daysOverdue),
       collectionStatus: form.collectionStatus,
       notes: form.notes.trim(),
+      lancamento: form.lancamento.trim(),
+      customerPhone: form.customerPhone.trim(),
     };
 
     if (editingTitle && onUpdateTitle) {
@@ -182,16 +193,23 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
       searchQuery === '' ||
       (t.customerCode && t.customerCode.toLowerCase().includes(searchQuery.toLowerCase())) ||
       (t.customerName && t.customerName.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (t.sellerName && t.sellerName.toLowerCase().includes(searchQuery.toLowerCase()));
+      (t.sellerName && t.sellerName.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      (t.titleNumber && t.titleNumber.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      (t.lancamento && t.lancamento.includes(searchQuery.trim())) ||
+      // busca por telefone ignorando máscara: "88765430" acha "(85) 98876-5430"
+      (t.customerPhone &&
+        searchQuery.replace(/\D/g, '') !== '' &&
+        t.customerPhone.replace(/\D/g, '').includes(searchQuery.replace(/\D/g, '')));
     return matchesStatus && matchesAging && matchesSeller && matchesSearch;
   });
 
   const handleExportPdf = () => {
     const headers = [
+      'Lançamento',
       'Código Cliente',
       'Nº Título',
       'Cliente',
-      'CNPJ / CPF',
+      'Telefone',
       'Vencimento',
       'Dias Atraso',
       'Valor Original',
@@ -200,10 +218,11 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
     ];
 
     const rows = filteredTitles.map((t) => [
+      t.lancamento || '',
       t.customerCode || '',
       t.titleNumber,
       t.customerName,
-      t.cnpjCpf,
+      formatPhoneBr(t.customerPhone || ''),
       t.dueDate,
       `${t.daysOverdue} dias`,
       formatCurrency(t.originalAmount),
@@ -228,17 +247,31 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
 
   const handleExportExcel = () => {
     const excelData = filteredTitles.map((t) => ({
+      Lançamento: t.lancamento || '',
       'Código Cliente': t.customerCode,
       'Nº Título': t.titleNumber,
+      Parcela: t.parcela || '',
       Cliente: t.customerName,
       CNPJ: t.cnpjCpf,
+      Telefone: formatPhoneBr(t.customerPhone || ''),
+      WhatsApp: t.customerPhone ? `https://wa.me/${toWhatsAppNumber(t.customerPhone)}` : '',
+      Empresa: t.companyName || '',
+      Vendedor: t.sellerName || '',
       Emissão: t.issueDate,
       Vencimento: t.dueDate,
       'Dias em Atraso': t.daysOverdue,
       'Faixa Aging': t.agingBucket,
       'Valor Original': t.originalAmount,
+      Juros: t.juros || 0,
+      Multa: t.multa || 0,
       'Valor Atualizado': t.updatedAmount,
+      'Agente Cobrador': t.collectionAgent || '',
+      'Forma de Cobrança': t.paymentType || '',
+      Departamento: t.department || '',
+      'Nº Pedido': t.orderNumber || '',
+      Chassi: t.chassi || '',
       'Status Cobrança': t.collectionStatus,
+      'Última Ocorrência': t.occurrence || '',
       Observações: t.notes || '',
     }));
 
@@ -444,9 +477,11 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
           <table className="w-full text-left border-collapse text-xs">
             <thead className="bg-[#F9F7F2] text-[#8B7D6B] font-bold border-b border-[#EAE6DF]">
               <tr>
+                <th className="p-3">Lançamento</th>
                 <th className="p-3">Código Cliente</th>
                 <th className="p-3">Nº Título</th>
                 <th className="p-3">Cliente / CNPJ</th>
+                <th className="p-3">Contato (WhatsApp)</th>
                 <th className="p-3">Vendedor Responsável</th>
                 <th className="p-3">Emissão / Vencimento</th>
                 <th className="p-3 text-center">Dias Atraso</th>
@@ -460,11 +495,18 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
             <tbody className="divide-y divide-[#EAE6DF] text-[#433E37]">
               {filteredTitles.map((t) => (
                 <tr key={t.id} className="hover:bg-[#FDFBF7] transition-colors">
+                  <td className="p-3 font-mono text-[11px] text-[#8B7D6B]">
+                    {t.lancamento || '-'}
+                    {t.parcela && <span className="block text-[10px]">parc. {t.parcela}</span>}
+                  </td>
                   <td className="p-3 font-mono font-bold text-[#C19A6B]">{t.customerCode}</td>
                   <td className="p-3 font-mono font-bold text-[#2D2A26]">{t.titleNumber}</td>
                   <td className="p-3">
                     <p className="font-bold text-[#2D2A26]">{t.customerName}</p>
                     <p className="text-[10px] text-[#8B7D6B] font-mono">{t.cnpjCpf}</p>
+                  </td>
+                  <td className="p-3">
+                    <WhatsAppLink phone={t.customerPhone} />
                   </td>
                   <td className="p-3 font-semibold text-[#2D2A26]">
                     {t.sellerName || <span className="text-[#8B7D6B] font-normal">-</span>}
@@ -632,6 +674,32 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
+                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Lançamento (ERP)</label>
+                    <input
+                      type="text"
+                      value={form.lancamento}
+                      onChange={(e) => setForm((f) => ({ ...f, lancamento: e.target.value }))}
+                      placeholder="nº do lançamento"
+                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs font-mono focus:outline-none focus:border-[#C19A6B]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[#8B7D6B] mb-1">Telefone (WhatsApp)</label>
+                    <input
+                      type="text"
+                      value={form.customerPhone}
+                      onChange={(e) => setForm((f) => ({ ...f, customerPhone: e.target.value }))}
+                      placeholder="85 988765430"
+                      className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs font-mono focus:outline-none focus:border-[#C19A6B]"
+                    />
+                  </div>
+                  <div className="flex items-end pb-1">
+                    <WhatsAppLink phone={form.customerPhone} variant="button" />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
                     <label className="block text-xs font-bold text-rose-700 mb-1">Valor Original (R$) *</label>
                     <input
                       type="text" required
@@ -704,8 +772,9 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
               <div>
                 <p className="text-lg font-black text-[#2D2A26]">{detailsTitle.customerName}</p>
                 <p className="text-[11px] font-mono text-[#C19A6B]">
-                  cod_cliente: {detailsTitle.customerCode || '—'} • Título {detailsTitle.titleNumber}
+                  Cód. Cliente: {detailsTitle.customerCode || '—'} • Título {detailsTitle.titleNumber}
                   {detailsTitle.parcela ? `/${detailsTitle.parcela}` : ''}
+                  {detailsTitle.lancamento ? ` • Lançamento ${detailsTitle.lancamento}` : ''}
                 </p>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -722,8 +791,20 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
                   <p className="text-sm font-black text-[#2D2A26]">{detailsTitle.daysOverdue} dias</p>
                 </div>
               </div>
+              {/* Contato de cobrança em destaque — é a primeira ação de quem abre o título */}
+              <div className="flex flex-wrap items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                <span className="text-[10px] font-bold text-emerald-800 uppercase">Contato do Devedor</span>
+                <WhatsAppLink phone={detailsTitle.customerPhone} variant="button" />
+                {detailsTitle.sellerPhone && (
+                  <span className="text-[11px] text-emerald-900">
+                    Vendedor {detailsTitle.sellerName}: <WhatsAppLink phone={detailsTitle.sellerPhone} />
+                  </span>
+                )}
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-xs">
                 {[
+                  ['Lançamento (ERP)', detailsTitle.lancamento],
+                  ['Empresa', detailsTitle.companyName],
                   ['CNPJ / CPF', detailsTitle.cnpjCpf],
                   ['Vendedor', detailsTitle.sellerName],
                   ['Emissão', detailsTitle.issueDate],
@@ -732,6 +813,15 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
                   ['Status Cobrança', detailsTitle.collectionStatus],
                   ['Juros', detailsTitle.juros ? formatCurrency(detailsTitle.juros) : '—'],
                   ['Multa', detailsTitle.multa ? formatCurrency(detailsTitle.multa) : '—'],
+                  ['Agente Cobrador', detailsTitle.collectionAgent],
+                  ['Forma de Cobrança', detailsTitle.paymentType],
+                  ['Tipo de Cobrança', detailsTitle.collectionTypeDescription],
+                  ['Departamento', detailsTitle.department],
+                  ['Nº Pedido', detailsTitle.orderNumber],
+                  ['Chassi', detailsTitle.chassi],
+                  ['Nota Fiscal', detailsTitle.invoiceNumber],
+                  ['Endosso', detailsTitle.endossoName],
+                  ['Última Movimentação', detailsTitle.occurrence],
                 ].map(([label, value]) => (
                   <div key={label as string} className="flex flex-col border-b border-dashed border-[#EAE6DF] pb-1">
                     <span className="text-[10px] font-bold text-[#8B7D6B] uppercase">{label}</span>

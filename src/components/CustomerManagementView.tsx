@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Search,
   UserPlus,
@@ -12,11 +12,15 @@ import {
   Eye,
   MessageCircle,
 } from 'lucide-react';
-import { Customer } from '../types';
+import { Customer, DelinquentTitle } from '../types';
 import { formatCurrency, exportReportToExcel } from '../utils/exportUtils';
+import { useDebouncedValue, usePagination } from '../utils/uiHooks';
+import { WhatsAppLink } from './WhatsAppLink';
 
 interface CustomerManagementViewProps {
   customers: Customer[];
+  /** Títulos em atraso, usados na aba "Dívida" do cadastro. */
+  delinquentTitles?: DelinquentTitle[];
   onAddCustomer: (customerData: Partial<Customer>) => void;
   onUpdateCustomer?: (id: string, customerData: Partial<Customer>) => void;
   onDeleteCustomer?: (id: string) => void;
@@ -26,6 +30,7 @@ interface CustomerManagementViewProps {
 
 export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
   customers,
+  delinquentTitles = [],
   onAddCustomer,
   onUpdateCustomer,
   onDeleteCustomer,
@@ -73,20 +78,72 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
   const [relationshipType, setRelationshipType] = useState('Nenhum');
   const [expenseClassification, setExpenseClassification] = useState('Nenhuma');
   const [activeTab, setActiveTab] = useState<'geral' | 'financeiro' | 'classificacao'>('geral');
-  const [activeDetailTab, setActiveDetailTab] = useState<'geral' | 'financeiro' | 'classificacao'>('geral');
+  const [activeDetailTab, setActiveDetailTab] = useState<'geral' | 'financeiro' | 'classificacao' | 'divida'>('geral');
 
-  const filteredCustomers = customers.filter((c) => {
-    const matchesSearch =
-      c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.cnpjCpf.includes(searchTerm) ||
-      (c.code && c.code.toLowerCase().includes(searchTerm.toLowerCase()));
-    const matchesStatus = statusFilter === 'all' || c.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
+  /**
+   * Títulos em atraso do cliente aberto no modal de detalhes.
+   *
+   * O vínculo principal é `cliente_id`; quando o título veio do RFN029 antes do
+   * cliente existir, ele pode ter só o código do devedor
+   * (`Pessoa_CodigoDevedor` → `Customer.code`), então o código é a segunda
+   * chave. Ordenado do mais vencido para o menos vencido, que é a ordem em que
+   * a cobrança quer ver.
+   */
+  const customerTitles = useMemo(() => {
+    if (!detailsCustomer) return [];
+    const code = (detailsCustomer.code || '').trim().toLowerCase();
+    return delinquentTitles
+      .filter(
+        (t) =>
+          (t.customerId && t.customerId === detailsCustomer.id) ||
+          (code && (t.customerCode || '').trim().toLowerCase() === code)
+      )
+      .sort((a, b) => (b.daysOverdue || 0) - (a.daysOverdue || 0));
+  }, [detailsCustomer, delinquentTitles]);
 
-  const totalCredit = customers.reduce((acc, c) => acc + c.creditLimit, 0);
-  const totalBalance = customers.reduce((acc, c) => acc + c.currentBalance, 0);
-  const totalDelinquent = customers.reduce((acc, c) => acc + c.delinquentAmount, 0);
+  const customerDebtTotal = customerTitles.reduce((acc, t) => acc + (t.updatedAmount || 0), 0);
+  const customerDebtOriginal = customerTitles.reduce((acc, t) => acc + (t.originalAmount || 0), 0);
+  const customerWorstAging = customerTitles.length
+    ? customerTitles[0].agingBucket
+    : '—';
+
+  /**
+   * PERFORMANCE — por que esta tela travava.
+   *
+   * O filtro rodava a CADA render e a tabela desenhava TODOS os clientes de uma
+   * vez. Com ~4.000 clientes e 15 colunas por linha, são ~60.000 células no DOM,
+   * refeitas a cada tecla digitada na busca e a cada abertura de modal. Três
+   * correções, na ordem do impacto:
+   *   1. debounce na busca — filtra 300ms após parar de digitar, não a cada letra;
+   *   2. useMemo — o filtro só roda quando lista/busca/status realmente mudam;
+   *   3. paginação — o DOM passa a ter 50 linhas em vez de 4.000.
+   */
+  const debouncedSearch = useDebouncedValue(searchTerm, 300);
+
+  const filteredCustomers = useMemo(() => {
+    const term = debouncedSearch.trim().toLowerCase();
+    return customers.filter((c) => {
+      if (statusFilter !== 'all' && c.status !== statusFilter) return false;
+      if (!term) return true;
+      return (
+        c.name.toLowerCase().includes(term) ||
+        c.cnpjCpf.includes(term) ||
+        (!!c.code && c.code.toLowerCase().includes(term))
+      );
+    });
+  }, [customers, debouncedSearch, statusFilter]);
+
+  const pager = usePagination(filteredCustomers, 50);
+
+  const { totalCredit, totalBalance, totalDelinquent } = useMemo(() => {
+    let credit = 0, balance = 0, delinquent = 0;
+    for (const c of customers) {
+      credit += c.creditLimit;
+      balance += c.currentBalance;
+      delinquent += c.delinquentAmount;
+    }
+    return { totalCredit: credit, totalBalance: balance, totalDelinquent: delinquent };
+  }, [customers]);
 
   const handleOpenAddModal = () => {
     setEditingCustomer(null);
@@ -312,7 +369,7 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-[#EAE6DF] text-[#433E37]">
-              {filteredCustomers.map((c) => (
+              {pager.items.map((c) => (
                 <tr key={c.id} className="hover:bg-[#FDFBF7] transition-colors">
                   <td className="px-2 py-1 font-mono text-[#C19A6B] font-bold whitespace-nowrap">{c.code}</td>
                   <td className="px-2 py-1 text-center whitespace-nowrap">
@@ -407,8 +464,37 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
                   </td>
                 </tr>
               ))}
+              {pager.items.length === 0 && (
+                <tr>
+                  <td colSpan={15} className="px-4 py-10 text-center text-[#8B7D6B] text-xs">
+                    {customers.length === 0
+                      ? 'Nenhum cliente cadastrado. Importe a planilha de clientes para começar.'
+                      : 'Nenhum cliente atende aos filtros aplicados.'}
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
+        </div>
+
+        {/* Paginação — mantém o DOM leve mesmo com milhares de clientes */}
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-t border-[#EAE6DF] bg-[#F9F7F2] text-xs">
+          <span className="text-[#8B7D6B] font-semibold">
+            Mostrando {pager.from}–{pager.to} de {pager.total.toLocaleString('pt-BR')} clientes
+            {filteredCustomers.length !== customers.length && ` (filtrados de ${customers.length.toLocaleString('pt-BR')})`}
+          </span>
+          <div className="flex items-center gap-2">
+            <select
+              value={pager.pageSize}
+              onChange={(e) => pager.setPageSize(Number(e.target.value))}
+              className="px-2 py-1.5 rounded border border-[#EAE6DF] font-semibold bg-white"
+            >
+              {[25, 50, 100, 200].map((n) => <option key={n} value={n}>{n} por página</option>)}
+            </select>
+            <button onClick={pager.prev} disabled={!pager.canPrev} className="px-3 py-1.5 rounded border border-[#EAE6DF] font-bold disabled:opacity-40 bg-white hover:bg-[#F3F1ED]">Anterior</button>
+            <span className="font-bold">{pager.page}/{pager.pageCount}</span>
+            <button onClick={pager.next} disabled={!pager.canNext} className="px-3 py-1.5 rounded border border-[#EAE6DF] font-bold disabled:opacity-40 bg-white hover:bg-[#F3F1ED]">Próxima</button>
+          </div>
         </div>
       </div>
 
@@ -724,6 +810,22 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
               </button>
               <button
                 type="button"
+                onClick={() => setActiveDetailTab('divida')}
+                className={`flex-1 py-3 text-xs font-bold transition-all border-b-2 text-center flex items-center justify-center gap-1.5 ${
+                  activeDetailTab === 'divida'
+                    ? 'border-[#C19A6B] text-[#C19A6B] bg-white'
+                    : 'border-transparent text-[#8B7D6B] hover:text-[#2D2A26]'
+                }`}
+              >
+                Dívida
+                {customerTitles.length > 0 && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-50 text-rose-800 border border-rose-200">
+                    {customerTitles.length}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
                 onClick={() => setActiveDetailTab('classificacao')}
                 className={`flex-1 py-3 text-xs font-bold transition-all border-b-2 text-center ${
                   activeDetailTab === 'classificacao'
@@ -812,6 +914,135 @@ export const CustomerManagementView: React.FC<CustomerManagementViewProps> = ({
                       )}
                     </span>
                   </div>
+                </div>
+              )}
+
+              {activeDetailTab === 'divida' && (
+                <div className="space-y-4">
+                  {customerTitles.length === 0 ? (
+                    <div className="text-center py-10 border border-dashed border-[#EAE6DF] rounded-xl bg-[#F9F7F2]">
+                      <Check className="w-8 h-8 text-emerald-600 mx-auto mb-2" />
+                      <p className="text-sm font-bold text-[#2D2A26]">Nenhum título em atraso</p>
+                      <p className="text-[11px] text-[#8B7D6B] mt-1">
+                        Este cliente não possui títulos vencidos importados do RFN029.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <div className="bg-rose-50 border border-rose-200 rounded-lg p-3">
+                          <p className="text-[10px] font-bold text-rose-700 uppercase">Dívida Atualizada</p>
+                          <p className="text-sm font-black text-rose-800">{formatCurrency(customerDebtTotal)}</p>
+                        </div>
+                        <div className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-3">
+                          <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Valor Original</p>
+                          <p className="text-sm font-black text-[#2D2A26]">{formatCurrency(customerDebtOriginal)}</p>
+                        </div>
+                        <div className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-3">
+                          <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Títulos em Atraso</p>
+                          <p className="text-sm font-black text-[#2D2A26]">{customerTitles.length}</p>
+                        </div>
+                        <div className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-3">
+                          <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Pior Faixa</p>
+                          <p className="text-sm font-black text-rose-700">{customerWorstAging}</p>
+                        </div>
+                      </div>
+
+                      {/* Contato de cobrança: telefone do título tem prioridade sobre o
+                          do cadastro, porque é o que o ERP usou na última cobrança. */}
+                      <div className="flex flex-wrap items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                        <span className="text-[10px] font-bold text-emerald-800 uppercase">Contato para Cobrança</span>
+                        <WhatsAppLink
+                          phone={customerTitles[0].customerPhone || detailsCustomer.cellphone || detailsCustomer.phone}
+                          variant="button"
+                        />
+                      </div>
+
+                      <div className="overflow-x-auto border border-[#EAE6DF] rounded-xl max-h-72">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead className="bg-[#F9F7F2] text-[#8B7D6B] font-bold sticky top-0">
+                            <tr className="border-b border-[#EAE6DF]">
+                              <th className="p-2.5">Lançamento</th>
+                              <th className="p-2.5">Título / Parcela</th>
+                              <th className="p-2.5">Emissão</th>
+                              <th className="p-2.5">Vencimento</th>
+                              <th className="p-2.5 text-center">Atraso</th>
+                              <th className="p-2.5 text-center">Aging</th>
+                              <th className="p-2.5 text-right">Original</th>
+                              <th className="p-2.5 text-right">Atualizado</th>
+                              <th className="p-2.5">Cobrança</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-[#EAE6DF] text-[#433E37]">
+                            {customerTitles.map((t) => (
+                              <tr key={t.id} className="hover:bg-[#FDFBF7]">
+                                <td className="p-2.5 font-mono text-[10px] text-[#8B7D6B]">{t.lancamento || '-'}</td>
+                                <td className="p-2.5 font-mono font-bold text-[#2D2A26]">
+                                  {t.titleNumber}{t.parcela ? `/${t.parcela}` : ''}
+                                </td>
+                                <td className="p-2.5 font-mono">{t.issueDate || '-'}</td>
+                                <td className="p-2.5 font-mono">{t.dueDate || '-'}</td>
+                                <td className="p-2.5 text-center">
+                                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">
+                                    {t.daysOverdue}d
+                                  </span>
+                                </td>
+                                <td className="p-2.5 text-center font-mono">{t.agingBucket}</td>
+                                <td className="p-2.5 text-right font-mono">{formatCurrency(t.originalAmount)}</td>
+                                <td className="p-2.5 text-right font-mono font-bold text-rose-700">
+                                  {formatCurrency(t.updatedAmount)}
+                                </td>
+                                <td className="p-2.5 text-[11px]">
+                                  {t.collectionStatus}
+                                  {t.collectionAgent && (
+                                    <span className="block text-[10px] text-[#8B7D6B]">{t.collectionAgent}</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot className="bg-[#F9F7F2] font-bold text-[#2D2A26] sticky bottom-0">
+                            <tr className="border-t border-[#EAE6DF]">
+                              <td className="p-2.5" colSpan={6}>Total da dívida</td>
+                              <td className="p-2.5 text-right font-mono">{formatCurrency(customerDebtOriginal)}</td>
+                              <td className="p-2.5 text-right font-mono text-rose-700">{formatCurrency(customerDebtTotal)}</td>
+                              <td className="p-2.5"></td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          exportReportToExcel(
+                            customerTitles.map((t) => ({
+                              Lançamento: t.lancamento || '',
+                              'Nº Título': t.titleNumber,
+                              Parcela: t.parcela || '',
+                              Emissão: t.issueDate,
+                              Vencimento: t.dueDate,
+                              'Dias em Atraso': t.daysOverdue,
+                              'Faixa Aging': t.agingBucket,
+                              'Valor Original': t.originalAmount,
+                              Juros: t.juros || 0,
+                              Multa: t.multa || 0,
+                              'Valor Atualizado': t.updatedAmount,
+                              'Status Cobrança': t.collectionStatus,
+                              'Agente Cobrador': t.collectionAgent || '',
+                              Vendedor: t.sellerName || '',
+                              Telefone: t.customerPhone || '',
+                            })),
+                            'DIVIDA_CLIENTE',
+                            `Divida_${(detailsCustomer.code || detailsCustomer.name).replace(/\W+/g, '_')}.xlsx`
+                          )
+                        }
+                        className="px-4 py-2 text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg flex items-center gap-1.5"
+                      >
+                        <FileSpreadsheet className="w-4 h-4" /> Exportar dívida deste cliente
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
 

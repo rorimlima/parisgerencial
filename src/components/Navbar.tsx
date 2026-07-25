@@ -165,15 +165,26 @@ export const Navbar: React.FC<NavbarProps> = ({
                 onChange={(e) => setActiveTab(e.target.value as ViewTab)}
                 className="bg-[#F9F7F2] border border-[#EAE6DF] text-xs text-[#2D2A26] rounded-lg p-1.5 font-bold focus:outline-none focus:border-[#C19A6B]"
               >
-                <option value="dashboard">📊 Visão Geral & KPIs</option>
-                <option value="economic">📈 Resultado Econômico (DRE)</option>
-                <option value="financial">💵 Resultado Financeiro</option>
-                <option value="statement">🏛️ Extrato Financeiro (Bancos)</option>
-                <option value="payables">🧾 Contas a Pagar (RFN006)</option>
-                <option value="import">📁 Importação Excel / CSV</option>
-                <option value="customers">👥 Cadastro de Clientes</option>
-                <option value="sellers">💼 Gestão de Vendedores</option>
-                <option value="delinquency">⚠️ Relatório de Inadimplência</option>
+                <optgroup label="Gerencial">
+                  <option value="dashboard">Visão Geral &amp; KPIs</option>
+                  <option value="economic">Resultado Econômico (DRE)</option>
+                  <option value="financial">Resultado Financeiro</option>
+                  <option value="cashflow">Fluxo de Caixa</option>
+                </optgroup>
+                <optgroup label="Operacional">
+                  <option value="billing">Faturamento (RPR014)</option>
+                  <option value="stock">Estoque / Lista de Preço</option>
+                  <option value="statement">Extrato Financeiro (Bancos)</option>
+                  <option value="payables">Contas a Pagar (RFN006)</option>
+                  <option value="delinquency">Inadimplência</option>
+                </optgroup>
+                <optgroup label="Cadastros">
+                  <option value="customers">Cadastro de Clientes</option>
+                  <option value="sellers">Gestão de Vendedores</option>
+                </optgroup>
+                <optgroup label="Sistema">
+                  <option value="import">Importação Excel / CSV</option>
+                </optgroup>
               </select>
             </div>
           )}

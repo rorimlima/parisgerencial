@@ -399,11 +399,18 @@ export const upsertCustomersBatch = async (
     if (code) codeToId.set(code, d.id);
   });
 
+  // PERFORMANCE: antes cada cliente era gravado com um `await setDoc` dentro do
+  // laço — uma viagem de rede por registro. Importar 4.000 clientes eram 4.000
+  // idas ao servidor em série (minutos de espera e a tela "congelada"). Agora as
+  // gravações são acumuladas e enviadas em lotes de 450, o teto do Firestore:
+  // as mesmas 4.000 linhas viram ~9 requisições.
+  const pending: { id: string; data: Record<string, any> }[] = [];
+
   for (const customer of customers) {
     try {
       const code = (customer.code || '').toString().trim();
       if (!code) {
-        // Sem código: cria documento novo com ID automático
+        // Sem código não há chave para deduplicar: cria com ID automático.
         await addDoc(collection(db, 'clientes'), customerToFirestore(customer));
         added++;
         continue;
@@ -414,18 +421,32 @@ export const upsertCustomersBatch = async (
         const payload = customerToFirestore(customer);
         delete payload.saldo_atual;
         delete payload.valor_inadimplente;
-        await setDoc(doc(db, 'clientes', existingId), payload, { merge: true });
+        pending.push({ id: existingId, data: payload });
         updated++;
       } else {
         // Novo cliente: usa o código como ID do documento
         const newId = sanitizeDocId(code) || `cli_${Date.now()}`;
-        await setDoc(doc(db, 'clientes', newId), customerToFirestore(customer), { merge: true });
+        pending.push({ id: newId, data: customerToFirestore(customer) });
         codeToId.set(code.toLowerCase(), newId);
         added++;
       }
     } catch (err) {
       console.error('Erro no upsert de cliente:', customer.code, err);
       errors++;
+    }
+  }
+
+  const BATCH_SIZE = 450;
+  for (let i = 0; i < pending.length; i += BATCH_SIZE) {
+    try {
+      const batch = writeBatch(db);
+      pending.slice(i, i + BATCH_SIZE).forEach((p) =>
+        batch.set(doc(db, 'clientes', p.id), p.data, { merge: true })
+      );
+      await batch.commit();
+    } catch (err) {
+      console.error('Erro ao gravar lote de clientes:', err);
+      errors += Math.min(BATCH_SIZE, pending.length - i);
     }
   }
 
@@ -517,6 +538,28 @@ export const fetchDelinquentTitles = async (): Promise<DelinquentTitle[]> => {
         parcela: data.parcela || '',
         juros: data.juros || 0,
         multa: data.multa || 0,
+        // RFN029 — campos completos do relatório de títulos atrasados
+        dedupeKey: data.chave_dedupe || '',
+        lancamento: data.lancamento || '',
+        companyName: data.empresa_nome || '',
+        customerPhone: data.devedor_telefone || '',
+        sellerPhone: data.vendedor_telefone || '',
+        endossoName: data.endosso_nome || '',
+        endossoCode: data.endosso_codigo || '',
+        endossoPhone: data.endosso_telefone || '',
+        collectionAgent: data.agente_cobrador || '',
+        paymentType: data.tipo_pagamento || '',
+        collectionTypeDescription: data.tipo_cobranca || '',
+        department: data.departamento || '',
+        orderNumber: data.nro_pedido || '',
+        chassi: data.chassi || '',
+        currency: data.moeda || '',
+        nfseNumber: data.nfse_numero || '',
+        invoiceNumber: data.nota_fiscal_numero || '',
+        lastHistoryDate: data.historico_data || '',
+        lastHistoryCode: data.historico_codigo || '',
+        occurrence: data.ocorrencia || '',
+        importedAt: data.importado_em || '',
       };
     });
   } catch (error) {
@@ -547,12 +590,47 @@ const titleToFirestore = (title: Partial<DelinquentTitle>): Record<string, any> 
   if (title.parcela !== undefined) data.parcela = title.parcela || '';
   if (title.juros !== undefined) data.juros = title.juros;
   if (title.multa !== undefined) data.multa = title.multa;
+  // RFN029 — nenhuma coluna do relatório é descartada na gravação
+  if (title.dedupeKey !== undefined) data.chave_dedupe = title.dedupeKey || '';
+  if (title.lancamento !== undefined) data.lancamento = title.lancamento || '';
+  if (title.companyName !== undefined) data.empresa_nome = title.companyName || '';
+  if (title.customerPhone !== undefined) data.devedor_telefone = title.customerPhone || '';
+  if (title.sellerPhone !== undefined) data.vendedor_telefone = title.sellerPhone || '';
+  if (title.endossoName !== undefined) data.endosso_nome = title.endossoName || '';
+  if (title.endossoCode !== undefined) data.endosso_codigo = title.endossoCode || '';
+  if (title.endossoPhone !== undefined) data.endosso_telefone = title.endossoPhone || '';
+  if (title.collectionAgent !== undefined) data.agente_cobrador = title.collectionAgent || '';
+  if (title.paymentType !== undefined) data.tipo_pagamento = title.paymentType || '';
+  if (title.collectionTypeDescription !== undefined) data.tipo_cobranca = title.collectionTypeDescription || '';
+  if (title.department !== undefined) data.departamento = title.department || '';
+  if (title.orderNumber !== undefined) data.nro_pedido = title.orderNumber || '';
+  if (title.chassi !== undefined) data.chassi = title.chassi || '';
+  if (title.currency !== undefined) data.moeda = title.currency || '';
+  if (title.nfseNumber !== undefined) data.nfse_numero = title.nfseNumber || '';
+  if (title.invoiceNumber !== undefined) data.nota_fiscal_numero = title.invoiceNumber || '';
+  if (title.lastHistoryDate !== undefined) data.historico_data = title.lastHistoryDate || '';
+  if (title.lastHistoryCode !== undefined) data.historico_codigo = title.lastHistoryCode || '';
+  if (title.occurrence !== undefined) data.ocorrencia = title.occurrence || '';
   return data;
 };
 
 /**
+ * Chave de identidade de um título no Firestore.
+ *
+ * Preferimos `chave_dedupe` (empresa|lançamento), que vem do parser do RFN029 e
+ * é única de verdade. O fallback `cod_cliente|título|parcela` só existe para
+ * títulos gravados antes desse campo e para lançamentos manuais — ele colapsa
+ * carnês parcelados (o ERP repete o mesmo número de título com parcela 1 em
+ * todas as parcelas), então não serve como chave principal.
+ */
+const titleDedupeKey = (t: { dedupeKey?: string; customerCode?: string; titleNumber?: string; parcela?: string; dueDate?: string }): string => {
+  if (t.dedupeKey && t.dedupeKey.trim()) return t.dedupeKey.trim().toLowerCase();
+  return `${(t.customerCode || '').toString().trim()}|${(t.titleNumber || '').toString().trim()}|${(t.parcela || '').toString().trim()}|${(t.dueDate || '').toString().trim()}`.toLowerCase();
+};
+
+/**
  * Importa títulos inadimplentes em lote com UPSERT.
- * Chave determinística: cod_cliente + número do título + parcela.
+ * Chave determinística: veja `titleDedupeKey`.
  * Isso evita duplicatas quando a mesma planilha é reimportada.
  */
 export const upsertDelinquentTitlesBatch = async (
@@ -566,9 +644,23 @@ export const upsertDelinquentTitlesBatch = async (
   const keyToId = new Map<string, string>();
   snapshot.forEach((d) => {
     const data = d.data();
-    const key = `${(data.codigo_cliente || '').toString().trim()}|${(data.numero_titulo || '').toString().trim()}|${(data.parcela || '').toString().trim()}`.toLowerCase();
-    keyToId.set(key, d.id);
+    keyToId.set(
+      titleDedupeKey({
+        dedupeKey: data.chave_dedupe,
+        customerCode: data.codigo_cliente,
+        titleNumber: data.numero_titulo,
+        parcela: data.parcela,
+        dueDate: data.data_vencimento,
+      }),
+      d.id
+    );
   });
+
+  // Mesma otimização aplicada aos clientes: acumula e grava em lotes em vez de
+  // uma requisição por título. Títulos novos recebem um ID determinístico
+  // derivado da própria chave (cliente|título|parcela) — assim, além de rápido,
+  // fica impossível criar duas vezes o mesmo título se a importação for repetida.
+  const pending: { id: string; data: Record<string, any> }[] = [];
 
   for (const title of titles) {
     try {
@@ -577,21 +669,36 @@ export const upsertDelinquentTitlesBatch = async (
       const updatedAmount = title.updatedAmount > 0 ? title.updatedAmount : title.originalAmount;
       const normalized = { ...title, daysOverdue, agingBucket, updatedAmount };
 
-      const key = `${(title.customerCode || '').toString().trim()}|${(title.titleNumber || '').toString().trim()}|${(title.parcela || '').toString().trim()}`.toLowerCase();
+      const key = titleDedupeKey(title);
       const payload = { ...titleToFirestore(normalized), importado_em: new Date().toISOString() };
       const existingId = keyToId.get(key);
 
       if (existingId) {
-        await setDoc(doc(db, 'titulos_inadimplentes', existingId), payload, { merge: true });
+        pending.push({ id: existingId, data: payload });
         updated++;
       } else {
-        const docRef = await addDoc(collection(db, 'titulos_inadimplentes'), payload);
-        keyToId.set(key, docRef.id);
+        const newId = sanitizeDocId(key) || `tit_${Date.now()}_${added}`;
+        pending.push({ id: newId, data: payload });
+        keyToId.set(key, newId);
         added++;
       }
     } catch (err) {
       console.error('Erro no upsert de título:', title.titleNumber, err);
       errors++;
+    }
+  }
+
+  const BATCH_SIZE = 450;
+  for (let i = 0; i < pending.length; i += BATCH_SIZE) {
+    try {
+      const batch = writeBatch(db);
+      pending.slice(i, i + BATCH_SIZE).forEach((p) =>
+        batch.set(doc(db, 'titulos_inadimplentes', p.id), p.data, { merge: true })
+      );
+      await batch.commit();
+    } catch (err) {
+      console.error('Erro ao gravar lote de títulos:', err);
+      errors += Math.min(BATCH_SIZE, pending.length - i);
     }
   }
 
