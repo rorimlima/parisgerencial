@@ -237,6 +237,19 @@ export const fetchFinancialData = async (year: number): Promise<Record<string, F
         const mes_chave = data.mes_chave || '';
         if (!mes_chave) return;
 
+        // Se para este ano temos uma definição oficial mestre (como 2026, com Jan-Jun
+        // oficiais e Jul-Dez zerados), e o mês em initialForYear é zerado oficialmente
+        // mas o Firestore tem um lançamento manual divergente, limpa/reseta o documento
+        // (mesma proteção já aplicada em fetchEconomicData para o Resultado Econômico)
+        if (initialForYear && initialForYear[mes_chave]) {
+          const official = initialForYear[mes_chave];
+          const firestoreEntradas = (data.entradas_bancos || 0) + (data.entradas_tesouraria || 0);
+          if (official.totalEntradas === 0 && firestoreEntradas > 0) {
+            saveFinancialLaunch(year, mes_chave, official).catch(() => {});
+            return;
+          }
+        }
+
         const entradasBancos = data.entradas_bancos !== undefined ? data.entradas_bancos : (result[mes_chave]?.entradasBancos || 0);
         const entradasTesouraria = data.entradas_tesouraria !== undefined ? data.entradas_tesouraria : (result[mes_chave]?.entradasTesouraria || 0);
         const totalEntradas = data.total_entradas !== undefined ? data.total_entradas : (entradasBancos + entradasTesouraria);
@@ -266,7 +279,19 @@ export const fetchFinancialData = async (year: number): Promise<Record<string, F
         saveFinancialLaunch(year, mKey, mData).catch((err) => console.warn('Erro ao salvar lote inicial financeiro:', err));
       });
     }
-    
+
+    // Para o ano de 2026, forçamos a sincronização dos dados mestres oficiais (Jan-Jun
+    // preenchidos, Jul-Dez zerados) no Firestore — corrige lançamentos manuais incorretos
+    // feitos via LaunchModal e evita que voltem a divergir da planilha oficial.
+    if (year === 2026 && initialForYear) {
+      ALL_MONTHS.forEach((mKey) => {
+        if (initialForYear[mKey]) {
+          result[mKey] = { ...initialForYear[mKey] };
+          saveFinancialLaunch(year, mKey, initialForYear[mKey]).catch(() => {});
+        }
+      });
+    }
+
     return result;
   } catch (error) {
     console.error('Error fetching financial data:', error);
