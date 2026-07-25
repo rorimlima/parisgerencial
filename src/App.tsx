@@ -177,6 +177,8 @@ export default function App() {
   const [isBillingLoading, setIsBillingLoading] = useState(false);
   const [isStockLoading, setIsStockLoading] = useState(false);
   const [billingLoaded, setBillingLoaded] = useState(false);
+  // Carga leve (só resumos mensais) usada pelo Dashboard — ver loadBillingSummariesLight
+  const [billingSummariesLoaded, setBillingSummariesLoaded] = useState(false);
   const [stockLoaded, setStockLoaded] = useState(false);
 
   // ── Vendas de Produtos (RPR001) ──────────────────────────────────────────
@@ -288,6 +290,26 @@ export default function App() {
       setIsBillingLoading(false);
     }
   }, [isBillingLoading, billingLoaded]);
+
+  /**
+   * Carga LEVE do faturamento, usada pelo Dashboard.
+   *
+   * Diferente de `loadBilling`, lê apenas `faturamento_mensal` (12 documentos
+   * por ano) e ignora `faturamento_cliente`, que tem milhares. É o bastante
+   * para o gráfico Faturado × Recebido × Pago e mantém a abertura do sistema
+   * barata — o Dashboard é a primeira tela de todo mundo, todo dia.
+   * Se a carga completa já rodou, não faz nada: os resumos já estão em memória.
+   */
+  const loadBillingSummariesLight = useCallback(async () => {
+    if (billingLoaded || billingSummariesLoaded || isBillingLoading) return;
+    try {
+      const sums = await fetchBillingSummaries();
+      setBillingSummaries(sums);
+      setBillingSummariesLoaded(true);
+    } catch (err: any) {
+      console.error('Erro ao carregar resumos de faturamento:', err.message);
+    }
+  }, [billingLoaded, billingSummariesLoaded, isBillingLoading]);
 
   const loadStock = useCallback(async (force = false) => {
     if (!force && (isStockLoading || stockLoaded)) return;
@@ -416,13 +438,18 @@ export default function App() {
 
   useEffect(() => {
     if (!currentUser) return;
+    // O Dashboard precisa do FATURAMENTO para o ciclo "Faturado × Recebido ×
+    // Pago", mas não pode pagar o preço da carga completa: `loadBilling` também
+    // lê `faturamento_cliente` (milhares de documentos). Aqui puxamos só os
+    // resumos mensais — 12 documentos por ano — o suficiente para o painel.
+    if (activeTab === 'dashboard') loadBillingSummariesLight();
     if (activeTab === 'billing') loadBilling();
     if (activeTab === 'stock') loadStock();
     // Vendas depende do Estoque e dos Clientes para os vínculos; o Estoque é
     // carregado junto para que a coluna "custo atual" não apareça vazia na
     // primeira abertura da aba.
     if (activeTab === 'sales') { loadSales(); loadStock(); }
-  }, [activeTab, currentUser, loadBilling, loadStock, loadSales]);
+  }, [activeTab, currentUser, loadBilling, loadStock, loadSales, loadBillingSummariesLight]);
 
   // ── Handler: importação do RPR014 (Faturamento) ──────────────────────────
   /**
@@ -1619,7 +1646,11 @@ export default function App() {
               financialMonths={financialData}
               customers={customers}
               delinquentTitles={delinquentTitles}
+              billingSummaries={billingSummaries}
+              payables={payables}
+              statementEntries={statementEntries}
               selectedYear={selectedYear}
+              setActiveTab={setActiveTab}
             />
           )}
 
