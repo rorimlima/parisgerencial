@@ -16,6 +16,7 @@ import {
   UploadCloud,
 } from 'lucide-react';
 import { Customer, DelinquencyValidationRowResult, SaleItem, ValidationRowResult } from '../types';
+import { BaseMaintenancePanel } from './BaseMaintenancePanel';
 import {
   formatPhoneBr,
   parseDelinquencyRows,
@@ -42,6 +43,8 @@ interface ImportDataViewProps {
   onCommitSalesImport?: (items: SaleItem[]) => Promise<void> | void;
   selectedYear: number;
   initialModule?: 'economic' | 'financial' | 'customers' | 'delinquency' | 'sales';
+  /** Perfil do usuário — o painel de manutenção da base é só de administrador. */
+  userRole?: string;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -104,6 +107,7 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
   onCommitSalesImport,
   selectedYear,
   initialModule,
+  userRole = 'analista',
 }) => {
   const [targetModule, setTargetModule] = useState<'economic' | 'financial' | 'customers' | 'delinquency' | 'sales'>(initialModule || 'financial');
   const [year, setYear] = useState<number>(selectedYear || 2026);
@@ -535,7 +539,6 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
             >
               <option value="financial">Resultado Financeiro (Caixa)</option>
               <option value="economic">Resultado Econômico (DRE)</option>
-              <option value="payables">Contas a Pagar (Planilha RFN006)</option>
               <option value="statement">Extrato Financeiro (Bancos / Tesouraria)</option>
               <option value="customers">Carteira de Clientes</option>
               <option value="delinquency">Inadimplência (Títulos Vencidos)</option>
@@ -562,21 +565,25 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
         </div>
       </div>
 
-      {/* Guia de colunas para Contas a Pagar (RFN006) */}
-      {targetModule === 'payables' && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
-          <div className="flex items-start gap-2">
-            <Info className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="text-xs font-bold text-amber-900">Importação de Contas a Pagar (Relatório RFN006)</p>
-              <p className="text-[11px] text-amber-800 mt-0.5">
-                Envie o arquivo <strong>RFN006 (Totais Pagos por Credor)</strong> em formato Excel (.xlsx/.xls).
-                O sistema efetuará o mapeamento dos credores (`TituloPessoaCod`) para o `cod_cliente` e executará a conciliação automática contra o Extrato Financeiro.
-              </p>
-            </div>
+      {/* Onde os títulos do RFN046 são importados — e por que não é aqui */}
+      <div className="bg-[#F9F7F2] border border-[#C19A6B]/40 rounded-xl p-4">
+        <div className="flex items-start gap-2">
+          <Info className="w-4 h-4 text-[#C19A6B] flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-xs font-bold text-[#2D2A26]">
+              Contas a Receber e Contas a Pagar têm importação própria
+            </p>
+            <p className="text-[11px] text-[#8B7D6B] mt-0.5 max-w-4xl">
+              Os títulos vêm do relatório <strong>RFN046</strong>, exportado duas vezes: uma filtrando as{' '}
+              <strong>entradas (Titulo_MovimentoFinanceiro = R)</strong> e outra as{' '}
+              <strong>saídas (P)</strong>. A carga é feita dentro de cada módulo (aba <em>Importar</em>) porque lá
+              a prévia mostra, antes de gravar, quanto vai virar realizado pelo <code>Titulo_Status</code>, quanto
+              fica em aberto e quantos títulos amarram no <code>cod_cliente</code>. Logo depois da gravação, a baixa
+              automática já roda contra o extrato.
+            </p>
           </div>
         </div>
-      )}
+      </div>
 
       {/* Guia de colunas para Extrato Financeiro (Bancos e Tesouraria) */}
       {targetModule === 'statement' && (
@@ -1199,6 +1206,9 @@ export const ImportDataView: React.FC<ImportDataViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Manutenção da base — só aparece para administrador */}
+      <BaseMaintenancePanel userRole={userRole} />
     </div>
   );
 };

@@ -10,7 +10,7 @@
  * diferentes para a mesma pergunta.
  */
 
-import { PayableForecastTitle } from '../types';
+import { TituloFinanceiro } from '../types';
 
 export type ForecastWeekKey = 'sem01' | 'sem02' | 'sem03' | 'sem04' | 'sem05';
 
@@ -48,23 +48,29 @@ export const formatIsoBr = (iso: string): string => {
 };
 
 /**
- * Um título só entra na previsão se ainda tem saldo e não foi pago. O ERP às
- * vezes devolve no RFN046 títulos já quitados no dia da extração; deixá-los
- * passar transformaria dinheiro que já saiu em saída futura.
+ * O QUE É "EM ABERTO" DEPOIS DA UNIFICAÇÃO
+ * ----------------------------------------
+ * A regra antiga era "tem saldo e não tem data de pagamento", e ela quebrava
+ * nos dois sentidos: título pago com saldo residual entrava na previsão, e
+ * título em aberto que o ERP exportou com saldo zerado sumia dela.
+ *
+ * Agora quem manda é o `Titulo_Status`: só é compromisso futuro o que o ERP
+ * ainda não deu por pago. É a MESMA régua que o fluxo de caixa usa para separar
+ * previsto de realizado — réguas diferentes nas duas telas é como o mesmo
+ * título acaba contado duas vezes.
  */
-export const isOpenForecast = (t: PayableForecastTitle): boolean =>
-  (t.balance || 0) > 0 && !t.paymentDate;
+export const isOpenForecast = (t: TituloFinanceiro): boolean => !t.isPaid && (t.balance || 0) > 0;
 
 /** Títulos em aberto com vencimento dentro do intervalo [start, end] (inclusivo). */
 export const forecastInRange = (
-  titles: PayableForecastTitle[],
+  titles: TituloFinanceiro[],
   startIso: string,
   endIso: string
-): PayableForecastTitle[] =>
+): TituloFinanceiro[] =>
   titles.filter((t) => isOpenForecast(t) && t.dueDate >= startIso && t.dueDate <= endIso);
 
 /** Soma o saldo a pagar de uma lista de títulos. */
-export const sumForecast = (titles: PayableForecastTitle[]): number =>
+export const sumForecast = (titles: TituloFinanceiro[]): number =>
   titles.reduce((acc, t) => acc + (t.balance || 0), 0);
 
 /**
@@ -72,7 +78,7 @@ export const sumForecast = (titles: PayableForecastTitle[]): number =>
  * Devolve valores POSITIVOS — quem consome decide o sinal.
  */
 export const forecastByWeek = (
-  titles: PayableForecastTitle[],
+  titles: TituloFinanceiro[],
   year: number,
   monthKey: string
 ): Record<ForecastWeekKey, number> => {
@@ -89,8 +95,8 @@ export const forecastByWeek = (
 
 /** Agrupamento genérico por chave, somando saldo e contando títulos. */
 export const groupForecast = (
-  titles: PayableForecastTitle[],
-  keyOf: (t: PayableForecastTitle) => string
+  titles: TituloFinanceiro[],
+  keyOf: (t: TituloFinanceiro) => string
 ): { key: string; total: number; count: number }[] => {
   const map = new Map<string, { total: number; count: number }>();
   for (const t of titles) {

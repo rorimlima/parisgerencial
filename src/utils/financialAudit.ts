@@ -163,11 +163,21 @@ export const buildOperatingRows = (params: {
     .filter((b) => b.year === year)
     .forEach((b) => billingByMonth.set(b.monthKey, (billingByMonth.get(b.monthKey) || 0) + (b.grossRevenue || 0)));
 
-  // Contas a pagar liquidadas por mês (data efetiva de pagamento)
+  // Contas a pagar liquidadas por mês.
+  //
+  // A CHAVE AQUI É `paidMonthKey`, NÃO `monthKey`.
+  // No modelo unificado do RFN046, `monthKey` é o mês do VENCIMENTO (a
+  // competência do compromisso) e `paidMonthKey` é o mês do PAGAMENTO (quando o
+  // dinheiro saiu). Este confronto é contra o EXTRATO, que só conhece a data em
+  // que o banco debitou — usar o vencimento jogaria um título vencido em 30/06 e
+  // pago em 03/07 no mês errado e criaria uma divergência que não existe.
+  //
+  // Só entra o que o ERP deu por pago: compromisso em aberto não tem contrapartida
+  // no extrato para ser confrontada.
   const payablesByMonth = new Map<string, number>();
   payables
-    .filter((p) => p.year === year)
-    .forEach((p) => payablesByMonth.set(p.monthKey, (payablesByMonth.get(p.monthKey) || 0) + (p.amount || 0)));
+    .filter((p) => p.isPaid && p.paidYear === year)
+    .forEach((p) => payablesByMonth.set(p.paidMonthKey, (payablesByMonth.get(p.paidMonthKey) || 0) + (p.amount || 0)));
 
   // Extrato (banco + tesouraria) por mês
   const stmtInByMonth = new Map<string, number>();
@@ -498,9 +508,15 @@ export const buildAuditChecks = (params: {
   );
 
   // 5. Títulos pagos ainda não conciliados (baixa pendente)
-  const abertos = payables.filter((p) => p.year === year && p.status === 'Em Aberto');
+  //
+  // "Pago sem baixa" é o título que o ERP diz ter liquidado e que não encontrou
+  // par no extrato. Título EM ABERTO não conta aqui: ele não tem baixa porque
+  // ainda não foi pago, e misturar os dois transformaria a previsão do mês em
+  // falha de conciliação.
+  const pagosDoAno = payables.filter((p) => p.isPaid && p.paidYear === year);
+  const abertos = pagosDoAno.filter((p) => p.status === 'Em Aberto' || p.status === 'Conferir');
   const valorAberto = abertos.reduce((acc, p) => acc + (p.amount || 0), 0);
-  const totalTitulos = payables.filter((p) => p.year === year);
+  const totalTitulos = pagosDoAno;
   const pctAberto = round2(safeDiv(valorAberto, totalTitulos.reduce((a, p) => a + (p.amount || 0), 0)) * 100);
   checks.push({
     id: 'baixas-pendentes',

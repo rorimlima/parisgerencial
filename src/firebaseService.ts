@@ -37,21 +37,23 @@ import {
   clearStatementEntries as _clearStatementEntries,
   fetchCashFlowPlans,
   saveCashFlowPlan as _saveCashFlowPlan,
-  fetchPayables,
-  upsertPayablesBatch as _upsertPayablesBatch,
-  updatePayable as _updatePayable,
-  applyPayablesReconciliation as _applyPayablesReconciliation,
-  deletePayable as _deletePayable,
-  clearPayables as _clearPayables,
-  fetchPayableForecasts as _fetchPayableForecasts,
-  upsertPayableForecastsBatch as _upsertPayableForecastsBatch,
-  deletePayableForecast as _deletePayableForecast,
-  clearPayableForecasts as _clearPayableForecasts,
-  settlePayableForecasts as _settlePayableForecasts,
   signInAuthorizedUser,
   signInWithGoogleAccount,
   signOutUser,
 } from './services/firebaseService';
+
+import {
+  fetchReceivables as _fetchReceivables,
+  fetchPayables as _fetchPayables,
+  upsertTitulosBatch as _upsertTitulosBatch,
+  applyReconciliation as _applyReconciliation,
+  markForReview as _markForReview,
+  updateTituloFields as _updateTituloFields,
+  linkCustomersBatch as _linkCustomersBatch,
+  deleteTitulo as _deleteTituloDoc,
+  clearTitulos as _clearTitulos,
+  clearCollection as _clearCollection,
+} from './services/titulosService';
 
 import { ApiToken, Customer, DelinquentTitle, EconomicMonthData, FinancialMonthData, Seller, User } from './types';
 
@@ -157,18 +159,21 @@ export const clearExtratoFinanceiro = _clearStatementEntries;
 export const getFluxoCaixa = fetchCashFlowPlans;
 export const saveFluxoCaixa = _saveCashFlowPlan;
 
-// ── Contas a Pagar (RFN006 — Totais Pagos por Credor) ───────────────────────
-export const getContasPagar = fetchPayables;
-export const upsertContasPagar = _upsertPayablesBatch;
-export const updateContaPagar = _updatePayable;
-export const applyBaixaAutomatica = _applyPayablesReconciliation;
-export const deleteContaPagar = _deletePayable;
-export const clearContasPagar = _clearPayables;
-
-// ── Previsão de Pagamento (RFN046 — Títulos em aberto) ─────────────────────
-export const getPrevisaoPagamento = _fetchPayableForecasts;
-export const upsertPrevisaoPagamento = _upsertPayableForecastsBatch;
-export const deletePrevisaoPagamento = _deletePayableForecast;
-export const clearPrevisaoPagamento = _clearPayableForecasts;
-export const quitarPrevisaoPagamento = _settlePayableForecasts;
+// ── Títulos Financeiros (RFN046) — Contas a Receber e Contas a Pagar ────────
+//
+// As duas pontas agora falam o mesmo modelo e saem do mesmo relatório. Os
+// nomes antigos (`getContasPagar`, `upsertContasPagar`, ...) continuam
+// exportados porque metade do App ainda os chama — mas apontam para o serviço
+// novo, então não existe mais uma segunda base de contas a pagar rodando por
+// baixo com números próprios.
+export const getContasReceber = _fetchReceivables;
+export const getContasPagar = _fetchPayables;
+export const upsertTitulosFinanceiros = _upsertTitulosBatch;
+export const aplicarBaixaTitulos = _applyReconciliation;
+export const marcarTitulosParaConferencia = _markForReview;
+export const atualizarTitulo = _updateTituloFields;
+export const vincularClientesTitulos = _linkCustomersBatch;
+export const excluirTitulo = _deleteTituloDoc;
+export const zerarTitulos = _clearTitulos;
+export const zerarColecao = _clearCollection;
 

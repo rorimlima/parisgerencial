@@ -19,7 +19,8 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  AlertTriangle,
+  ArrowDownCircle,
+  ArrowUpCircle,
   BarChart3,
   Boxes,
   Briefcase,
@@ -30,7 +31,6 @@ import {
   Landmark,
   LayoutDashboard,
   Receipt,
-  ScrollText,
   ShoppingCart,
   TrendingUp,
   Users,
@@ -80,9 +80,13 @@ const MENU_GROUPS: MenuGroup[] = [
       { id: 'billing', label: 'Faturamento', icon: Receipt, description: 'Notas fiscais (RPR014) e risco por cliente' },
       { id: 'sales', label: 'Vendas de Produtos', icon: ShoppingCart, description: 'Vendas item a item (RPR001): margem por vendedor, descontos e auditoria de desvios' },
       { id: 'stock', label: 'Estoque', icon: Boxes, description: 'Lista de preço (RPR053), capital parado e margem' },
-      { id: 'statement', label: 'Extrato Financeiro', icon: Landmark, description: 'Conciliação bancária e caixa/tesouraria' },
-      { id: 'payables', label: 'Contas a Pagar', icon: ScrollText, description: 'Títulos pagos (RFN006) e baixa automática' },
-      { id: 'delinquency', label: 'Inadimplência', icon: AlertTriangle, description: 'Títulos vencidos, aging list e cobrança', badge: '!' },
+      { id: 'statement', label: 'Extrato Financeiro', icon: Landmark, description: 'Conciliação bancária e caixa/tesouraria (Bradesco, PagBank e Caixa/Tesouraria)' },
+      { id: 'receivables', label: 'Contas a Receber', icon: ArrowDownCircle, description: 'Títulos de entrada (RFN046): recebimento, aging de cobrança e baixa automática' },
+      { id: 'payables', label: 'Contas a Pagar', icon: ArrowUpCircle, description: 'Títulos de saída (RFN046): desembolso, previsão e baixa automática' },
+      // INADIMPLÊNCIA saiu do menu como módulo próprio: os títulos vencidos e
+      // não pagos agora são calculados do próprio Contas a Receber (aging no
+      // Painel), sem uma segunda base para manter em dia. A rota continua
+      // acessível para consulta do histórico já importado do RFN029.
     ],
   },
   {

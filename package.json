@@ -19,6 +19,9 @@
     "test:fluxo": "node scripts/testFluxoCaixa.mjs",
     "import:fluxo-historico:dry": "node scripts/importFluxoCaixaHistorico.mjs \"FLUXO DE CAIXA (1).xlsx\" --dry",
     "import:fluxo-historico": "node scripts/importFluxoCaixaHistorico.mjs \"FLUXO DE CAIXA (1).xlsx\"",
+    "import:titulos:dry": "node scripts/importTitulosRfn046.mjs --dry",
+    "import:titulos": "node scripts/importTitulosRfn046.mjs",
+    "import:titulos:limpo": "node scripts/importTitulosRfn046.mjs --limpar-legado",
     "test": "node scripts/testRfn019Parser.mjs && node scripts/testFinancialAudit.mjs"
   },
   "dependencies": {

@@ -57,7 +57,7 @@ import {
   CashFlowPlan,
   CashFlowWeekKey,
   FinancialStatementEntry,
-  PayableForecastTitle,
+  TituloFinanceiro,
 } from '../types';
 import {
   exportCashFlowPdfGeral,
@@ -79,8 +79,15 @@ import { PdfExportMenu } from './PdfExportMenu';
 interface CashFlowViewProps {
   plans: CashFlowPlan[];
   statementEntries: FinancialStatementEntry[];
-  /** Títulos a vencer (RFN046) — alimentam a previsão da coluna AUTOM. */
-  payableForecasts?: PayableForecastTitle[];
+  /**
+   * Títulos financeiros (RFN046) dos dois lados. Alimentam o fluxo de caixa em
+   * duas frentes:
+   *   • REALIZADO — títulos com Titulo_Status = 'Pago' viram movimento na data
+   *     do pagamento (entrada pelos 'R', saída pelos 'P').
+   *   • PREVISTO  — títulos em aberto viram compromisso na data do vencimento.
+   */
+  receivables?: TituloFinanceiro[];
+  payables?: TituloFinanceiro[];
   selectedYear: number;
   onSavePlan: (plan: CashFlowPlan) => Promise<void> | void;
   userRole: string;
@@ -141,7 +148,8 @@ const sumWeeks = (fn: (w: CashFlowWeekKey) => number): number =>
 export const CashFlowView: React.FC<CashFlowViewProps> = ({
   plans,
   statementEntries,
-  payableForecasts = [],
+  receivables = [],
+  payables = [],
   selectedYear,
   onSavePlan,
   userRole,
@@ -198,8 +206,24 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
     [plans, monthKey, selectedYear]
   );
 
-  // ── REALIZADO AUTOMÁTICO: agregação a partir do Extrato Financeiro ────────
+  /**
+   * REALIZADO AUTOMÁTICO — extrato + títulos pagos que o extrato não cobre.
+   * ======================================================================
+   * Existem duas testemunhas do mesmo dinheiro: o extrato bancário (o que o
+   * banco viu) e o título com Titulo_Status = 'Pago' (o que o ERP registrou).
+   *
+   * Somar as duas cegamente conta cada movimento DUAS VEZES. Ignorar os títulos
+   * perde tudo o que andou fora dos extratos importados (dinheiro em espécie,
+   * cartão, conta não conciliada) — e o realizado fica menor que a realidade.
+   *
+   * A regra aqui: o extrato manda, e o título só entra quando NÃO foi
+   * conciliado com nenhum lançamento. Título já baixado contra o extrato já
+   * está representado pelo lançamento; título pago sem par no extrato é
+   * dinheiro que se moveu e que só o ERP viu. Essa é exatamente a fronteira que
+   * a baixa automática desenha — e o motivo de ela existir.
+   */
   const realized = useMemo(() => {
+    const zero = (): Record<CashFlowWeekKey, number> => ({ sem01: 0, sem02: 0, sem03: 0, sem04: 0, sem05: 0 });
     const weeks: Record<CashFlowWeekKey, { receb: number; desemb: number }> = {
       sem01: { receb: 0, desemb: 0 }, sem02: { receb: 0, desemb: 0 }, sem03: { receb: 0, desemb: 0 },
       sem04: { receb: 0, desemb: 0 }, sem05: { receb: 0, desemb: 0 },
@@ -207,31 +231,71 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
     const recebByType: Record<string, Record<CashFlowWeekKey, number>> = {};
     const desembBySource: Record<string, Record<CashFlowWeekKey, number>> = {};
 
+    // 1) O que o banco / caixa viu.
     for (const e of statementEntries) {
       if (e.year !== selectedYear || e.monthKey !== monthKey) continue;
       const wk = weekOfMonth(e.date);
       if (e.entryAmount > 0) {
         weeks[wk].receb += e.entryAmount;
         const cat = categorizeReceipt(e);
-        if (!recebByType[cat]) recebByType[cat] = { sem01: 0, sem02: 0, sem03: 0, sem04: 0, sem05: 0 };
+        if (!recebByType[cat]) recebByType[cat] = zero();
         recebByType[cat][wk] += e.entryAmount;
       }
       if (e.exitAmount > 0) {
         weeks[wk].desemb += e.exitAmount;
         const src = e.sourceLabel || 'Outros';
-        if (!desembBySource[src]) desembBySource[src] = { sem01: 0, sem02: 0, sem03: 0, sem04: 0, sem05: 0 };
+        if (!desembBySource[src]) desembBySource[src] = zero();
         desembBySource[src][wk] += e.exitAmount;
       }
     }
-    return { weeks, recebByType, desembBySource };
-  }, [statementEntries, selectedYear, monthKey]);
 
-  // ── PREVISÃO FUTURA: títulos a vencer (RFN046) por semana do mês ──────────
+    // 2) O que só o ERP viu: pago, no mês, e sem baixa contra o extrato.
+    const naoConciliado = (t: TituloFinanceiro) =>
+      t.isPaid &&
+      t.paidYear === selectedYear &&
+      t.paidMonthKey === monthKey &&
+      t.status !== 'Baixado Automático' &&
+      t.status !== 'Baixado Manual';
+
+    let titulosReceb = 0;
+    let titulosDesemb = 0;
+
+    for (const t of receivables) {
+      if (!naoConciliado(t)) continue;
+      const wk = weekOfMonth(t.paymentDate || t.dueDate);
+      weeks[wk].receb += t.amount;
+      titulosReceb += t.amount;
+      const cat = 'Títulos a receber (sem extrato)';
+      if (!recebByType[cat]) recebByType[cat] = zero();
+      recebByType[cat][wk] += t.amount;
+    }
+
+    for (const t of payables) {
+      if (!naoConciliado(t)) continue;
+      const wk = weekOfMonth(t.paymentDate || t.dueDate);
+      weeks[wk].desemb += t.amount;
+      titulosDesemb += t.amount;
+      const src = 'Títulos pagos (sem extrato)';
+      if (!desembBySource[src]) desembBySource[src] = zero();
+      desembBySource[src][wk] += t.amount;
+    }
+
+    return { weeks, recebByType, desembBySource, titulosReceb, titulosDesemb };
+  }, [statementEntries, receivables, payables, selectedYear, monthKey]);
+
+  // ── PREVISÃO: títulos EM ABERTO por semana de vencimento ─────────────────
+  // Os dois lados, porque o mês que vem tem entrada e saída previstas — e um
+  // fluxo que só projeta o que sai transforma qualquer mês em déficit.
   const forecastWeeks = useMemo(
-    () => forecastByWeek(payableForecasts, selectedYear, monthKey),
-    [payableForecasts, selectedYear, monthKey]
+    () => forecastByWeek(payables, selectedYear, monthKey),
+    [payables, selectedYear, monthKey]
+  );
+  const forecastWeeksIn = useMemo(
+    () => forecastByWeek(receivables, selectedYear, monthKey),
+    [receivables, selectedYear, monthKey]
   );
   const totalForecast = WEEKS.reduce((a, w) => a + forecastWeeks[w], 0);
+  const totalForecastIn = WEEKS.reduce((a, w) => a + forecastWeeksIn[w], 0);
 
   // Sincroniza o rascunho editável com o plano salvo quando muda o mês/ano.
   //
@@ -295,9 +359,13 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
     const prevDesemb = (w: CashFlowWeekKey) => draft.weeks[w]?.desembolsos || 0; // já negativo
     const aporte = (w: CashFlowWeekKey) => draft.weeks[w]?.aportes || 0;
 
-    // AUTOMÁTICO — só conferência. Recebimentos: entradas do extrato.
-    // Desembolsos: saídas do extrato + títulos a vencer da semana (previsão).
-    const autoReceb = (w: CashFlowWeekKey) => realized.weeks[w].receb;
+    // AUTOMÁTICO — coluna de conferência, nunca de fechamento.
+    // Realizado (extrato + títulos pagos sem par no extrato) MAIS, quando o
+    // gestor liga a chave, o previsto dos títulos em aberto da semana.
+    // Os dois lados entram: um fluxo que projeta só o que sai transforma
+    // qualquer mês em déficit e destrói a utilidade da projeção.
+    const autoReceb = (w: CashFlowWeekKey) =>
+      realized.weeks[w].receb + (includeForecast ? forecastWeeksIn[w] : 0);
     const autoDesemb = (w: CashFlowWeekKey) =>
       -(realized.weeks[w].desemb + (includeForecast ? forecastWeeks[w] : 0));
 
@@ -330,7 +398,7 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
       autoReceb, autoDesemb, autoGer, autoSaldo,
       realReceb, realDesemb, prevGer, realGer, prevSaldo, realSaldo,
     };
-  }, [draft, realized, forecastWeeks, includeForecast]);
+  }, [draft, realized, forecastWeeks, forecastWeeksIn, includeForecast]);
 
   // Saldo final realizado do mês anterior (para herança automática)
   const previousMonthFinalSaldo = useMemo(() => {
@@ -489,7 +557,7 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
   // Compromissos do horizonte: tudo o que está em aberto vencendo de hoje até
   // hoje + N dias, MAIS o que já venceu e não foi pago (atraso não deixa de ser
   // dívida por ter passado a data).
-  const titulosAbertos = useMemo(() => payableForecasts.filter(isOpenForecast), [payableForecasts]);
+  const titulosAbertos = useMemo(() => payables.filter(isOpenForecast), [payables]);
   const titulosNoHorizonte = useMemo(
     () => forecastInRange(titulosAbertos, '1900-01-01', addDaysIso(hojeIso, horizonteDias)),
     [titulosAbertos, hojeIso, horizonteDias]
@@ -611,7 +679,7 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
 
   const handleExportMensalPdf = (mKey: string) => {
     const targetPlan = plans.find((p) => p.monthKey === mKey && p.year === selectedYear) || (mKey === monthKey ? draft : undefined);
-    exportCashFlowPdfMensal(targetPlan, statementEntries, selectedYear, mKey, payableForecasts);
+    exportCashFlowPdfMensal(targetPlan, statementEntries, selectedYear, mKey, payables);
   };
 
   const receiptTypes = Object.keys(realized.recebByType).sort();
@@ -1111,6 +1179,28 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
                   ))}
                   <td className="p-1.5 border-l border-[#C19A6B]/40 bg-[#F9F7F2] text-center text-[10px] text-[#B9AFA0]">—</td>
                   <td className="p-1.5 text-right font-mono text-[11px] font-bold text-amber-700 bg-[#F9F7F2]">{formatCurrency(totalForecast)}</td>
+                  <td className="p-1.5 bg-[#F9F7F2] text-center text-[10px] text-[#B9AFA0]">—</td>
+                </tr>
+              )}
+
+              {/* Títulos a RECEBER em aberto (parcela de previsão de entrada) */}
+              {totalForecastIn > 0 && (
+                <tr className="border-b border-[#EAE6DF] bg-emerald-50/40">
+                  <td className="p-2 font-semibold text-[11px] sticky left-0 bg-emerald-50 z-10 flex items-center gap-1">
+                    <CalendarClock className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Títulos a receber</span>
+                  </td>
+                  {WEEKS.map((w) => (
+                    <React.Fragment key={w}>
+                      <td className="p-1.5 border-l border-[#EAE6DF] text-center text-[10px] text-[#B9AFA0]">—</td>
+                      <td className="p-1.5 text-right font-mono text-[11px] text-emerald-700 font-semibold bg-[#F9F7F2]/60">
+                        {forecastWeeksIn[w] ? formatCurrency(forecastWeeksIn[w]) : '—'}
+                      </td>
+                      <td className="p-1.5 text-center text-[10px] text-[#B9AFA0]">—</td>
+                    </React.Fragment>
+                  ))}
+                  <td className="p-1.5 border-l border-[#C19A6B]/40 bg-[#F9F7F2] text-center text-[10px] text-[#B9AFA0]">—</td>
+                  <td className="p-1.5 text-right font-mono text-[11px] font-bold text-emerald-700 bg-[#F9F7F2]">{formatCurrency(totalForecastIn)}</td>
                   <td className="p-1.5 bg-[#F9F7F2] text-center text-[10px] text-[#B9AFA0]">—</td>
                 </tr>
               )}

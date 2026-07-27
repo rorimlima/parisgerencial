@@ -13,8 +13,6 @@ import { LoginModal } from './components/LoginModal';
 import { Navbar } from './components/Navbar';
 import { PwaInstallBanner } from './components/PwaBanners';
 import { Sidebar } from './components/Sidebar';
-import type { RawPayableRow } from './components/PayablesView';
-import type { RawForecastRow } from './utils/rfn046Parser';
 
 /**
  * CARREGAMENTO SOB DEMANDA DAS TELAS
@@ -35,7 +33,9 @@ const SellersManagementView = lazy(() => import('./components/SellersManagementV
 const ApiIntegrationDocsView = lazy(() => import('./components/ApiIntegrationDocsView').then((m) => ({ default: m.ApiIntegrationDocsView })));
 const PostgresSettingsView = lazy(() => import('./components/PostgresSettingsView').then((m) => ({ default: m.PostgresSettingsView })));
 const FinancialStatementView = lazy(() => import('./components/FinancialStatementView').then((m) => ({ default: m.FinancialStatementView })));
-const PayablesView = lazy(() => import('./components/PayablesView').then((m) => ({ default: m.PayablesView })));
+// Contas a Receber e Contas a Pagar são a MESMA tela, parametrizada por
+// `movType`. Um só chunk carregado para os dois módulos.
+const TitulosWorkspace = lazy(() => import('./components/TitulosWorkspace').then((m) => ({ default: m.TitulosWorkspace })));
 const CashFlowView = lazy(() => import('./components/CashFlowView').then((m) => ({ default: m.CashFlowView })));
 const BillingView = lazy(() => import('./components/BillingView').then((m) => ({ default: m.BillingView })));
 const StockView = lazy(() => import('./components/StockView').then((m) => ({ default: m.StockView })));
@@ -84,19 +84,19 @@ import {
   upsertExtratoFinanceiro,
   deleteExtratoFinanceiro,
   clearExtratoFinanceiro,
-  getContasPagar,
-  upsertContasPagar,
-  updateContaPagar,
-  applyBaixaAutomatica,
-  deleteContaPagar,
-  clearContasPagar,
   getFluxoCaixa,
   saveFluxoCaixa,
-  getPrevisaoPagamento,
-  upsertPrevisaoPagamento,
-  clearPrevisaoPagamento,
-  quitarPrevisaoPagamento,
+  upsertTitulosFinanceiros,
+  aplicarBaixaTitulos,
+  marcarTitulosParaConferencia,
+  atualizarTitulo,
+  excluirTitulo,
+  zerarTitulos,
 } from './firebaseService';
+
+import { fetchTitulos } from './services/titulosService';
+import { reconcile } from './utils/reconciliation';
+import { buildCustomerIndex, normalizePersonCode } from './utils/linking';
 
 import {
   fetchBillingSummaries,
@@ -130,8 +130,12 @@ import {
   FinancialMonthData,
   FinancialStatementEntry,
   InvoiceRecord,
-  PayableTitle,
-  PayableForecastTitle,
+  BaixaStatus,
+  ReconciliationMatch,
+  ReconciliationSettings,
+  DEFAULT_RECONCILIATION_SETTINGS,
+  TituloFinanceiro,
+  TituloMovType,
   CashFlowPlan,
   PostgresConfig,
   SaleItem,
@@ -178,12 +182,26 @@ export default function App() {
   // extrato de 2026 nunca acharia o par. Por isso a tela de Contas a Pagar
   // trabalha com esta lista.
   const [allStatementEntries, setAllStatementEntries] = useState<FinancialStatementEntry[]>([]);
-  const [payables, setPayables] = useState<PayableTitle[]>([]);
+  // ── Títulos financeiros (RFN046) ────────────────────────────────────────
+  // Duas listas com o MESMO tipo, porque são o mesmo relatório visto pelos dois
+  // lados do movimento. O recorte é o ano do VENCIMENTO (competência).
+  const [receivables, setReceivables] = useState<TituloFinanceiro[]>([]);
+  const [payables, setPayables] = useState<TituloFinanceiro[]>([]);
   // PREVISÃO DE PAGAMENTO (RFN046 — títulos em aberto). Carregada SEM filtro de
   // ano de propósito: a pergunta "quanto vou pagar nos próximos 30 dias" feita
   // em dezembro precisa enxergar os vencimentos de janeiro. É uma base pequena
   // (só o que está em aberto), então o custo de leitura é irrelevante.
-  const [payableForecasts, setPayableForecasts] = useState<PayableForecastTitle[]>([]);
+  // Parâmetros da baixa automática. Ficam no navegador do gestor porque são
+  // preferência de trabalho, não dado da empresa — e cada operação tem a sua
+  // régua para tolerância de valor e janela de dias.
+  const [reconSettings, setReconSettings] = useState<ReconciliationSettings>(() => {
+    try {
+      const raw = localStorage.getItem('pdk_recon_settings');
+      return raw ? { ...DEFAULT_RECONCILIATION_SETTINGS, ...JSON.parse(raw) } : DEFAULT_RECONCILIATION_SETTINGS;
+    } catch {
+      return DEFAULT_RECONCILIATION_SETTINGS;
+    }
+  });
   const [cashFlowPlans, setCashFlowPlans] = useState<CashFlowPlan[]>([]);
   const [loginError, setLoginError] = useState<string>('');
 
@@ -246,24 +264,24 @@ export default function App() {
   const loadYearData = useCallback(async (year: number) => {
     setIsLoading(true);
     try {
-      const [ecoData, finData, stmtData, allStmtData, payData, cashData, forecastData] = await Promise.all([
+      const [ecoData, finData, stmtData, allStmtData, recvData, payData, cashData] = await Promise.all([
         getEconomicData(year),
         getFinancialData(year),
         getExtratoFinanceiro(year),
         // Extrato completo, para a conciliação de Contas a Pagar enxergar as
         // viradas de ano (ver comentário na declaração do estado).
         getExtratoFinanceiro(),
-        getContasPagar(year),
+        fetchTitulos('R', year),
+        fetchTitulos('P', year),
         getFluxoCaixa(year),
-        getPrevisaoPagamento(),
       ]);
       setEconomicData(ecoData);
       setFinancialData(finData);
       setStatementEntries(stmtData);
       setAllStatementEntries(allStmtData);
+      setReceivables(recvData);
       setPayables(payData);
       setCashFlowPlans(cashData);
-      setPayableForecasts(forecastData);
     } catch (err: any) {
       console.error('Erro ao carregar dados do ano no Firestore:', err.message);
     } finally {
@@ -1318,403 +1336,159 @@ export default function App() {
     }
   };
 
-  // ── Contas a Pagar (RFN006) ──────────────────────────────────────────────
-  const monthKeyFromIso = (dateStr: string): string => {
-    if (!dateStr) return '';
-    const monthKeys = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
-    const mStr = dateStr.includes('-')
-      ? dateStr.split('-')[1]
-      : dateStr.includes('/')
-      ? dateStr.split('/')[1]
-      : '';
-    const m = parseInt(mStr, 10);
-    return monthKeys[m - 1] || '';
-  };
-
-  // Concilia (baixa automática) títulos "Em Aberto" contra lançamentos de saída
-  // do Extrato Financeiro (banco + caixa/tesouraria) ainda não utilizados em
-  // nenhuma outra baixa. Critério: mesmo valor (tolerância de R$0,01) e data de
-  // pagamento dentro de uma janela de ±15 dias da data do lançamento no extrato
-  // (cobre o intervalo típico entre o registro no ERP e a compensação bancária).
-  // Casamento é 1-para-1 (guloso, por menor diferença de dias) para nunca
-  // vincular o mesmo lançamento de extrato a dois títulos diferentes.
+  // ── Títulos Financeiros (RFN046) — Contas a Receber e Contas a Pagar ─────
   //
-  // AS DUAS LISTAS TÊM QUE VIR COMPLETAS (todos os anos).
-  // Um título pago em 30/12 costuma compensar no extrato em 03/01 — ano
-  // diferente. Conciliando só com o extrato do ano selecionado, esse título
-  // nunca acha o par e fica "Em Aberto" para sempre. E, do outro lado, se a
-  // lista de títulos vier só do ano selecionado, um lançamento já usado numa
-  // baixa de outro ano não aparece em `usedStatementIds` e seria vinculado uma
-  // segunda vez — a mesma saída pagando dois títulos. Por isso os chamadores
-  // buscam `getExtratoFinanceiro()` e `getContasPagar()` sem filtro de ano.
-  const computeAutoReconciliation = (
-    payablesList: PayableTitle[],
-    entriesList: FinancialStatementEntry[]
-  ): { id: string; statementId: string; source: string; notes?: string }[] => {
-    // Janela ampliada para 15 dias para encontrar o máximo de correspondências automáticas
-    const DATE_WINDOW_DAYS = 15;
-    // Tolerância em centavos evita problemas de arredondamento de ponto flutuante
-    const AMOUNT_TOLERANCE_CENTS = 1;
+  // Um handler serve os dois lados. `movType` diz em qual coleção mexer; o
+  // resto da regra é idêntica, porque a fonte é o mesmo relatório. Handlers
+  // separados por lado foi exatamente o que fez a base antiga de pagar e a de
+  // previsão divergirem: a mesma correção precisava ser aplicada duas vezes.
 
-    const openPayables = payablesList.filter((p) => p.status === 'Em Aberto');
-    const usedStatementIds = new Set(payablesList.filter((p) => p.reconciledStatementId).map((p) => p.reconciledStatementId));
-    const availableExits = entriesList.filter((e) => e.exitAmount > 0 && !usedStatementIds.has(e.id));
-
-    const toTime = (iso: string) => {
-      if (!iso) return NaN;
-      // Garante conversão sem efeito de fuso horário
-      return new Date(iso.slice(0, 10) + 'T00:00:00').getTime();
-    };
-
-    // Agrupa os lançamentos de saída disponíveis por valor (em centavos), permitindo
-    // que cada título busque apenas candidatos com o mesmo valor em vez de varrer
-    // toda a lista de lançamentos — troca O(títulos × lançamentos) por ~O(títulos +
-    // lançamentos), essencial para bases com milhares de registros (RFN006 tem
-    // ~6 mil linhas) responderem em milissegundos em vez de segundos/minutos.
-    const exitsByAmountCents = new Map<number, FinancialStatementEntry[]>();
-    for (const e of availableExits) {
-      const cents = Math.round(e.exitAmount * 100);
-      const bucket = exitsByAmountCents.get(cents);
-      if (bucket) bucket.push(e);
-      else exitsByAmountCents.set(cents, [e]);
-    }
-
-    const candidates: { payableId: string; entryId: string; sourceLabel: string; diffDays: number; notes: string }[] = [];
-    for (const p of openPayables) {
-      const pTime = toTime(p.paymentDate);
-      if (isNaN(pTime)) continue;
-
-      const pCents = Math.round(p.amount * 100);
-      // Considera o valor exato e uma pequena tolerância de arredondamento (±1 centavo)
-      for (let delta = -AMOUNT_TOLERANCE_CENTS; delta <= AMOUNT_TOLERANCE_CENTS; delta++) {
-        const bucket = exitsByAmountCents.get(pCents + delta);
-        if (!bucket) continue;
-        for (const e of bucket) {
-          const eTime = toTime(e.date);
-          if (isNaN(eTime)) continue;
-          const diffDays = Math.abs(pTime - eTime) / (1000 * 60 * 60 * 24);
-          if (diffDays > DATE_WINDOW_DAYS) continue;
-
-          // Se houver texto contendo borderô, capturamos para justificar a baixa
-          let notes = '';
-          const desc = (p.description || '').trim();
-          if (desc.toLowerCase().includes('borderô') || desc.toLowerCase().includes('bordero')) {
-            notes = desc;
-          } else {
-            notes = `Baixa automática com base em lançamento de ${e.sourceLabel}`;
-          }
-
-          candidates.push({ payableId: p.id, entryId: e.id, sourceLabel: e.sourceLabel, diffDays, notes });
-        }
-      }
-    }
-    candidates.sort((a, b) => a.diffDays - b.diffDays);
-
-    const matchedPayables = new Set<string>();
-    const matchedEntries = new Set<string>();
-    const results: { id: string; statementId: string; source: string; notes?: string }[] = [];
-    for (const c of candidates) {
-      if (matchedPayables.has(c.payableId) || matchedEntries.has(c.entryId)) continue;
-      matchedPayables.add(c.payableId);
-      matchedEntries.add(c.entryId);
-      results.push({ id: c.payableId, statementId: c.entryId, source: c.sourceLabel, notes: c.notes });
-    }
-    return results;
+  const setTitulosState = (movType: TituloMovType, titulos: TituloFinanceiro[]) => {
+    if (movType === 'R') setReceivables(titulos);
+    else setPayables(titulos);
   };
 
-  const handleImportPayables = async (rows: RawPayableRow[]) => {
+  /** Relê a base de um lado (recorte do ano para a tela) e atualiza o estado. */
+  const refreshTitulos = useCallback(async (movType: TituloMovType, year: number) => {
+    const fresh = await fetchTitulos(movType, year);
+    setTitulosState(movType, fresh);
+    return fresh;
+  }, []);
+
+  /**
+   * Importa os títulos e, logo em seguida, tenta a baixa automática.
+   *
+   * A conciliação roda DEPOIS da gravação e contra a base completa (todos os
+   * anos), não contra o que acabou de subir: um título importado hoje pode
+   * casar com um lançamento de extrato que está no banco há três meses.
+   */
+  const handleImportTitulos = async (movType: TituloMovType, rows: TituloFinanceiro[]) => {
     if (rows.length === 0) return;
 
-    const toSave = rows.map((r) => {
-      const matched = customers.find(
-        (c) => c.code && c.code.toLowerCase() === r.supplierCode.toLowerCase()
-      );
-      
-      const desc = r.description || '';
-      const isBorderou = desc.toLowerCase().includes('originado pelo borderô') || desc.toLowerCase().includes('originado pelo bordero');
-      const status = (isBorderou ? 'Baixado Manual' : 'Em Aberto') as PayableTitle['status'];
-      const notes = isBorderou ? desc : '';
-
-      return {
-        movCode: r.movCode,
-        companyName: r.companyName,
-        supplierCode: r.supplierCode,
-        supplierName: r.supplierName,
-        supplierCustomerId: matched?.id || '',
-        titleCode: r.titleCode,
-        parcela: r.parcela,
-        dueDate: r.dueDate,
-        paymentDate: r.paymentDate,
-        year: parseInt(r.paymentDate.slice(0, 4), 10),
-        monthKey: monthKeyFromIso(r.paymentDate),
-        description: r.description,
-        payingAgent: r.payingAgent,
-        department: r.department,
-        amount: r.amount,
-        status,
-        notes,
-        reconciledAt: isBorderou ? new Date().toISOString() : '',
-      };
+    // Vínculo com o cadastro pelo cod_cliente — feito aqui e não na tela para
+    // valer também em importações automatizadas futuras (API, agendamento).
+    const byCode = buildCustomerIndex(customers);
+    const comVinculo = rows.map((r) => {
+      const c = byCode.get(normalizePersonCode(r.personCode));
+      return c ? { ...r, customerId: c.id } : r;
     });
 
-    try {
-      const result = await upsertContasPagar(toSave);
-      console.log(
-        `Contas a pagar: ${result.created} novo(s), ${result.updated} atualizado(s), ${result.errors} erro(s).`
-      );
+    const result = await upsertTitulosFinanceiros(comVinculo);
 
-      // QUITAÇÃO CRUZADA COM A PREVISÃO
-      // Um título que aparece aqui como PAGO não pode continuar na base de
-      // previsão como "a vencer" — o fluxo de caixa contaria a mesma saída duas
-      // vezes. A chave que liga as duas bases é o código do título
-      // (TituloCodigo no RFN006 = Titulo_Codigo no RFN046).
-      const settlements = rows
-        .filter((r) => r.titleCode)
-        .map((r) => ({ titleCode: r.titleCode, paymentDate: r.paymentDate }));
-      const settled = await quitarPrevisaoPagamento(settlements);
-      if (settled > 0) setPayableForecasts(await getPrevisaoPagamento());
+    // Conciliação imediata: base completa dos dois lados.
+    const [todos, extrato] = await Promise.all([fetchTitulos(movType), getExtratoFinanceiro()]);
+    setAllStatementEntries(extrato);
 
-      // Conciliação automática imediata após a importação, contra a base
-      // COMPLETA (todos os anos) — ver o comentário em computeAutoReconciliation.
-      const [allPayables, allEntries] = await Promise.all([
-        getContasPagar(),
-        getExtratoFinanceiro(),
-      ]);
-      setAllStatementEntries(allEntries);
+    const rec = reconcile(todos, extrato, reconSettings);
+    if (rec.auto.length > 0) await aplicarBaixaTitulos(movType, rec.auto, 'Baixado Automático');
+    if (rec.suggestions.length > 0) await marcarTitulosParaConferencia(movType, rec.suggestions);
 
-      const matches = computeAutoReconciliation(allPayables, allEntries);
-      if (matches.length > 0) await applyBaixaAutomatica(matches);
+    await refreshTitulos(movType, selectedYear);
 
-      const fresh = await getContasPagar(selectedYear);
-      setPayables(fresh);
-
-      alert(
-        `Importação de contas a pagar concluída.\n\n` +
-          `• ${result.created} título(s) NOVO(S) adicionado(s)\n` +
-          `• ${result.updated} título(s) já existente(s) atualizado(s) (sem duplicar)\n` +
-          (result.errors > 0 ? `• ${result.errors} linha(s) com erro de gravação\n` : '') +
-          (settled > 0 ? `• ${settled} título(s) baixado(s) da previsão de pagamento\n` : '') +
-          (matches.length > 0 ? `• ${matches.length} baixa(s) automática(s) contra o extrato\n` : '')
-      );
-    } catch (err: any) {
-      console.error('Erro ao importar contas a pagar:', err?.message || err);
-      alert(`Erro ao importar contas a pagar: ${err?.message || err}`);
-    }
-  };
-
-  // ── Previsão de Pagamento (RFN046 — títulos em aberto) ────────────────────
-  //
-  // Base independente da de títulos pagos. A importação é UPSERT por código do
-  // título: reimportar o relatório no dia seguinte atualiza saldos e datas dos
-  // que continuam em aberto, acrescenta os novos e não duplica nada.
-  const handleImportPayableForecasts = async (rows: RawForecastRow[]) => {
-    if (rows.length === 0) return;
-
-    const toSave = rows.map((r) => {
-      const matched = customers.find(
-        (c) => c.code && r.supplierCode && c.code.toLowerCase() === r.supplierCode.toLowerCase()
-      );
-      return {
-        titleCode: r.titleCode,
-        movType: r.movType,
-        companyCode: r.companyCode,
-        companyName: r.companyName,
-        titleNumber: r.titleNumber,
-        supplierCode: r.supplierCode,
-        supplierName: r.supplierName,
-        supplierCustomerId: matched?.id || '',
-        parcela: r.parcela,
-        titleType: r.titleType,
-        issueDate: r.issueDate,
-        entryDate: r.entryDate,
-        dueDate: r.dueDate,
-        paymentDate: r.paymentDate,
-        amount: r.amount,
-        balance: r.balance,
-        status: r.status,
-        invoiceCode: r.invoiceCode,
-        fiscalNoteCode: r.fiscalNoteCode,
-        nossoNumero: r.nossoNumero,
-        observation: r.observation,
-        managementAccount: r.managementAccount,
-        launchClass: r.launchClass,
-        departmentCode: r.departmentCode,
-        department: r.department,
-        collectionAgent: r.collectionAgent,
-        collectionType: r.collectionType,
-        operationNature: r.operationNature,
-        year: r.year,
-        monthKey: r.monthKey,
-      };
-    });
-
-    const result = await upsertPrevisaoPagamento(toSave);
-
-    // Títulos que já constam como pagos no RFN006 entram quitados: se o mesmo
-    // código já está na base de pagos, ele não é compromisso futuro.
-    const paidCodes = new Set(
-      (await getContasPagar()).filter((p) => p.titleCode).map((p) => p.titleCode as string)
-    );
-    const alreadyPaid = toSave
-      .filter((t) => paidCodes.has(t.titleCode))
-      .map((t) => ({ titleCode: t.titleCode, paymentDate: '' }));
-    if (alreadyPaid.length > 0) await quitarPrevisaoPagamento(alreadyPaid);
-
-    setPayableForecasts(await getPrevisaoPagamento());
-
+    const label = movType === 'R' ? 'Contas a Receber' : 'Contas a Pagar';
     alert(
-      `Previsão de pagamento atualizada.\n\n` +
-        `• ${result.created} título(s) NOVO(S) a vencer\n` +
-        `• ${result.updated} título(s) já existente(s) atualizado(s) (saldo/vencimento)\n` +
+      `Importação de ${label} concluída.\n\n` +
+        `• ${result.created} título(s) NOVO(S)\n` +
+        `• ${result.updated} título(s) atualizado(s) (sem duplicar)\n` +
         (result.errors > 0 ? `• ${result.errors} linha(s) com erro de gravação\n` : '') +
-        (alreadyPaid.length > 0
-          ? `• ${alreadyPaid.length} título(s) ignorado(s) por já constarem como pagos no RFN006\n`
-          : '')
+        `• ${comVinculo.filter((t) => t.customerId).length} vinculado(s) ao cadastro de clientes\n` +
+        (rec.auto.length > 0 ? `• ${rec.auto.length} baixa(s) automática(s) contra o extrato\n` : '') +
+        (rec.suggestions.length > 0 ? `• ${rec.suggestions.length} sugestão(ões) marcada(s) para conferência\n` : '')
     );
   };
 
-  const handleClearPayableForecasts = async () => {
-    try {
-      await clearPrevisaoPagamento();
-      setPayableForecasts([]);
-    } catch (err: any) {
-      console.error('Erro ao zerar previsão de pagamento:', err?.message || err);
-    }
-  };
-
-  const handleReconcileNow = async () => {
-    try {
-      // Relê a base inteira do Firestore antes de conciliar. A tela pode estar
-      // aberta há horas e alguém pode ter importado extrato nesse meio-tempo;
-      // conciliar contra o estado em memória deixaria de fora justamente os
-      // lançamentos novos, que são os que mais têm chance de casar.
-      const [allPayables, allEntries] = await Promise.all([
-        getContasPagar(),
-        getExtratoFinanceiro(),
-      ]);
-      setAllStatementEntries(allEntries);
-
-      const matches = computeAutoReconciliation(allPayables, allEntries);
-      if (matches.length === 0) {
-        alert(
-          `Nenhuma nova baixa automática encontrada.\n\nBase varrida: ${allEntries.length} lançamento(s) de extrato e ` +
-            `${allPayables.filter((p) => p.status === 'Em Aberto').length} título(s) em aberto (todos os anos).\n\n` +
-            'Os títulos restantes não têm saída de mesmo valor (±R$0,01) dentro de ±15 dias que ainda não tenha sido usada em outra baixa. ' +
-            'Use "Encontrar no Extrato" para conciliar manualmente com tolerância maior.'
-        );
-        return;
-      }
-      await applyBaixaAutomatica(matches);
-      const fresh = await getContasPagar(selectedYear);
-      setPayables(fresh);
-      alert(
-        `${matches.length} título(s) baixado(s) automaticamente.\n\n` +
-          `Base varrida: ${allEntries.length} lançamento(s) de extrato (todos os anos).`
-      );
-    } catch (e: any) {
-      console.error('Erro na conciliação automática:', e?.message || e);
-    }
-  };
-
-  // Gera código técnico sequencial para baixa: BX-AAAA-NNNNN
-  const generateBaixaCode = (): string => {
-    const year = new Date().getFullYear();
-    const prefix = `BX-${year}-`;
-    // Conta baixas existentes do mesmo ano para gerar sequencial
-    const existingCodes = payables
-      .filter((p) => p.baixaCode && p.baixaCode.startsWith(prefix))
-      .map((p) => {
-        const num = parseInt(p.baixaCode!.replace(prefix, ''), 10);
-        return isNaN(num) ? 0 : num;
-      });
-    const nextSeq = existingCodes.length > 0 ? Math.max(...existingCodes) + 1 : 1;
-    return `${prefix}${String(nextSeq).padStart(5, '0')}`;
-  };
-
-  const handleManualBaixa = async (
-    id: string,
-    notes?: string,
-    statementEntryId?: string,
-    statementSource?: string
+  const handleApplyMatches = async (
+    movType: TituloMovType,
+    matches: ReconciliationMatch[],
+    status: BaixaStatus
   ) => {
-    try {
-      const baixaCode = generateBaixaCode();
-      const now = new Date().toISOString();
-      const updateFields: Partial<PayableTitle> = {
-        status: 'Baixado Manual',
-        notes: notes || '',
-        reconciledAt: now,
-        baixaCode,
-      };
-      // Se vier do "Encontrar no Extrato", salva o vínculo com o lançamento
-      if (statementEntryId) {
-        updateFields.reconciledStatementId = statementEntryId;
-        updateFields.reconciledSource = statementSource || '';
-      }
-      await updateContaPagar(id, updateFields);
-      setPayables((prev) =>
-        prev.map((p) =>
-          p.id === id
-            ? {
-                ...p,
-                status: 'Baixado Manual' as const,
-                notes: notes || p.notes,
-                reconciledAt: now,
-                baixaCode,
-                reconciledStatementId: statementEntryId || p.reconciledStatementId,
-                reconciledSource: statementSource || p.reconciledSource,
-              }
-            : p
-        )
-      );
-    } catch (e) {
-      console.error('Erro ao dar baixa manual:', e);
-      alert('Erro ao dar baixa manual. Verifique o console.');
-    }
+    if (matches.length === 0) return;
+    if (status === 'Conferir') await marcarTitulosParaConferencia(movType, matches);
+    else await aplicarBaixaTitulos(movType, matches, status);
+    await refreshTitulos(movType, selectedYear);
   };
 
-  const handleRevertBaixa = async (id: string) => {
-    try {
-      await updateContaPagar(id, {
-        status: 'Em Aberto',
-        reconciledStatementId: '',
-        reconciledSource: '',
-        reconciledAt: '',
-      });
-      setPayables((prev) =>
-        prev.map((p) =>
-          p.id === id ? { ...p, status: 'Em Aberto', reconciledStatementId: '', reconciledSource: '', reconciledAt: '' } : p
-        )
-      );
-    } catch (e) {
-      console.error('Erro ao estornar baixa:', e);
-    }
+  /** Código legível da baixa: RC-2026-00001 (receber) / BX-2026-00001 (pagar). */
+  const gerarBaixaCode = (movType: TituloMovType, lista: TituloFinanceiro[]): string => {
+    const prefix = `${movType === 'R' ? 'RC' : 'BX'}-${new Date().getFullYear()}-`;
+    const seqs = lista
+      .filter((x) => x.baixaCode && x.baixaCode.startsWith(prefix))
+      .map((x) => parseInt(x.baixaCode!.replace(prefix, ''), 10))
+      .filter((n) => !isNaN(n));
+    return `${prefix}${String((seqs.length ? Math.max(...seqs) : 0) + 1).padStart(5, '0')}`;
   };
 
-  const handleLinkSupplier = async (payableId: string, customerId: string, customerCode: string) => {
-    try {
-      await updateContaPagar(payableId, { supplierCustomerId: customerId });
-      setPayables((prev) => prev.map((p) => (p.id === payableId ? { ...p, supplierCustomerId: customerId } : p)));
-    } catch (e) {
-      console.error('Erro ao vincular credor ao cliente:', e);
-    }
+  const handleManualBaixaTitulo = async (
+    movType: TituloMovType,
+    id: string,
+    statementId?: string,
+    source?: string
+  ) => {
+    const lista = movType === 'R' ? receivables : payables;
+    const now = new Date().toISOString();
+    const baixaCode = gerarBaixaCode(movType, lista);
+    await atualizarTitulo(movType, id, {
+      status: 'Baixado Manual',
+      reconciledAt: now,
+      baixaCode,
+      reconciledStatementId: statementId || '',
+      reconciledSource: source || '',
+    });
+    setTitulosState(
+      movType,
+      lista.map((x) =>
+        x.id === id
+          ? {
+              ...x,
+              status: 'Baixado Manual' as BaixaStatus,
+              reconciledAt: now,
+              baixaCode,
+              reconciledStatementId: statementId || x.reconciledStatementId,
+              reconciledSource: source || x.reconciledSource,
+            }
+          : x
+      )
+    );
   };
 
-  const handleDeletePayable = async (id: string) => {
-    try {
-      await deleteContaPagar(id);
-      setPayables((prev) => prev.filter((p) => p.id !== id));
-    } catch (e) {
-      console.error('Erro ao excluir título de contas a pagar:', e);
-    }
+  const handleRevertBaixaTitulo = async (movType: TituloMovType, id: string) => {
+    const lista = movType === 'R' ? receivables : payables;
+    await atualizarTitulo(movType, id, {
+      status: 'Em Aberto',
+      reconciledStatementId: '',
+      reconciledSource: '',
+      reconciledAt: '',
+      matchScore: 0,
+      matchReason: '',
+    });
+    setTitulosState(
+      movType,
+      lista.map((x) =>
+        x.id === id
+          ? { ...x, status: 'Em Aberto' as BaixaStatus, reconciledStatementId: '', reconciledSource: '', reconciledAt: '' }
+          : x
+      )
+    );
   };
 
-  const handleClearPayables = async () => {
+  const handleDeleteTitulo = async (movType: TituloMovType, id: string) => {
+    await excluirTitulo(movType, id);
+    const lista = movType === 'R' ? receivables : payables;
+    setTitulosState(movType, lista.filter((x) => x.id !== id));
+  };
+
+  const handleClearTitulos = async (movType: TituloMovType) => {
+    await zerarTitulos(movType);
+    setTitulosState(movType, []);
+  };
+
+  /** Parâmetros da baixa automática — ficam no navegador do gestor. */
+  const handleSaveReconSettings = (s: ReconciliationSettings) => {
+    setReconSettings(s);
     try {
-      await clearContasPagar(selectedYear);
-      setPayables([]);
-    } catch (e) {
-      console.error('Erro ao zerar contas a pagar:', e);
+      localStorage.setItem('pdk_recon_settings', JSON.stringify(s));
+    } catch {
+      /* modo privado bloqueia storage — perder a preferência não é motivo de erro */
     }
   };
 
@@ -1870,26 +1644,35 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'payables' && (
-            <PayablesView
-              payables={payables}
-              // Extrato COMPLETO (todos os anos): a busca manual "Encontrar no
-              // Extrato" e a conciliação precisam achar a saída de 03/01 que
-              // pagou o título de 30/12. Com o recorte anual, esses casos
-              // simplesmente não apareciam na tela.
+          {(activeTab === 'receivables' || activeTab === 'payables') && (
+            /*
+             * A MESMA tela para os dois lados. `key` força o React a remontar ao
+             * trocar de módulo: sem isso, os filtros e a prévia de importação do
+             * Contas a Receber apareceriam abertos no Contas a Pagar.
+             *
+             * `statementEntries` vai COMPLETO (todos os anos) de propósito: a
+             * conciliação precisa achar o crédito de 03/01 que quitou o título
+             * de 30/12 — com o recorte anual esse par nunca é encontrado.
+             */
+            <TitulosWorkspace
+              key={activeTab}
+              movType={activeTab === 'receivables' ? 'R' : 'P'}
+              titulos={activeTab === 'receivables' ? receivables : payables}
               statementEntries={allStatementEntries}
               customers={customers}
               selectedYear={selectedYear}
-              onImportPayables={handleImportPayables}
-              onReconcileNow={handleReconcileNow}
-              onManualBaixa={handleManualBaixa}
-              onRevertBaixa={handleRevertBaixa}
-              onLinkSupplier={handleLinkSupplier}
-              onDeletePayable={handleDeletePayable}
-              onClearPayables={handleClearPayables}
-              payableForecasts={payableForecasts}
-              onImportForecasts={handleImportPayableForecasts}
-              onClearForecasts={handleClearPayableForecasts}
+              settings={reconSettings}
+              onSaveSettings={handleSaveReconSettings}
+              onImport={(rows) => handleImportTitulos(activeTab === 'receivables' ? 'R' : 'P', rows)}
+              onApplyMatches={(matches, status) =>
+                handleApplyMatches(activeTab === 'receivables' ? 'R' : 'P', matches, status)
+              }
+              onManualBaixa={(id, sid, src) =>
+                handleManualBaixaTitulo(activeTab === 'receivables' ? 'R' : 'P', id, sid, src)
+              }
+              onRevertBaixa={(id) => handleRevertBaixaTitulo(activeTab === 'receivables' ? 'R' : 'P', id)}
+              onDelete={(id) => handleDeleteTitulo(activeTab === 'receivables' ? 'R' : 'P', id)}
+              onClear={() => handleClearTitulos(activeTab === 'receivables' ? 'R' : 'P')}
               userRole={currentUser.role}
             />
           )}
@@ -1898,7 +1681,8 @@ export default function App() {
             <CashFlowView
               plans={cashFlowPlans}
               statementEntries={statementEntries}
-              payableForecasts={payableForecasts}
+              receivables={receivables}
+              payables={payables}
               selectedYear={selectedYear}
               onSavePlan={handleSaveCashFlowPlan}
               userRole={currentUser.role}
@@ -1959,6 +1743,7 @@ export default function App() {
               }}
               selectedYear={selectedYear}
               initialModule={importTargetModule}
+              userRole={currentUser.role}
             />
           )}
 

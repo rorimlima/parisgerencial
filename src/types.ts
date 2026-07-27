@@ -14,6 +14,7 @@ export type ViewTab =
   | 'delinquency'
   | 'sellers'
   | 'statement'
+  | 'receivables'
   | 'payables'
   | 'cashflow'
   | 'billing'
@@ -251,87 +252,227 @@ export interface FinancialStatementEntry {
   counterAccountCode?: string;   // '30107' | '30110' | '' quando não é transferência
 }
 
-// ─── Contas a Pagar ──────────────────────────────────────────────────────────
-
-// Status de baixa (conciliação) de um título pago:
-// - 'Em Aberto': pagamento registrado no ERP mas ainda não conciliado com extrato
-// - 'Baixado Automático': conciliado automaticamente com um lançamento de extrato
-// - 'Baixado Manual': baixa confirmada manualmente pelo gestor
-export type PayableStatus = 'Em Aberto' | 'Baixado Automático' | 'Baixado Manual';
-
-// Título de contas a pagar importado do relatório RFN006 (Totais Pagos por Credor).
-// Chave única: movCode (TituloMovCodigo). O credor (TituloPessoaCod) é vinculado
-// ao cadastro de clientes/pessoas pelo cod_cliente.
-export interface PayableTitle {
-  id: string;
-  movCode: string;               // TituloMovCodigo — chave única do movimento
-  companyName?: string;          // TituloEmpresaNome
-  supplierCode: string;          // TituloPessoaCod → vincula a cod_cliente
-  supplierName: string;          // TituloPessoaNome
-  supplierCustomerId?: string;   // id do documento do cliente vinculado (se houver)
-  titleCode?: string;            // TituloCodigo
-  parcela?: string;              // TituloNumeroParcela (ex: '24000/1')
-  dueDate: string;               // TituloDataVencto — YYYY-MM-DD
-  paymentDate: string;           // TitMovDataCaixa — YYYY-MM-DD (data efetiva do pagamento)
-  year: number;                  // ano de paymentDate
-  monthKey: string;              // 'jan'..'dez' de paymentDate
-  description?: string;          // TituloHistorico
-  payingAgent?: string;          // TituloAgentePagadorDescr (CARTEIRA, VEICULOS...)
-  department?: string;           // Departamento_Descricao
-  amount: number;                // TituloValor (valor pago, positivo)
-  status: PayableStatus;
-  reconciledStatementId?: string; // id do lançamento de extrato conciliado (baixa automática)
-  reconciledSource?: string;      // fonte do extrato (Bradesco/PagSeguro/Caixa)
-  reconciledAt?: string;
-  baixaCode?: string;            // Código técnico da baixa (ex: BX-2026-00001)
-  notes?: string;
-}
-
-// ─── Previsão de Pagamento (RFN046 — Títulos em aberto) ──────────────────────
+// ─── Títulos Financeiros (RFN046) — Contas a Receber e Contas a Pagar ────────
 
 /**
- * Título de contas a pagar AINDA NÃO PAGO, importado do relatório RFN046
- * (Títulos). Base propositalmente separada de `PayableTitle` (RFN006), que só
- * traz o que já foi pago: misturar as duas faria o mesmo compromisso ser
- * contado duas vezes — uma como previsão e outra como desembolso realizado.
+ * FONTE ÚNICA DE VERDADE DAS DUAS PONTAS DO CAIXA
+ * ==============================================
+ * Receber e pagar saem do MESMO relatório do ERP (RFN046 — Títulos), com o
+ * mesmo layout de 34 colunas. O que separa um do outro é uma única coluna:
  *
- * Chave única: `titleCode` (Titulo_Codigo). O que interessa para o caixa é o
- * `balance` (Titulo_Saldo) na `dueDate` (Titulo_DataVencimento): é o dinheiro
- * que vai sair naquele dia se nada for renegociado.
+ *     Titulo_MovimentoFinanceiro = 'R'  →  ENTRADA  (contas a receber)
+ *     Titulo_MovimentoFinanceiro = 'P'  →  SAÍDA    (contas a pagar)
+ *
+ * Por isso existe UM modelo e UM parser. Duas estruturas paralelas para o mesmo
+ * layout é como nascem os relatórios que não fecham: uma ganha um campo novo, a
+ * outra não, e seis meses depois ninguém sabe qual das duas está certa.
+ *
+ * O QUE MANDA NO FLUXO DE CAIXA: Titulo_Status
+ * --------------------------------------------
+ * `erpStatus === 'Pago'` é o que autoriza o título a virar dinheiro no
+ * REALIZADO do fluxo de caixa — entrada se for 'R', saída se for 'P'. Qualquer
+ * outro status ('Autorizado', etc.) é compromisso: entra na PREVISÃO, nunca no
+ * realizado. Essa é a linha que impede o erro clássico de contar o mesmo
+ * compromisso duas vezes (uma como previsto, outra como realizado) e derrubar
+ * o saldo projetado do mês.
+ *
+ * DOIS PARES DE ANO/MÊS, DE PROPÓSITO
+ * -----------------------------------
+ * `year`/`monthKey` vêm do VENCIMENTO — é a competência do compromisso, o que
+ * a previsão precisa. `paidYear`/`paidMonthKey` vêm do PAGAMENTO — é quando o
+ * dinheiro efetivamente se moveu, o que o realizado precisa. Um título vencido
+ * em 30/06 e pago em 03/07 pertence a junho na previsão e a julho no caixa;
+ * guardar só um dos pares obrigaria a escolher qual dos dois relatórios mentir.
+ *
+ * VÍNCULO COM O CADASTRO
+ * ----------------------
+ * `personCode` (Titulo_PessoaCod) é o MESMO código do cadastro de clientes
+ * (`Customer.code` / cod_cliente) — os dois relatórios saem do mesmo ERP. Vale
+ * tanto para o cliente que deve quanto para o fornecedor que recebe: no ERP é
+ * tudo "pessoa". `customerId` guarda o id do documento já resolvido.
  */
-export interface PayableForecastTitle {
+
+export type TituloMovType = 'R' | 'P';
+
+/**
+ * Status de BAIXA (conciliação com o extrato) — não confundir com o
+ * `erpStatus`, que é o status no ERP:
+ *  - 'Em Aberto': o ERP diz que movimentou, mas ainda não achamos o lançamento
+ *    correspondente no extrato bancário / caixa.
+ *  - 'Baixado Automático': conciliado pelo motor de baixa (valor + data + nome).
+ *  - 'Baixado Manual': o gestor confirmou na mão, com ou sem par no extrato.
+ *  - 'Conferir': houve candidato, mas abaixo do corte de confiança — precisa de
+ *    olho humano antes de virar baixa.
+ */
+export type BaixaStatus = 'Em Aberto' | 'Baixado Automático' | 'Baixado Manual' | 'Conferir';
+
+/** Alias mantido para as telas que ainda falam a língua antiga de contas a pagar. */
+export type PayableStatus = BaixaStatus;
+
+export interface TituloFinanceiro {
   id: string;
-  titleCode: string;             // Titulo_Codigo — chave única
-  movType?: string;              // Titulo_MovimentoFinanceiro ('P' = pagar)
-  companyCode?: string;          // Titulo_EmpresaCod
-  companyName?: string;          // Titulo_EmpresaNom
-  titleNumber?: string;          // Titulo_Numero
-  supplierCode: string;          // Titulo_PessoaCod
-  supplierName: string;          // Titulo_PessoaNom
-  supplierCustomerId?: string;   // id do cliente/pessoa vinculado (se houver)
-  parcela?: string;              // Titulo_NumeroParcela
-  titleType?: string;            // Titulo_TipoTituloDes (DUPLICATA, IMPOSTOS...)
-  issueDate?: string;            // Titulo_DataEmissao — YYYY-MM-DD
-  entryDate?: string;            // Titulo_DataEntrada — YYYY-MM-DD
-  dueDate: string;               // Titulo_DataVencimento — YYYY-MM-DD
-  paymentDate?: string;          // Titulo_DataPagamento (vazio enquanto em aberto)
-  amount: number;                // Titulo_Valor — valor original do título
-  balance: number;               // Titulo_Saldo — saldo devedor (o previsto a pagar)
-  status?: string;               // Titulo_Status (Autorizado, ...)
-  invoiceCode?: string;          // Titulo_FaturaCod
-  fiscalNoteCode?: string;       // Titulo_NotaFiscalCod
-  nossoNumero?: string;          // Titulo_NossoNumero
-  observation?: string;          // Titulo_Observacao
-  managementAccount?: string;    // Titulo_ContaGerencialCod
-  launchClass?: string;          // Titulo_ClassificacaoLancamento
-  departmentCode?: string;       // Titulo_DepartamentoCod
-  department?: string;           // Titulo_DepartamentoDes
-  collectionAgent?: string;      // Titulo_AgenteCobradorDes
-  collectionType?: string;       // Titulo_TipoCobrancaDes
-  operationNature?: string;      // Titulo_NaturezaOperacaoDes
-  year: number;                  // ano do vencimento
-  monthKey: string;              // 'jan'..'dez' do vencimento
+  /** `${movType}_${titleCode}` — chave determinística, reimportar nunca duplica. */
+  dedupeKey: string;
+
+  // ── Identificação e roteamento ─────────────────────────────────────────────
+  titleCode: string;             // Titulo_Codigo — chave única no ERP
+  movType: TituloMovType;        // Titulo_MovimentoFinanceiro ('R' receber | 'P' pagar)
+  companyCode: string;           // Titulo_EmpresaCod
+  companyName: string;           // Titulo_EmpresaNom
+  titleNumber: string;           // Titulo_Numero
+  parcela: string;               // Titulo_NumeroParcela (ex.: '17231-3')
+  titleType: string;             // Titulo_TipoTituloDes (DUPLICATA, CARTAO VISA...)
+
+  // ── Pessoa (cliente OU fornecedor) → cod_cliente ───────────────────────────
+  personCode: string;            // Titulo_PessoaCod  ⇄ Customer.code
+  personName: string;            // Titulo_PessoaNom
+  customerId?: string;           // id do documento de cliente vinculado
+
+  // ── Datas ──────────────────────────────────────────────────────────────────
+  issueDate: string;             // Titulo_DataEmissao      — YYYY-MM-DD
+  entryDate: string;             // Titulo_DataEntrada      — YYYY-MM-DD
+  dueDate: string;               // Titulo_DataVencimento   — YYYY-MM-DD
+  paymentDate: string;           // Titulo_DataPagamento    — YYYY-MM-DD ('' se em aberto)
+  year: number;                  // ano do VENCIMENTO  (competência / previsão)
+  monthKey: string;              // 'jan'..'dez' do VENCIMENTO
+  paidYear: number;              // ano do PAGAMENTO   (caixa / realizado)
+  paidMonthKey: string;          // 'jan'..'dez' do PAGAMENTO
+
+  // ── Valores ────────────────────────────────────────────────────────────────
+  amount: number;                // Titulo_Valor — valor do título
+  balance: number;               // Titulo_Saldo — o que ainda falta liquidar
+  penaltyAmount: number;         // Titulo_MovValorPen
+
+  // ── Situação no ERP — é isto que libera o lançamento para o realizado ──────
+  erpStatus: string;             // Titulo_Status ('Pago', 'Autorizado', ...)
+  isPaid: boolean;               // DERIVADO: erpStatus === 'Pago'
+
+  // ── Documentos de origem ───────────────────────────────────────────────────
+  invoiceCode: string;           // Titulo_FaturaCod
+  fiscalNoteCode: string;        // Titulo_NotaFiscalCod
+  linkedFiscalNoteCode: string;  // Titulo_NotaFiscalCod_Vinculada
+  nossoNumero: string;           // Titulo_NossoNumero
+  observation: string;           // Titulo_Observacao
+
+  // ── Classificação gerencial ────────────────────────────────────────────────
+  managementAccount: string;     // Titulo_ContaGerencialCod
+  launchClass: string;           // Titulo_ClassificacaoLancamento (MAN, TES, NF)
+  departmentCode: string;        // Titulo_DepartamentoCod
+  department: string;            // Titulo_DepartamentoDes
+  batchCode: string;             // Titulo_LoteMovimentoCod
+  batchDescription: string;      // Titulo_LoteMovimentoDes
+  collectionAgentCode: string;   // Titulo_AgenteCobradorCod
+  collectionAgent: string;       // Titulo_AgenteCobradorDes (banco / caixa de origem)
+  collectionTypeCode: string;    // Titulo_TipoCobrancaCod
+  collectionType: string;        // Titulo_TipoCobrancaDes
+  operationNatureCode: string;   // Titulo_NaturezaOperacaoCod
+  operationNature: string;       // Titulo_NaturezaOperacaoDes
+
+  // ── Conciliação com o extrato (baixa) ──────────────────────────────────────
+  status: BaixaStatus;           // status de BAIXA (ver BaixaStatus)
+  reconciledStatementId?: string;// id do lançamento de extrato casado
+  reconciledSource?: string;     // 'Bradesco' | 'PagSeguro' | 'Caixa/Tesouraria'
+  reconciledAt?: string;
+  matchScore?: number;           // 0–100: confiança do casamento automático
+  matchReason?: string;          // texto auditável do porquê casou
+  baixaCode?: string;            // BX-2026-00001
+  notes?: string;
+
   importedAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * Aliases de transição. As telas antigas de Contas a Pagar falavam em
+ * `PayableTitle` (pago, RFN006) e `PayableForecastTitle` (previsto, RFN046).
+ * Agora as duas são a MESMA coisa vista por status diferente, então apontam
+ * para o modelo único em vez de existirem como estruturas próprias.
+ */
+export type PayableTitle = TituloFinanceiro;
+export type PayableForecastTitle = TituloFinanceiro;
+
+// ─── Baixa automática (conciliação título × extrato) ─────────────────────────
+
+/**
+ * Parâmetros da baixa automática, ajustáveis na própria tela.
+ *
+ * Não são constantes de código porque a régua certa muda com a operação: um mês
+ * de muita tarifa bancária pede tolerância de valor maior; uma base recém
+ * importada pede janela de dias maior. Deixar isso preso no código faz o gestor
+ * pedir alteração de sistema para conciliar o mês.
+ */
+export interface ReconciliationSettings {
+  /** Diferença absoluta aceita entre título e lançamento (R$). */
+  amountToleranceAbs: number;
+  /** Diferença relativa aceita (%) — cobre tarifa, juros e desconto. */
+  amountTolerancePercent: number;
+  /** Janela de dias entre a data do título e a do extrato. */
+  dateWindowDays: number;
+  /** Similaridade mínima de nome (0–100) para o nome contar como confirmação. */
+  minNameSimilarity: number;
+  /** Score mínimo (0–100) para BAIXAR automaticamente. */
+  autoMatchMinScore: number;
+  /** Score mínimo para o par virar SUGESTÃO ('Conferir') em vez de ser descartado. */
+  suggestionMinScore: number;
+  /** Exigir que o nome bata (além do valor e da data) para baixar sozinho. */
+  requireNameMatch: boolean;
+}
+
+export const DEFAULT_RECONCILIATION_SETTINGS: ReconciliationSettings = {
+  amountToleranceAbs: 0.05,
+  amountTolerancePercent: 0,
+  dateWindowDays: 3,
+  minNameSimilarity: 70,
+  autoMatchMinScore: 75,
+  suggestionMinScore: 50,
+  requireNameMatch: false,
+};
+
+/** Um par candidato título ⇄ lançamento de extrato, com a nota do casamento. */
+export interface ReconciliationMatch {
+  tituloId: string;
+  titleCode: string;
+  movType: TituloMovType;
+  statementId: string;
+  statementSource: string;
+  statementDate: string;
+  statementDescription: string;
+  tituloAmount: number;
+  statementAmount: number;
+  amountDiff: number;
+  daysDiff: number;
+  nameSimilarity: number;
+  /** true quando o nº do título / parcela aparece no texto do lançamento. */
+  titleInDescription: boolean;
+  score: number;
+  reason: string;
+  /** 'auto' baixa sozinho; 'sugestao' espera confirmação do gestor. */
+  decision: 'auto' | 'sugestao';
+}
+
+/** Linha da prévia de importação do RFN046, com o motivo de cada rejeição. */
+export interface TituloPreviewRow {
+  rowNumber: number;
+  titulo: TituloFinanceiro;
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+/** Retrato de uma importação, para o gestor conferir antes e depois de gravar. */
+export interface TituloImportSummary {
+  movType: TituloMovType;
+  totalRows: number;
+  validRows: number;
+  invalidRows: number;
+  paidRows: number;
+  openRows: number;
+  totalAmount: number;
+  paidAmount: number;
+  openBalance: number;
+  linkedToCustomer: number;
+  periodStart: string;
+  periodEnd: string;
 }
 
 // ─── Fluxo de Caixa (Planejamento Semanal Previsto x Realizado) ──────────────
