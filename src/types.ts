@@ -358,6 +358,18 @@ export interface CashFlowPendencia {
   valor: number;
 }
 
+/**
+ * Saldo real de uma conta na data da conferência (tesouraria/dinheiro, banco,
+ * adquirente). É o dinheiro que EXISTE, contado à mão pelo gestor — diferente
+ * do saldo encadeado do fluxo, que é uma projeção construída a partir do saldo
+ * inicial. Quando os dois divergem, o fluxo está mentindo e precisa ser
+ * corrigido; por isso os dois convivem na mesma tela.
+ */
+export interface CashFlowConta {
+  nome: string;
+  saldo: number;
+}
+
 // Documento de planejamento por mês (chave: `${ano}_${monthKey}`). Guarda
 // apenas os valores manuais (previsto + saldo inicial). O realizado é derivado.
 export interface CashFlowPlan {
@@ -369,6 +381,10 @@ export interface CashFlowPlan {
   realizadoManual?: boolean;      // se true, usa recebRealizado/desembRealizado das semanas em vez do Extrato
   weeks: Record<CashFlowWeekKey, CashFlowWeekPlan>;
   pendencias?: CashFlowPendencia[]; // obrigações em aberto (pró-labore, aluguel...)
+  // ── Posição de caixa conferida (base do cálculo de necessidade de aporte) ──
+  contasCaixa?: CashFlowConta[];    // saldos reais por conta na data da conferência
+  posicaoData?: string;             // YYYY-MM-DD da contagem dos saldos
+  horizonteAporteDias?: number;     // janela de compromissos considerada (padrão 30)
   notes?: string;
   updatedAt?: string;
 }

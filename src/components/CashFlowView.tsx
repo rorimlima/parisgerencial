@@ -52,6 +52,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import {
+  CashFlowConta,
   CashFlowPendencia,
   CashFlowPlan,
   CashFlowWeekKey,
@@ -64,7 +65,15 @@ import {
   exportReportToExcel,
   formatCurrency,
 } from '../utils/exportUtils';
-import { forecastByWeek } from '../utils/payableForecast';
+import {
+  addDaysIso,
+  forecastByWeek,
+  forecastInRange,
+  formatIsoBr,
+  isOpenForecast,
+  sumForecast,
+  todayIso,
+} from '../utils/payableForecast';
 import { PdfExportMenu } from './PdfExportMenu';
 
 interface CashFlowViewProps {
@@ -399,6 +408,91 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
   const addPendencia = () => setDraft((d) => ({ ...d, pendencias: [...(d.pendencias || []), { descricao: '', valor: 0 }] }));
   const removePendencia = (idx: number) => setDraft((d) => ({ ...d, pendencias: (d.pendencias || []).filter((_, i) => i !== idx) }));
 
+  // ── POSIÇÃO DE CAIXA E NECESSIDADE DE APORTE ─────────────────────────────
+  //
+  // O saldo encadeado da grade é uma PROJEÇÃO: parte de um saldo inicial
+  // digitado e vai somando o que aconteceu. Ele responde "como o mês está
+  // andando", mas não responde a pergunta que decide o dia: TENHO DINHEIRO
+  // PARA PAGAR O QUE ESTÁ VENCENDO?
+  //
+  // Esta seção responde essa. De um lado, o dinheiro que EXISTE agora, contado
+  // conta por conta. Do outro, os compromissos do horizonte escolhido: títulos
+  // a vencer (RFN046, incluindo os já vencidos e não pagos) e as pendências
+  // digitadas. A diferença negativa não é um detalhe do relatório — é o
+  // tamanho exato do aporte que precisa entrar.
+  const hojeIso = todayIso();
+  const contas: CashFlowConta[] = draft.contasCaixa && draft.contasCaixa.length > 0
+    ? draft.contasCaixa
+    : [
+        { nome: 'Tesouraria (dinheiro)', saldo: 0 },
+        { nome: 'Bradesco', saldo: 0 },
+        { nome: 'PagBank', saldo: 0 },
+      ];
+  const horizonteDias = draft.horizonteAporteDias || 30;
+  const posicaoData = draft.posicaoData || hojeIso;
+
+  const setConta = (idx: number, field: keyof CashFlowConta, raw: string) => {
+    setDraft((d) => {
+      const list = [...(d.contasCaixa && d.contasCaixa.length > 0 ? d.contasCaixa : contas)];
+      list[idx] = { ...list[idx], [field]: field === 'saldo' ? parseInput(raw) : raw };
+      return { ...d, contasCaixa: list, posicaoData: d.posicaoData || hojeIso };
+    });
+  };
+  const addConta = () =>
+    setDraft((d) => ({
+      ...d,
+      contasCaixa: [...(d.contasCaixa && d.contasCaixa.length > 0 ? d.contasCaixa : contas), { nome: '', saldo: 0 }],
+    }));
+  const removeConta = (idx: number) =>
+    setDraft((d) => ({
+      ...d,
+      contasCaixa: (d.contasCaixa && d.contasCaixa.length > 0 ? d.contasCaixa : contas).filter((_, i) => i !== idx),
+    }));
+
+  const disponivelHoje = contas.reduce((a, c) => a + (Number(c.saldo) || 0), 0);
+
+  // Compromissos do horizonte: tudo o que está em aberto vencendo de hoje até
+  // hoje + N dias, MAIS o que já venceu e não foi pago (atraso não deixa de ser
+  // dívida por ter passado a data).
+  const titulosAbertos = useMemo(() => payableForecasts.filter(isOpenForecast), [payableForecasts]);
+  const titulosNoHorizonte = useMemo(
+    () => forecastInRange(titulosAbertos, '1900-01-01', addDaysIso(hojeIso, horizonteDias)),
+    [titulosAbertos, hojeIso, horizonteDias]
+  );
+  const compromissosTitulos = sumForecast(titulosNoHorizonte);
+  const titulosVencidos = sumForecast(titulosNoHorizonte.filter((t) => t.dueDate < hojeIso));
+  const compromissosTotal = compromissosTitulos + totalPendencias;
+
+  const saldoProjetado = disponivelHoje - compromissosTotal;
+  const necessidadeAporte = saldoProjetado < 0 ? Math.abs(saldoProjetado) : 0;
+  const cobertura = compromissosTotal > 0 ? (disponivelHoje / compromissosTotal) * 100 : 100;
+
+  // Semana do mês em que a necessidade deve ser lançada como aporte.
+  const semanaAtual: CashFlowWeekKey =
+    monthKey === MONTHS[new Date().getMonth()].key && selectedYear === new Date().getFullYear()
+      ? weekOfMonth(hojeIso)
+      : 'sem01';
+
+  const lancarAporte = () => {
+    if (!canEdit || necessidadeAporte <= 0) return;
+    setDraft((d) => ({
+      ...d,
+      weeks: {
+        ...d.weeks,
+        [semanaAtual]: {
+          ...d.weeks[semanaAtual],
+          aportes: (d.weeks[semanaAtual]?.aportes || 0) + necessidadeAporte,
+        },
+      },
+    }));
+  };
+
+  // Divergência entre o caixa contado e o saldo que a grade projeta para a
+  // semana corrente. É o termômetro de confiança do fluxo: se dá diferença
+  // grande, ou falta lançamento no realizado, ou o saldo inicial está errado.
+  const saldoProjetadoGrade = rows.realSaldo[semanaAtual];
+  const divergenciaGrade = disponivelHoje - saldoProjetadoGrade;
+
   const handleSave = async () => {
     if (!canEdit) return;
     setIsSaving(true);
@@ -632,6 +726,188 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
             Automático: {formatCurrency(saldoFinalAuto)} • Previsto: {formatCurrency(saldoFinalPrev)}
           </span>
         </div>
+      </div>
+
+      {/* ── POSIÇÃO DE CAIXA HOJE x COMPROMISSOS = NECESSIDADE DE APORTE ───── */}
+      <div className={`rounded-xl shadow-xs border overflow-hidden ${necessidadeAporte > 0 ? 'border-rose-300' : 'border-[#EAE6DF]'}`}>
+        <div className={`p-3 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${necessidadeAporte > 0 ? 'bg-rose-50 border-rose-200' : 'bg-white border-[#EAE6DF]'}`}>
+          <div className="flex items-center gap-2">
+            <Wallet className={`w-4 h-4 ${necessidadeAporte > 0 ? 'text-rose-600' : 'text-[#C19A6B]'}`} />
+            <h3 className="text-sm font-bold text-[#2D2A26]">Posição de Caixa Hoje — Necessidade de Aporte</h3>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="text-[10px] font-bold text-[#8B7D6B] uppercase">Data da posição</label>
+            <input
+              type="date"
+              disabled={!canEdit}
+              value={posicaoData}
+              onChange={(e) => setDraft((d) => ({ ...d, posicaoData: e.target.value }))}
+              className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg px-2 py-1.5 text-[11px] font-mono focus:outline-none focus:border-[#C19A6B] disabled:opacity-60"
+            />
+            <label className="text-[10px] font-bold text-[#8B7D6B] uppercase ml-2">Compromissos em</label>
+            <select
+              disabled={!canEdit}
+              value={horizonteDias}
+              onChange={(e) => setDraft((d) => ({ ...d, horizonteAporteDias: parseInt(e.target.value, 10) }))}
+              className="bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg px-2 py-1.5 text-[11px] font-bold focus:outline-none focus:border-[#C19A6B] disabled:opacity-60"
+            >
+              {[0, 7, 15, 30, 60, 90].map((d) => (
+                <option key={d} value={d}>{d === 0 ? 'vencidos + hoje' : `${d} dias`}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 divide-y lg:divide-y-0 lg:divide-x divide-[#EAE6DF] bg-white">
+          {/* Coluna 1 — dinheiro que existe */}
+          <div className="p-4 space-y-2">
+            <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider">Dinheiro disponível (contado)</p>
+            {contas.map((c, idx) => (
+              <div key={idx} className="flex items-center gap-2">
+                <input
+                  type="text"
+                  disabled={!canEdit}
+                  value={c.nome}
+                  onChange={(e) => setConta(idx, 'nome', e.target.value)}
+                  placeholder="Conta (ex: Bradesco)"
+                  className="flex-1 bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg px-2.5 py-1.5 text-[11px] text-[#433E37] focus:outline-none focus:border-[#C19A6B] disabled:opacity-60"
+                />
+                <input
+                  type="text"
+                  disabled={!canEdit}
+                  value={c.saldo || ''}
+                  onChange={(e) => setConta(idx, 'saldo', e.target.value)}
+                  placeholder="0,00"
+                  className="w-32 bg-emerald-50/60 border border-[#EAE6DF] rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-right text-emerald-800 font-semibold focus:outline-none focus:border-emerald-400 disabled:opacity-60"
+                />
+                {canEdit && (
+                  <button
+                    onClick={() => removeConta(idx)}
+                    className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-600 text-rose-600 hover:text-white transition-colors"
+                    title="Remover conta"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+            ))}
+            {canEdit && (
+              <button
+                onClick={addConta}
+                className="px-2.5 py-1.5 text-[10px] font-bold bg-[#F3F1ED] text-[#433E37] hover:bg-[#EAE6DF] rounded-lg border border-[#EAE6DF] flex items-center gap-1"
+              >
+                <Plus className="w-3 h-3 text-[#C19A6B]" /> Adicionar conta
+              </button>
+            )}
+            <div className="flex items-center justify-between pt-2 border-t border-dashed border-[#EAE6DF]">
+              <span className="text-[11px] font-bold text-[#433E37]">Total disponível</span>
+              <span className="text-sm font-black font-mono text-emerald-700">{formatCurrency(disponivelHoje)}</span>
+            </div>
+          </div>
+
+          {/* Coluna 2 — o que precisa sair */}
+          <div className="p-4 space-y-2">
+            <p className="text-[10px] font-bold text-rose-700 uppercase tracking-wider">
+              Compromissos até {formatIsoBr(addDaysIso(hojeIso, horizonteDias))}
+            </p>
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-[#433E37]">Títulos a vencer (RFN046)</span>
+              <span className="font-mono font-semibold text-rose-700">{formatCurrency(compromissosTitulos - titulosVencidos)}</span>
+            </div>
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-[#433E37]">Títulos vencidos e não pagos</span>
+              <span className="font-mono font-semibold text-rose-800">{formatCurrency(titulosVencidos)}</span>
+            </div>
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-[#433E37]">Pendências digitadas</span>
+              <span className="font-mono font-semibold text-rose-700">{formatCurrency(totalPendencias)}</span>
+            </div>
+            <div className="flex items-center justify-between pt-2 border-t border-dashed border-[#EAE6DF]">
+              <span className="text-[11px] font-bold text-[#433E37]">Total a pagar</span>
+              <span className="text-sm font-black font-mono text-rose-700">{formatCurrency(compromissosTotal)}</span>
+            </div>
+            <p className="text-[10px] text-[#8B7D6B] pt-1">
+              {titulosNoHorizonte.length} título(s) do RFN046
+              {totalPendencias > 0 && ` + ${pendencias.length} pendência(s) digitada(s)`}.
+              O que não estiver importado nem digitado aqui, o sistema não tem como saber.
+            </p>
+          </div>
+
+          {/* Coluna 3 — o veredicto */}
+          <div className={`p-4 flex flex-col justify-center gap-2 ${necessidadeAporte > 0 ? 'bg-rose-50/60' : 'bg-emerald-50/40'}`}>
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-[#433E37]">Saldo após compromissos</span>
+              <span className={`text-lg font-black font-mono ${saldoProjetado >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                {formatCurrency(saldoProjetado)}
+              </span>
+            </div>
+            <div className="w-full h-2 rounded-full bg-[#EAE6DF] overflow-hidden">
+              <div
+                className={`h-full ${cobertura >= 100 ? 'bg-emerald-500' : cobertura >= 80 ? 'bg-amber-500' : 'bg-rose-500'}`}
+                style={{ width: `${Math.min(100, Math.max(0, cobertura))}%` }}
+              />
+            </div>
+            <p className="text-[10px] text-[#8B7D6B]">
+              Cobertura: <b>{cobertura.toFixed(1)}%</b> dos compromissos têm dinheiro correspondente.
+            </p>
+
+            {necessidadeAporte > 0 ? (
+              <div className="bg-white border border-rose-300 rounded-lg p-3 space-y-2">
+                <p className="text-[10px] font-bold text-rose-700 uppercase tracking-wider flex items-center gap-1">
+                  <AlertCircle className="w-3.5 h-3.5" /> Necessidade de aporte
+                </p>
+                <p className="text-xl font-black font-mono text-rose-700">{formatCurrency(necessidadeAporte)}</p>
+                <p className="text-[10px] text-[#8B7D6B]">
+                  {formatCurrency(compromissosTotal)} a pagar − {formatCurrency(disponivelHoje)} em caixa.
+                </p>
+                {canEdit && (
+                  <button
+                    onClick={lancarAporte}
+                    className="w-full px-3 py-2 text-[11px] font-bold bg-[#2D2A26] text-white hover:bg-[#3F3B35] rounded-lg flex items-center justify-center gap-1.5"
+                    title={`Soma a necessidade ao campo Aportes de ${WEEK_LABELS[semanaAtual]} (revise e salve)`}
+                  >
+                    <Plus className="w-3.5 h-3.5 text-[#C19A6B]" />
+                    Lançar como aporte em {WEEK_LABELS[semanaAtual]}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="bg-white border border-emerald-200 rounded-lg p-3">
+                <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider flex items-center gap-1">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Caixa cobre os compromissos
+                </p>
+                <p className="text-[10px] text-[#8B7D6B] mt-1">
+                  Sobra de {formatCurrency(saldoProjetado)} depois de pagar tudo o que vence no horizonte.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Conferência: caixa contado x saldo projetado pela grade */}
+        {disponivelHoje !== 0 && (
+          <div className="px-4 py-2 bg-[#F9F7F2] border-t border-[#EAE6DF] text-[10px] text-[#8B7D6B] flex flex-wrap items-center gap-x-4 gap-y-1">
+            <span>
+              Grade (saldo realizado até {WEEK_LABELS[semanaAtual]}): <b className="font-mono">{formatCurrency(saldoProjetadoGrade)}</b>
+            </span>
+            <span>
+              Caixa contado: <b className="font-mono text-emerald-700">{formatCurrency(disponivelHoje)}</b>
+            </span>
+            <span className={Math.abs(divergenciaGrade) > 1 ? 'text-amber-700 font-bold' : 'text-emerald-700 font-bold'}>
+              Divergência: {formatCurrency(divergenciaGrade)}
+              {Math.abs(divergenciaGrade) > 1 && ' — falta lançamento no realizado ou o saldo inicial está errado'}
+            </span>
+            {canEdit && Math.abs(divergenciaGrade) > 1 && (
+              <button
+                onClick={() => setDraft((d) => ({ ...d, saldoInicial: (d.saldoInicial || 0) + divergenciaGrade, useSaldoAutomatico: false }))}
+                className="px-2 py-1 text-[10px] font-bold bg-[#F3F1ED] text-[#433E37] hover:bg-[#EAE6DF] rounded border border-[#EAE6DF]"
+                title="Ajusta o saldo inicial do mês para que a grade termine exatamente no caixa contado"
+              >
+                Ajustar saldo inicial pela diferença
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Saldo inicial editável + controles do automático */}
@@ -1064,8 +1340,10 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
             </div>
           )}
           <p className="text-[10px] text-[#8B7D6B] mt-3">
-            Pendências são obrigações já vencidas/programadas ainda não pagas (pró-labore, aluguel, etc.), digitadas à mão.
-            Não entram no saldo até serem quitadas — servem de alerta de compromissos futuros.
+            Pendências são obrigações ainda não pagas que <b>não estão no RFN046</b> (pró-labore, aluguel, acordos,
+            empréstimos). Não alteram o saldo realizado — mas <b>entram integralmente no cálculo da necessidade de
+            aporte</b> lá em cima, junto com os títulos a vencer. É aqui que se digita o que o sistema não tem como
+            adivinhar.
           </p>
         </div>
       </div>

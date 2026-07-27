@@ -1611,6 +1611,9 @@ const cashFlowFromFirestore = (id: string, data: any): CashFlowPlan => ({
   realizadoManual: !!data.realizado_manual,
   weeks: { ...emptyWeeks(), ...(data.semanas || {}) },
   pendencias: Array.isArray(data.pendencias) ? data.pendencias : [],
+  contasCaixa: Array.isArray(data.contas_caixa) ? data.contas_caixa : [],
+  posicaoData: data.posicao_data || '',
+  horizonteAporteDias: Number(data.horizonte_aporte_dias) || 30,
   notes: data.observacoes || '',
   updatedAt: data.atualizado_em || undefined,
 });
@@ -1643,6 +1646,9 @@ export const saveCashFlowPlan = async (plan: CashFlowPlan): Promise<void> => {
       realizado_manual: !!plan.realizadoManual,
       semanas: plan.weeks,
       pendencias: plan.pendencias || [],
+      contas_caixa: plan.contasCaixa || [],
+      posicao_data: plan.posicaoData || '',
+      horizonte_aporte_dias: plan.horizonteAporteDias || 30,
       observacoes: plan.notes || '',
       atualizado_em: new Date().toISOString(),
     };
