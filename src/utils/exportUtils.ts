@@ -639,6 +639,14 @@ export function exportCashFlowPdfGeral(
 ) {
   const monthKeys = MONTH_KEYS_LIST;
 
+  // Acumuladores do ano montados a partir das MESMAS linhas mensais impressas.
+  // Antes o rodapé somava o extrato inteiro do ano enquanto as linhas podiam vir
+  // do realizado digitado — dois números diferentes para a mesma coisa no mesmo
+  // relatório, que é exatamente o tipo de divergência que derruba a confiança
+  // num documento financeiro.
+  let totalRealReceb = 0;
+  let totalRealDesemb = 0;
+
   const rows = monthKeys.map((mKey) => {
     const monthLabel = MONTH_NAMES_FULL[mKey];
     const plan = plans.find((p) => p.monthKey === mKey && p.year === selectedYear);
@@ -647,7 +655,16 @@ export function exportCashFlowPdfGeral(
     let realReceb = 0;
     let realDesemb = 0;
 
-    if (plan && plan.realizadoManual) {
+    // O realizado DIGITADO manda. Só se o mês nunca foi digitado é que o
+    // relatório cai para o extrato — caso dos meses ainda não conferidos.
+    const hasTypedRealizado =
+      !!plan &&
+      WEEKS_KEYS.some(
+        (wKey) =>
+          (plan.weeks?.[wKey]?.recebRealizado || 0) !== 0 || (plan.weeks?.[wKey]?.desembRealizado || 0) !== 0
+      );
+
+    if (plan && (plan.realizadoManual || hasTypedRealizado)) {
       WEEKS_KEYS.forEach((wKey) => {
         realReceb += plan.weeks?.[wKey]?.recebRealizado || 0;
         realDesemb += Math.abs(plan.weeks?.[wKey]?.desembRealizado || 0);
@@ -676,6 +693,9 @@ export function exportCashFlowPdfGeral(
     const gerCaixaReal = realReceb - realDesemb;
     const saldoFinalReal = saldoInicial + gerCaixaReal + aportes;
 
+    totalRealReceb += realReceb;
+    totalRealDesemb += realDesemb;
+
     return [
       monthLabel,
       formatCurrency(saldoInicial),
@@ -688,14 +708,6 @@ export function exportCashFlowPdfGeral(
     ];
   });
 
-  const totalRealReceb = statementEntries.reduce(
-    (acc, e) => (e.year === selectedYear && e.entryAmount > 0 ? acc + e.entryAmount : acc),
-    0
-  );
-  const totalRealDesemb = statementEntries.reduce(
-    (acc, e) => (e.year === selectedYear && e.exitAmount > 0 ? acc + e.exitAmount : acc),
-    0
-  );
   const saldoLiquidoAnual = totalRealReceb - totalRealDesemb;
 
   exportCorporatePdf({
@@ -765,7 +777,12 @@ export function exportCashFlowPdfMensal(
     }
   });
 
-  const isManual = plan?.realizadoManual || false;
+  // Mesma regra do consolidado: o realizado digitado prevalece; o extrato só
+  // entra quando aquele mês nunca foi digitado.
+  const hasTypedRealizado = WEEKS_KEYS.some(
+    (w) => (plan?.weeks?.[w]?.recebRealizado || 0) !== 0 || (plan?.weeks?.[w]?.desembRealizado || 0) !== 0
+  );
+  const isManual = !!plan?.realizadoManual || hasTypedRealizado;
   const getPrevReceb = (w: string) => plan?.weeks?.[w]?.recebimentos || 0;
   const getPrevDesemb = (w: string) => plan?.weeks?.[w]?.desembolsos || 0; // negativo
   const getAporte = (w: string) => plan?.weeks?.[w]?.aportes || 0;

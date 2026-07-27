@@ -43,6 +43,11 @@ import {
   applyPayablesReconciliation as _applyPayablesReconciliation,
   deletePayable as _deletePayable,
   clearPayables as _clearPayables,
+  fetchPayableForecasts as _fetchPayableForecasts,
+  upsertPayableForecastsBatch as _upsertPayableForecastsBatch,
+  deletePayableForecast as _deletePayableForecast,
+  clearPayableForecasts as _clearPayableForecasts,
+  settlePayableForecasts as _settlePayableForecasts,
   signInAuthorizedUser,
   signInWithGoogleAccount,
   signOutUser,
@@ -159,4 +164,11 @@ export const updateContaPagar = _updatePayable;
 export const applyBaixaAutomatica = _applyPayablesReconciliation;
 export const deleteContaPagar = _deletePayable;
 export const clearContasPagar = _clearPayables;
+
+// ── Previsão de Pagamento (RFN046 — Títulos em aberto) ─────────────────────
+export const getPrevisaoPagamento = _fetchPayableForecasts;
+export const upsertPrevisaoPagamento = _upsertPayableForecastsBatch;
+export const deletePrevisaoPagamento = _deletePayableForecast;
+export const clearPrevisaoPagamento = _clearPayableForecasts;
+export const quitarPrevisaoPagamento = _settlePayableForecasts;
 

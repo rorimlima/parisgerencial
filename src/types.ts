@@ -244,6 +244,11 @@ export interface FinancialStatementEntry {
   // separar transferência interna (caixa↔tesouraria) de movimento de verdade.
   managementAccount?: string;    // Tesouraria_ContagerencialDesClassificacao
   isInternalTransfer?: boolean;  // true quando é só remanejo entre contas da casa
+  // Conta 301.xx do OUTRO lado da transferência interna. No extrato da
+  // tesouraria 30101 as entradas vêm dos caixas 30107 e 30110; guardar a
+  // contrapartida é o que permite auditar de onde veio cada real sem reabrir a
+  // planilha original.
+  counterAccountCode?: string;   // '30107' | '30110' | '' quando não é transferência
 }
 
 // ─── Contas a Pagar ──────────────────────────────────────────────────────────
@@ -280,6 +285,53 @@ export interface PayableTitle {
   reconciledAt?: string;
   baixaCode?: string;            // Código técnico da baixa (ex: BX-2026-00001)
   notes?: string;
+}
+
+// ─── Previsão de Pagamento (RFN046 — Títulos em aberto) ──────────────────────
+
+/**
+ * Título de contas a pagar AINDA NÃO PAGO, importado do relatório RFN046
+ * (Títulos). Base propositalmente separada de `PayableTitle` (RFN006), que só
+ * traz o que já foi pago: misturar as duas faria o mesmo compromisso ser
+ * contado duas vezes — uma como previsão e outra como desembolso realizado.
+ *
+ * Chave única: `titleCode` (Titulo_Codigo). O que interessa para o caixa é o
+ * `balance` (Titulo_Saldo) na `dueDate` (Titulo_DataVencimento): é o dinheiro
+ * que vai sair naquele dia se nada for renegociado.
+ */
+export interface PayableForecastTitle {
+  id: string;
+  titleCode: string;             // Titulo_Codigo — chave única
+  movType?: string;              // Titulo_MovimentoFinanceiro ('P' = pagar)
+  companyCode?: string;          // Titulo_EmpresaCod
+  companyName?: string;          // Titulo_EmpresaNom
+  titleNumber?: string;          // Titulo_Numero
+  supplierCode: string;          // Titulo_PessoaCod
+  supplierName: string;          // Titulo_PessoaNom
+  supplierCustomerId?: string;   // id do cliente/pessoa vinculado (se houver)
+  parcela?: string;              // Titulo_NumeroParcela
+  titleType?: string;            // Titulo_TipoTituloDes (DUPLICATA, IMPOSTOS...)
+  issueDate?: string;            // Titulo_DataEmissao — YYYY-MM-DD
+  entryDate?: string;            // Titulo_DataEntrada — YYYY-MM-DD
+  dueDate: string;               // Titulo_DataVencimento — YYYY-MM-DD
+  paymentDate?: string;          // Titulo_DataPagamento (vazio enquanto em aberto)
+  amount: number;                // Titulo_Valor — valor original do título
+  balance: number;               // Titulo_Saldo — saldo devedor (o previsto a pagar)
+  status?: string;               // Titulo_Status (Autorizado, ...)
+  invoiceCode?: string;          // Titulo_FaturaCod
+  fiscalNoteCode?: string;       // Titulo_NotaFiscalCod
+  nossoNumero?: string;          // Titulo_NossoNumero
+  observation?: string;          // Titulo_Observacao
+  managementAccount?: string;    // Titulo_ContaGerencialCod
+  launchClass?: string;          // Titulo_ClassificacaoLancamento
+  departmentCode?: string;       // Titulo_DepartamentoCod
+  department?: string;           // Titulo_DepartamentoDes
+  collectionAgent?: string;      // Titulo_AgenteCobradorDes
+  collectionType?: string;       // Titulo_TipoCobrancaDes
+  operationNature?: string;      // Titulo_NaturezaOperacaoDes
+  year: number;                  // ano do vencimento
+  monthKey: string;              // 'jan'..'dez' do vencimento
+  importedAt?: string;
 }
 
 // ─── Fluxo de Caixa (Planejamento Semanal Previsto x Realizado) ──────────────

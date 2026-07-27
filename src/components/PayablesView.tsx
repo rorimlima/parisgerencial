@@ -35,8 +35,11 @@ import {
   UploadCloud,
   X,
 } from 'lucide-react';
-import { Customer, FinancialStatementEntry, PayableStatus, PayableTitle } from '../types';
+import { Customer, FinancialStatementEntry, PayableForecastTitle, PayableStatus, PayableTitle } from '../types';
 import { exportReportToExcel, formatCurrency, parseNumberPtBr } from '../utils/exportUtils';
+import { PayablesForecastPanel } from './PayablesForecastPanel';
+import type { RawForecastRow } from '../utils/rfn046Parser';
+import { isOpenForecast, sumForecast } from '../utils/payableForecast';
 
 interface PayablesViewProps {
   payables: PayableTitle[];
@@ -50,6 +53,11 @@ interface PayablesViewProps {
   onLinkSupplier: (payableId: string, customerId: string, customerCode: string) => void;
   onDeletePayable?: (id: string) => void;
   onClearPayables?: () => void;
+  // Previsão de pagamento (RFN046 — títulos em aberto). Base separada, ver
+  // PayablesForecastPanel.
+  payableForecasts?: PayableForecastTitle[];
+  onImportForecasts?: (rows: RawForecastRow[]) => Promise<void> | void;
+  onClearForecasts?: () => void | Promise<void>;
   userRole: string;
 }
 
@@ -72,6 +80,18 @@ const MONTH_KEYS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set
 
 // Janela padrão (em dias, para cada lado) da busca "Encontrar no Extrato"
 const SEARCH_WINDOW_DAYS_DEFAULT = 7;
+
+// TOLERÂNCIA DE VALOR DA BUSCA MANUAL — R$ 5,00 para mais ou para menos.
+//
+// Antes o valor não filtrava nada: a busca trazia toda saída dentro da janela
+// de dias e o gestor via uma tarifa de R$ 6,50 concorrendo com um título de
+// R$ 2.532,50. Lista longa, ruído alto e risco real de clicar no lançamento
+// errado — uma baixa errada some com o título e com o dinheiro do relatório.
+//
+// R$ 5,00 é a folga que cobre o que legitimamente diverge entre o título e o
+// extrato (arredondamento, juros de um dia, tarifa embutida) sem abrir espaço
+// para casar valores que não têm nada a ver um com o outro.
+const SEARCH_AMOUNT_TOLERANCE_DEFAULT = 5;
 
 // Defesa em profundidade: garante que a UI nunca fique presa em "Processando..."
 // indefinidamente, mesmo que a promise do handler no App.tsx nunca resolva por
@@ -159,8 +179,15 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
   onLinkSupplier,
   onDeletePayable,
   onClearPayables,
+  payableForecasts = [],
+  onImportForecasts,
+  onClearForecasts,
   userRole,
 }) => {
+  // Duas bases, duas abas: o que já foi pago (RFN006) e o que ainda vai ser
+  // pago (RFN046). Separadas na tela porque são separadas no banco — e porque
+  // somá-las sem pensar dobraria o desembolso do mês.
+  const [subTab, setSubTab] = useState<'pagos' | 'previsao'>('pagos');
   const [fileName, setFileName] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([]);
@@ -197,6 +224,12 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
   const [extratoSearchResults, setExtratoSearchResults] = useState<ExtratoMatch[]>([]);
   const [extratoSearchLoading, setExtratoSearchLoading] = useState(false);
   const [extratoSearchDays, setExtratoSearchDays] = useState(SEARCH_WINDOW_DAYS_DEFAULT);
+  // Valor procurado (texto, para o gestor digitar em pt-BR) e tolerância.
+  // Começa no valor do título, que é o caso normal; editável para quando o
+  // pagamento saiu do extrato com outro valor (juros, tarifa, pagamento
+  // parcial) e o gestor sabe qual número procurar.
+  const [extratoSearchAmount, setExtratoSearchAmount] = useState('');
+  const [extratoSearchTolerance, setExtratoSearchTolerance] = useState(SEARCH_AMOUNT_TOLERANCE_DEFAULT);
 
   const canEdit = userRole !== 'analista';
 
@@ -210,12 +243,21 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
   );
 
   // ── Função: Encontrar no Extrato ─────────────────────────────────────────
-  // Busca prioriza a DATA (janela configurável, padrão ±7 dias em torno do
-  // pagamento); o VALOR não é mais um filtro rígido — lançamentos com valor
-  // aproximado também aparecem (ex: descontos, tarifas ou arredondamentos),
-  // classificados como "Exato" ou "Aproximado" e ordenados pelo melhor
-  // casamento combinado (valor tem peso maior que a distância em dias).
-  const searchExtratoForPayable = (target: PayableTitle, windowDays: number = extratoSearchDays) => {
+  // Dois filtros, ambos rígidos:
+  //   DATA  — janela configurável (padrão ±7 dias em torno do pagamento);
+  //   VALOR — o valor procurado (por padrão o do título, editável pelo gestor)
+  //           com tolerância de R$ 5,00 para mais ou para menos.
+  //
+  // O valor voltou a ser filtro porque sem ele a lista trazia qualquer saída da
+  // janela — tarifa de R$ 6,50 aparecendo como candidata a um título de
+  // R$ 2.532,50. Dentro da tolerância, o que bate no centavo vem marcado como
+  // "Exato" e sobe na ordenação; o resto entra como "Aproximado".
+  const searchExtratoForPayable = (
+    target: PayableTitle,
+    windowDays: number = extratoSearchDays,
+    amountOverride?: number,
+    tolerance: number = extratoSearchTolerance
+  ) => {
     setExtratoSearchTarget(target);
     setExtratoSearchLoading(true);
     try {
@@ -232,7 +274,14 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
       endWindow.setDate(endWindow.getDate() + windowDays);
       endWindow.setHours(23, 59, 59, 999);
 
-      const targetAmount = target.amount;
+      // Valor digitado tem precedência; em branco ou inválido, volta ao valor
+      // do título — nunca desliga o filtro, para a lista não voltar a ser ruído.
+      const typed = amountOverride !== undefined ? amountOverride : parseNumberPtBr(extratoSearchAmount);
+      const targetAmount = typed > 0 ? typed : target.amount;
+      // Meio centavo de folga além da tolerância: sem isso um lançamento
+      // exatamente R$ 5,00 acima do alvo cairia fora por erro de ponto
+      // flutuante em vez de entrar no limite que o gestor escolheu.
+      const maxDiff = tolerance + 0.005;
       const matches: ExtratoMatch[] = [];
 
       for (const e of statementEntries) {
@@ -240,12 +289,14 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
         // Ignora lançamentos já usados em OUTRA baixa, mas mantém o já vinculado a este título
         if (usedStatementIds.has(e.id) && e.id !== target.reconciledStatementId) continue;
 
+        const diffAmount = Math.abs(e.exitAmount - targetAmount);
+        if (diffAmount > maxDiff) continue;
+
         const entryDate = new Date(e.date + 'T00:00:00');
         if (isNaN(entryDate.getTime())) continue;
         if (entryDate < startWindow || entryDate > endWindow) continue;
 
         const diffDays = Math.abs(entryDate.getTime() - payDate.getTime()) / (1000 * 60 * 60 * 24);
-        const diffAmount = Math.abs(e.exitAmount - targetAmount);
         const quality: ExtratoMatch['quality'] = diffAmount <= 0.01 ? 'exato' : 'aproximado';
         matches.push({ entry: e, diffDays, diffAmount, quality });
       }
@@ -263,6 +314,20 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
     } finally {
       setExtratoSearchLoading(false);
     }
+  };
+
+  /**
+   * Abre a busca já preenchida com o valor do título. Toda entrada no modal
+   * passa por aqui para o campo nunca ficar com o valor de um título anterior
+   * — que faria o gestor procurar o pagamento certo com o número errado.
+   */
+  const openExtratoSearch = (target: PayableTitle) => {
+    const amount = target.amount;
+    setExtratoSearchAmount(
+      amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    );
+    setExtratoSearchTolerance(SEARCH_AMOUNT_TOLERANCE_DEFAULT);
+    searchExtratoForPayable(target, extratoSearchDays, amount, SEARCH_AMOUNT_TOLERANCE_DEFAULT);
   };
 
   // ── Upload / Parse ────────────────────────────────────────────────────────
@@ -394,8 +459,56 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
 
   // ── Render ────────────────────────────────────────────────────────────────
 
+  const openForecasts = payableForecasts.filter(isOpenForecast);
+  const openForecastTotal = sumForecast(openForecasts);
+
   return (
     <div className="space-y-6">
+      {/* Abas: o que já saiu do caixa x o que ainda vai sair */}
+      <div className="flex flex-wrap items-center gap-2 bg-white border border-[#EAE6DF] rounded-xl p-2 shadow-xs">
+        <button
+          onClick={() => setSubTab('pagos')}
+          className={`px-4 py-2 text-xs font-bold rounded-lg border transition-colors flex items-center gap-2 ${
+            subTab === 'pagos'
+              ? 'bg-[#2D2A26] text-white border-[#2D2A26]'
+              : 'bg-[#F3F1ED] text-[#433E37] border-[#EAE6DF] hover:bg-[#EAE6DF]'
+          }`}
+        >
+          <Banknote className="w-4 h-4" />
+          Títulos Pagos (RFN006)
+          <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${subTab === 'pagos' ? 'bg-[#C19A6B]/25 text-[#C19A6B]' : 'bg-white text-[#8B7D6B]'}`}>
+            {payables.length}
+          </span>
+        </button>
+        <button
+          onClick={() => setSubTab('previsao')}
+          className={`px-4 py-2 text-xs font-bold rounded-lg border transition-colors flex items-center gap-2 ${
+            subTab === 'previsao'
+              ? 'bg-[#2D2A26] text-white border-[#2D2A26]'
+              : 'bg-[#F3F1ED] text-[#433E37] border-[#EAE6DF] hover:bg-[#EAE6DF]'
+          }`}
+        >
+          <AlertTriangle className="w-4 h-4" />
+          Previsão de Pagamento (RFN046)
+          <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${subTab === 'previsao' ? 'bg-[#C19A6B]/25 text-[#C19A6B]' : 'bg-white text-[#8B7D6B]'}`}>
+            {openForecasts.length}
+          </span>
+        </button>
+        <span className="ml-auto text-[11px] text-[#8B7D6B] pr-2">
+          Previsto em aberto: <b className="text-rose-700">{formatCurrency(openForecastTotal)}</b>
+        </span>
+      </div>
+
+      {subTab === 'previsao' ? (
+        <PayablesForecastPanel
+          forecasts={payableForecasts}
+          selectedYear={selectedYear}
+          onImportForecasts={onImportForecasts || (() => {})}
+          onClearForecasts={onClearForecasts}
+          userRole={userRole}
+        />
+      ) : (
+      <>
       {/* Header */}
       <div className="bg-white border border-[#EAE6DF] p-6 rounded-xl shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -733,7 +846,7 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                             <CheckCircle2 className="w-3.5 h-3.5" />
                           </button>
                           <button
-                            onClick={() => { setBaixaTarget(p); setBaixaNotes(''); searchExtratoForPayable(p); }}
+                            onClick={() => { setBaixaTarget(p); setBaixaNotes(''); openExtratoSearch(p); }}
                             title="Encontrar no Extrato (busca por data, valor aproximado)"
                             className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white transition-colors"
                           >
@@ -927,7 +1040,7 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
             />
             {/* Botão: Encontrar no Extrato */}
             <button
-              onClick={() => { setBaixaError(null); searchExtratoForPayable(baixaTarget); }}
+              onClick={() => { setBaixaError(null); openExtratoSearch(baixaTarget); }}
               disabled={isBaixaLoading}
               className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg hover:bg-emerald-100 transition-colors disabled:opacity-50"
             >
@@ -995,7 +1108,7 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                     para <span className="font-bold">{extratoSearchTarget.supplierName}</span>
                   </p>
                   <p className="text-[10px] font-mono text-[#C19A6B] mt-0.5">
-                    Data de pagamento: {extratoSearchTarget.paymentDate} • busca por data (valor é aproximado, não é filtro rígido)
+                    Data de pagamento: {extratoSearchTarget.paymentDate} • filtra por valor (±{formatCurrency(extratoSearchTolerance)}) e por data
                   </p>
                 </div>
                 <button
@@ -1006,23 +1119,80 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                 </button>
               </div>
 
-              {/* Controle da janela de dias */}
-              <div className="flex items-center gap-2 mt-3">
-                <span className="text-[10px] font-bold text-[#8B7D6B] uppercase">Janela de busca:</span>
-                <select
-                  value={extratoSearchDays}
-                  onChange={(e) => {
-                    const days = parseInt(e.target.value, 10);
-                    setExtratoSearchDays(days);
-                    if (extratoSearchTarget) searchExtratoForPayable(extratoSearchTarget, days);
-                  }}
-                  className="bg-[#F9F7F2] border border-[#EAE6DF] text-xs text-[#2D2A26] rounded-lg px-2 py-1 font-bold focus:outline-none focus:border-[#C19A6B]"
+              {/* Controles: valor procurado, tolerância e janela de dias */}
+              <div className="flex flex-wrap items-end gap-3 mt-3">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-[#8B7D6B] uppercase">Valor procurado (R$)</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={extratoSearchAmount}
+                    onChange={(e) => setExtratoSearchAmount(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && extratoSearchTarget) {
+                        searchExtratoForPayable(extratoSearchTarget, extratoSearchDays);
+                      }
+                    }}
+                    placeholder="2.532,50"
+                    className="w-32 bg-white border border-[#EAE6DF] text-sm font-bold text-[#2D2A26] rounded-lg px-2.5 py-1.5 font-mono focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-[#8B7D6B] uppercase">Tolerância</label>
+                  <select
+                    value={extratoSearchTolerance}
+                    onChange={(e) => {
+                      const tol = parseFloat(e.target.value);
+                      setExtratoSearchTolerance(tol);
+                      if (extratoSearchTarget) {
+                        searchExtratoForPayable(extratoSearchTarget, extratoSearchDays, undefined, tol);
+                      }
+                    }}
+                    className="bg-[#F9F7F2] border border-[#EAE6DF] text-xs text-[#2D2A26] rounded-lg px-2 py-2 font-bold focus:outline-none focus:border-[#C19A6B]"
+                  >
+                    <option value={0}>Valor exato</option>
+                    <option value={1}>± R$ 1,00</option>
+                    <option value={5}>± R$ 5,00</option>
+                    <option value={20}>± R$ 20,00</option>
+                    <option value={100}>± R$ 100,00</option>
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-[#8B7D6B] uppercase">Janela de busca</label>
+                  <select
+                    value={extratoSearchDays}
+                    onChange={(e) => {
+                      const days = parseInt(e.target.value, 10);
+                      setExtratoSearchDays(days);
+                      if (extratoSearchTarget) searchExtratoForPayable(extratoSearchTarget, days);
+                    }}
+                    className="bg-[#F9F7F2] border border-[#EAE6DF] text-xs text-[#2D2A26] rounded-lg px-2 py-2 font-bold focus:outline-none focus:border-[#C19A6B]"
+                  >
+                    <option value={3}>±3 dias</option>
+                    <option value={7}>±7 dias</option>
+                    <option value={15}>±15 dias</option>
+                    <option value={30}>±30 dias</option>
+                    <option value={90}>±90 dias</option>
+                  </select>
+                </div>
+
+                <button
+                  onClick={() => extratoSearchTarget && searchExtratoForPayable(extratoSearchTarget, extratoSearchDays)}
+                  className="px-4 py-2 text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 rounded-lg shadow-xs transition-all flex items-center gap-1.5"
                 >
-                  <option value={3}>±3 dias</option>
-                  <option value={7}>±7 dias</option>
-                  <option value={15}>±15 dias</option>
-                  <option value={30}>±30 dias</option>
-                </select>
+                  <Search className="w-3.5 h-3.5" />
+                  <span>Buscar</span>
+                </button>
+
+                <button
+                  onClick={() => extratoSearchTarget && openExtratoSearch(extratoSearchTarget)}
+                  title="Voltar ao valor do título"
+                  className="px-3 py-2 text-xs font-bold bg-[#F3F1ED] text-[#433E37] hover:bg-[#EAE6DF] border border-[#EAE6DF] rounded-lg transition-all"
+                >
+                  Restaurar valor do título
+                </button>
               </div>
             </div>
 
@@ -1047,7 +1217,9 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                   <AlertCircle className="w-10 h-10 text-amber-400 mx-auto mb-2" />
                   <p className="text-sm font-bold text-[#2D2A26]">Nenhum lançamento encontrado</p>
                   <p className="text-xs text-[#8B7D6B] mt-1">
-                    Nenhuma saída no extrato dentro de ±{extratoSearchDays} dias de {extratoSearchTarget.paymentDate}.
+                    Nenhuma saída no extrato com valor dentro de ±{formatCurrency(extratoSearchTolerance)} do valor procurado
+                    e data dentro de ±{extratoSearchDays} dias de {extratoSearchTarget.paymentDate}. Aumente a tolerância,
+                    a janela de dias, ou digite outro valor.
                     Tente aumentar a janela de busca acima.
                   </p>
                 </div>
@@ -1261,6 +1433,8 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
             </div>
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );

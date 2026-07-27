@@ -14,6 +14,7 @@ import { Navbar } from './components/Navbar';
 import { PwaInstallBanner } from './components/PwaBanners';
 import { Sidebar } from './components/Sidebar';
 import type { RawPayableRow } from './components/PayablesView';
+import type { RawForecastRow } from './utils/rfn046Parser';
 
 /**
  * CARREGAMENTO SOB DEMANDA DAS TELAS
@@ -91,6 +92,10 @@ import {
   clearContasPagar,
   getFluxoCaixa,
   saveFluxoCaixa,
+  getPrevisaoPagamento,
+  upsertPrevisaoPagamento,
+  clearPrevisaoPagamento,
+  quitarPrevisaoPagamento,
 } from './firebaseService';
 
 import {
@@ -126,6 +131,7 @@ import {
   FinancialStatementEntry,
   InvoiceRecord,
   PayableTitle,
+  PayableForecastTitle,
   CashFlowPlan,
   PostgresConfig,
   SaleItem,
@@ -165,7 +171,19 @@ export default function App() {
   const [sellers, setSellers] = useState<Seller[]>([]);
   const [apiTokens, setApiTokens] = useState<ApiToken[]>([]);
   const [statementEntries, setStatementEntries] = useState<FinancialStatementEntry[]>([]);
+  // EXTRATO COMPLETO (todos os anos). O `statementEntries` acima é o recorte do
+  // exercício selecionado, que é o certo para a TELA do Extrato Financeiro —
+  // ela é um relatório anual. Mas a conciliação de Contas a Pagar não pode ser
+  // anual: pagamento de 30/12 compensa em 03/01, e um título de 2025 pago pelo
+  // extrato de 2026 nunca acharia o par. Por isso a tela de Contas a Pagar
+  // trabalha com esta lista.
+  const [allStatementEntries, setAllStatementEntries] = useState<FinancialStatementEntry[]>([]);
   const [payables, setPayables] = useState<PayableTitle[]>([]);
+  // PREVISÃO DE PAGAMENTO (RFN046 — títulos em aberto). Carregada SEM filtro de
+  // ano de propósito: a pergunta "quanto vou pagar nos próximos 30 dias" feita
+  // em dezembro precisa enxergar os vencimentos de janeiro. É uma base pequena
+  // (só o que está em aberto), então o custo de leitura é irrelevante.
+  const [payableForecasts, setPayableForecasts] = useState<PayableForecastTitle[]>([]);
   const [cashFlowPlans, setCashFlowPlans] = useState<CashFlowPlan[]>([]);
   const [loginError, setLoginError] = useState<string>('');
 
@@ -228,18 +246,24 @@ export default function App() {
   const loadYearData = useCallback(async (year: number) => {
     setIsLoading(true);
     try {
-      const [ecoData, finData, stmtData, payData, cashData] = await Promise.all([
+      const [ecoData, finData, stmtData, allStmtData, payData, cashData, forecastData] = await Promise.all([
         getEconomicData(year),
         getFinancialData(year),
         getExtratoFinanceiro(year),
+        // Extrato completo, para a conciliação de Contas a Pagar enxergar as
+        // viradas de ano (ver comentário na declaração do estado).
+        getExtratoFinanceiro(),
         getContasPagar(year),
         getFluxoCaixa(year),
+        getPrevisaoPagamento(),
       ]);
       setEconomicData(ecoData);
       setFinancialData(finData);
       setStatementEntries(stmtData);
+      setAllStatementEntries(allStmtData);
       setPayables(payData);
       setCashFlowPlans(cashData);
+      setPayableForecasts(forecastData);
     } catch (err: any) {
       console.error('Erro ao carregar dados do ano no Firestore:', err.message);
     } finally {
@@ -1243,8 +1267,15 @@ export default function App() {
     try {
       const result = await upsertExtratoFinanceiro(entries);
       console.log(`Extrato importado: ${result.added} novo(s), ${result.updated} atualizado(s).`);
-      const fresh = await getExtratoFinanceiro(selectedYear);
+      const [fresh, all] = await Promise.all([
+        getExtratoFinanceiro(selectedYear),
+        getExtratoFinanceiro(),
+      ]);
       setStatementEntries(fresh);
+      // Mantém o extrato completo em dia: é ele que a conciliação de Contas a
+      // Pagar varre. Sem este refresh, o lançamento recém-importado só entraria
+      // na conciliação depois de trocar de ano ou recarregar a página.
+      setAllStatementEntries(all);
       await recomputeFinancialFromStatement(selectedYear, fresh, financialData);
     } catch (err: any) {
       console.error('Erro ao importar extrato financeiro:', err?.message || err);
@@ -1254,8 +1285,15 @@ export default function App() {
   const handleDeleteStatementEntry = async (id: string) => {
     try {
       await deleteExtratoFinanceiro(id);
-      const fresh = await getExtratoFinanceiro(selectedYear);
+      const [fresh, all] = await Promise.all([
+        getExtratoFinanceiro(selectedYear),
+        getExtratoFinanceiro(),
+      ]);
       setStatementEntries(fresh);
+      // Mantém o extrato completo em dia: é ele que a conciliação de Contas a
+      // Pagar varre. Sem este refresh, o lançamento recém-importado só entraria
+      // na conciliação depois de trocar de ano ou recarregar a página.
+      setAllStatementEntries(all);
       await recomputeFinancialFromStatement(selectedYear, fresh, financialData);
     } catch (e) {
       console.error('Erro ao excluir lançamento do extrato:', e);
@@ -1265,8 +1303,15 @@ export default function App() {
   const handleClearStatementEntries = async (source?: StatementSource) => {
     try {
       await clearExtratoFinanceiro(selectedYear, source);
-      const fresh = await getExtratoFinanceiro(selectedYear);
+      const [fresh, all] = await Promise.all([
+        getExtratoFinanceiro(selectedYear),
+        getExtratoFinanceiro(),
+      ]);
       setStatementEntries(fresh);
+      // Mantém o extrato completo em dia: é ele que a conciliação de Contas a
+      // Pagar varre. Sem este refresh, o lançamento recém-importado só entraria
+      // na conciliação depois de trocar de ano ou recarregar a página.
+      setAllStatementEntries(all);
       await recomputeFinancialFromStatement(selectedYear, fresh, financialData);
     } catch (e) {
       console.error('Erro ao zerar extrato financeiro:', e);
@@ -1289,10 +1334,19 @@ export default function App() {
   // Concilia (baixa automática) títulos "Em Aberto" contra lançamentos de saída
   // do Extrato Financeiro (banco + caixa/tesouraria) ainda não utilizados em
   // nenhuma outra baixa. Critério: mesmo valor (tolerância de R$0,01) e data de
-  // pagamento dentro de uma janela de ±5 dias da data do lançamento no extrato
+  // pagamento dentro de uma janela de ±15 dias da data do lançamento no extrato
   // (cobre o intervalo típico entre o registro no ERP e a compensação bancária).
   // Casamento é 1-para-1 (guloso, por menor diferença de dias) para nunca
   // vincular o mesmo lançamento de extrato a dois títulos diferentes.
+  //
+  // AS DUAS LISTAS TÊM QUE VIR COMPLETAS (todos os anos).
+  // Um título pago em 30/12 costuma compensar no extrato em 03/01 — ano
+  // diferente. Conciliando só com o extrato do ano selecionado, esse título
+  // nunca acha o par e fica "Em Aberto" para sempre. E, do outro lado, se a
+  // lista de títulos vier só do ano selecionado, um lançamento já usado numa
+  // baixa de outro ano não aparece em `usedStatementIds` e seria vinculado uma
+  // segunda vez — a mesma saída pagando dois títulos. Por isso os chamadores
+  // buscam `getExtratoFinanceiro()` e `getContasPagar()` sem filtro de ano.
   const computeAutoReconciliation = (
     payablesList: PayableTitle[],
     entriesList: FinancialStatementEntry[]
@@ -1405,33 +1459,158 @@ export default function App() {
 
     try {
       const result = await upsertContasPagar(toSave);
-      console.log(`Contas a pagar importadas: ${result.count} processado(s), ${result.errors} erro(s).`);
-      let fresh = await getContasPagar(selectedYear);
+      console.log(
+        `Contas a pagar: ${result.created} novo(s), ${result.updated} atualizado(s), ${result.errors} erro(s).`
+      );
+
+      // QUITAÇÃO CRUZADA COM A PREVISÃO
+      // Um título que aparece aqui como PAGO não pode continuar na base de
+      // previsão como "a vencer" — o fluxo de caixa contaria a mesma saída duas
+      // vezes. A chave que liga as duas bases é o código do título
+      // (TituloCodigo no RFN006 = Titulo_Codigo no RFN046).
+      const settlements = rows
+        .filter((r) => r.titleCode)
+        .map((r) => ({ titleCode: r.titleCode, paymentDate: r.paymentDate }));
+      const settled = await quitarPrevisaoPagamento(settlements);
+      if (settled > 0) setPayableForecasts(await getPrevisaoPagamento());
+
+      // Conciliação automática imediata após a importação, contra a base
+      // COMPLETA (todos os anos) — ver o comentário em computeAutoReconciliation.
+      const [allPayables, allEntries] = await Promise.all([
+        getContasPagar(),
+        getExtratoFinanceiro(),
+      ]);
+      setAllStatementEntries(allEntries);
+
+      const matches = computeAutoReconciliation(allPayables, allEntries);
+      if (matches.length > 0) await applyBaixaAutomatica(matches);
+
+      const fresh = await getContasPagar(selectedYear);
       setPayables(fresh);
 
-      // Conciliação automática imediata após a importação
-      const matches = computeAutoReconciliation(fresh, statementEntries);
-      if (matches.length > 0) {
-        await applyBaixaAutomatica(matches);
-        fresh = await getContasPagar(selectedYear);
-        setPayables(fresh);
-      }
+      alert(
+        `Importação de contas a pagar concluída.\n\n` +
+          `• ${result.created} título(s) NOVO(S) adicionado(s)\n` +
+          `• ${result.updated} título(s) já existente(s) atualizado(s) (sem duplicar)\n` +
+          (result.errors > 0 ? `• ${result.errors} linha(s) com erro de gravação\n` : '') +
+          (settled > 0 ? `• ${settled} título(s) baixado(s) da previsão de pagamento\n` : '') +
+          (matches.length > 0 ? `• ${matches.length} baixa(s) automática(s) contra o extrato\n` : '')
+      );
     } catch (err: any) {
       console.error('Erro ao importar contas a pagar:', err?.message || err);
+      alert(`Erro ao importar contas a pagar: ${err?.message || err}`);
+    }
+  };
+
+  // ── Previsão de Pagamento (RFN046 — títulos em aberto) ────────────────────
+  //
+  // Base independente da de títulos pagos. A importação é UPSERT por código do
+  // título: reimportar o relatório no dia seguinte atualiza saldos e datas dos
+  // que continuam em aberto, acrescenta os novos e não duplica nada.
+  const handleImportPayableForecasts = async (rows: RawForecastRow[]) => {
+    if (rows.length === 0) return;
+
+    const toSave = rows.map((r) => {
+      const matched = customers.find(
+        (c) => c.code && r.supplierCode && c.code.toLowerCase() === r.supplierCode.toLowerCase()
+      );
+      return {
+        titleCode: r.titleCode,
+        movType: r.movType,
+        companyCode: r.companyCode,
+        companyName: r.companyName,
+        titleNumber: r.titleNumber,
+        supplierCode: r.supplierCode,
+        supplierName: r.supplierName,
+        supplierCustomerId: matched?.id || '',
+        parcela: r.parcela,
+        titleType: r.titleType,
+        issueDate: r.issueDate,
+        entryDate: r.entryDate,
+        dueDate: r.dueDate,
+        paymentDate: r.paymentDate,
+        amount: r.amount,
+        balance: r.balance,
+        status: r.status,
+        invoiceCode: r.invoiceCode,
+        fiscalNoteCode: r.fiscalNoteCode,
+        nossoNumero: r.nossoNumero,
+        observation: r.observation,
+        managementAccount: r.managementAccount,
+        launchClass: r.launchClass,
+        departmentCode: r.departmentCode,
+        department: r.department,
+        collectionAgent: r.collectionAgent,
+        collectionType: r.collectionType,
+        operationNature: r.operationNature,
+        year: r.year,
+        monthKey: r.monthKey,
+      };
+    });
+
+    const result = await upsertPrevisaoPagamento(toSave);
+
+    // Títulos que já constam como pagos no RFN006 entram quitados: se o mesmo
+    // código já está na base de pagos, ele não é compromisso futuro.
+    const paidCodes = new Set(
+      (await getContasPagar()).filter((p) => p.titleCode).map((p) => p.titleCode as string)
+    );
+    const alreadyPaid = toSave
+      .filter((t) => paidCodes.has(t.titleCode))
+      .map((t) => ({ titleCode: t.titleCode, paymentDate: '' }));
+    if (alreadyPaid.length > 0) await quitarPrevisaoPagamento(alreadyPaid);
+
+    setPayableForecasts(await getPrevisaoPagamento());
+
+    alert(
+      `Previsão de pagamento atualizada.\n\n` +
+        `• ${result.created} título(s) NOVO(S) a vencer\n` +
+        `• ${result.updated} título(s) já existente(s) atualizado(s) (saldo/vencimento)\n` +
+        (result.errors > 0 ? `• ${result.errors} linha(s) com erro de gravação\n` : '') +
+        (alreadyPaid.length > 0
+          ? `• ${alreadyPaid.length} título(s) ignorado(s) por já constarem como pagos no RFN006\n`
+          : '')
+    );
+  };
+
+  const handleClearPayableForecasts = async () => {
+    try {
+      await clearPrevisaoPagamento();
+      setPayableForecasts([]);
+    } catch (err: any) {
+      console.error('Erro ao zerar previsão de pagamento:', err?.message || err);
     }
   };
 
   const handleReconcileNow = async () => {
     try {
-      const matches = computeAutoReconciliation(payables, statementEntries);
+      // Relê a base inteira do Firestore antes de conciliar. A tela pode estar
+      // aberta há horas e alguém pode ter importado extrato nesse meio-tempo;
+      // conciliar contra o estado em memória deixaria de fora justamente os
+      // lançamentos novos, que são os que mais têm chance de casar.
+      const [allPayables, allEntries] = await Promise.all([
+        getContasPagar(),
+        getExtratoFinanceiro(),
+      ]);
+      setAllStatementEntries(allEntries);
+
+      const matches = computeAutoReconciliation(allPayables, allEntries);
       if (matches.length === 0) {
-        alert('Nenhuma nova baixa automática encontrada. Os títulos em aberto não têm correspondência exata (valor + data) com lançamentos de saída ainda não utilizados no Extrato Financeiro.');
+        alert(
+          `Nenhuma nova baixa automática encontrada.\n\nBase varrida: ${allEntries.length} lançamento(s) de extrato e ` +
+            `${allPayables.filter((p) => p.status === 'Em Aberto').length} título(s) em aberto (todos os anos).\n\n` +
+            'Os títulos restantes não têm saída de mesmo valor (±R$0,01) dentro de ±15 dias que ainda não tenha sido usada em outra baixa. ' +
+            'Use "Encontrar no Extrato" para conciliar manualmente com tolerância maior.'
+        );
         return;
       }
       await applyBaixaAutomatica(matches);
       const fresh = await getContasPagar(selectedYear);
       setPayables(fresh);
-      alert(`${matches.length} título(s) baixado(s) automaticamente com sucesso.`);
+      alert(
+        `${matches.length} título(s) baixado(s) automaticamente.\n\n` +
+          `Base varrida: ${allEntries.length} lançamento(s) de extrato (todos os anos).`
+      );
     } catch (e: any) {
       console.error('Erro na conciliação automática:', e?.message || e);
     }
@@ -1694,7 +1873,11 @@ export default function App() {
           {activeTab === 'payables' && (
             <PayablesView
               payables={payables}
-              statementEntries={statementEntries}
+              // Extrato COMPLETO (todos os anos): a busca manual "Encontrar no
+              // Extrato" e a conciliação precisam achar a saída de 03/01 que
+              // pagou o título de 30/12. Com o recorte anual, esses casos
+              // simplesmente não apareciam na tela.
+              statementEntries={allStatementEntries}
               customers={customers}
               selectedYear={selectedYear}
               onImportPayables={handleImportPayables}
@@ -1704,6 +1887,9 @@ export default function App() {
               onLinkSupplier={handleLinkSupplier}
               onDeletePayable={handleDeletePayable}
               onClearPayables={handleClearPayables}
+              payableForecasts={payableForecasts}
+              onImportForecasts={handleImportPayableForecasts}
+              onClearForecasts={handleClearPayableForecasts}
               userRole={currentUser.role}
             />
           )}
@@ -1712,6 +1898,7 @@ export default function App() {
             <CashFlowView
               plans={cashFlowPlans}
               statementEntries={statementEntries}
+              payableForecasts={payableForecasts}
               selectedYear={selectedYear}
               onSavePlan={handleSaveCashFlowPlan}
               userRole={currentUser.role}

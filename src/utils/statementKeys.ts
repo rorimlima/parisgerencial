@@ -66,6 +66,46 @@ export const TESOURARIA_ACCOUNTS: Record<string, TesourariaAccount> = {
     shortLabel: 'Tesouraria 30101',
     description: 'Tesouraria central — pagamentos em dinheiro de títulos e borderôs.',
   },
+  '30107': {
+    code: '30107',
+    label: 'Caixa 30107',
+    shortLabel: 'Caixa 30107',
+    description: 'Caixa 301.07 — alimenta a tesouraria 30101 por transferência interna.',
+  },
+  '30110': {
+    code: '30110',
+    label: 'Caixa 30110',
+    shortLabel: 'Caixa 30110',
+    description: 'Caixa 301.10 — alimenta a tesouraria 30101 por transferência interna.',
+  },
+};
+
+/**
+ * A FAIXA 301xx É TODA CAIXA/TESOURARIA DA MESMA EMPRESA.
+ *
+ * O plano de contas reserva 301.xx para as contas de caixa e tesouraria —
+ * 301.01 (tesouraria), 301.07, 301.08 e 301.10 (caixas). Dinheiro que sai de
+ * uma dessas contas e entra em outra NÃO é receita: é a mesma nota trocando de
+ * bolso, e cada movimento desses aparece DUAS vezes na base (como saída na
+ * conta de origem e como entrada na conta de destino).
+ *
+ * Esta função é a definição única de "conta de caixa" no sistema. Ela responde
+ * a partir do identificador da conta gerencial OU do texto da classificação,
+ * porque o ERP nem sempre preenche os dois campos — e reconhece qualquer
+ * sufixo (não só os quatro já cadastrados acima), para que uma conta nova
+ * aberta no ERP não volte a inflar as entradas em silêncio.
+ */
+export const isCashAccountCode = (raw: any): boolean => {
+  const digits = (raw ?? '').toString().replace(/\D/g, '');
+  if (!digits) return false;
+  return /^301\d{0,3}$/.test(digits);
+};
+
+/** Extrai o código da conta de caixa citada num texto ('CAIXA 301.07' → '30107'). */
+export const extractCashAccountFromText = (raw: any): string => {
+  const text = normalizeKeyText(raw);
+  const m = text.match(/301\s*\.?\s*(\d{2})/);
+  return m ? `301${m[1]}` : '';
 };
 
 export const DEFAULT_TESOURARIA_ACCOUNT = '30108';

@@ -35,6 +35,7 @@ import {
   FinancialStatementEntry,
   PayableTitle,
   PayableStatus,
+  PayableForecastTitle,
   CashFlowPlan
 } from '../types';
 
@@ -963,6 +964,7 @@ const statementToFirestore = (entry: Partial<FinancialStatementEntry>): Record<s
   if (entry.accountLabel !== undefined) data.conta_label = entry.accountLabel || '';
   if (entry.managementAccount !== undefined) data.conta_gerencial = entry.managementAccount || '';
   if (entry.isInternalTransfer !== undefined) data.transferencia_interna = !!entry.isInternalTransfer;
+  if (entry.counterAccountCode !== undefined) data.conta_contrapartida = entry.counterAccountCode || '';
   return data;
 };
 
@@ -988,6 +990,7 @@ const statementFromFirestore = (id: string, data: any): FinancialStatementEntry 
   accountLabel: data.conta_label || '',
   managementAccount: data.conta_gerencial || '',
   isInternalTransfer: !!data.transferencia_interna,
+  counterAccountCode: data.conta_contrapartida || '',
 });
 
 // Busca lançamentos de extrato financeiro de um ano (ou todos, se ano omitido)
@@ -1159,11 +1162,57 @@ export const fetchPayables = async (year?: number): Promise<PayableTitle[]> => {
 };
 
 /**
+ * Remove do payload as chaves vazias (string vazia, null, undefined).
+ *
+ * POR QUE ISSO IMPORTA NUMA REIMPORTAÇÃO
+ * --------------------------------------
+ * `merge: true` mescla campo a campo, mas um campo enviado como '' MESCLA O
+ * VAZIO por cima do que já estava gravado. Uma reimportação em que o ERP veio
+ * sem o departamento apagaria o departamento que já existia no banco. Enviando
+ * só o que tem conteúdo, a regra vira: o import ACRESCENTA e ATUALIZA, nunca
+ * esvazia. Campos numéricos (inclusive zero) e o ano continuam passando.
+ */
+const stripEmpty = (obj: Record<string, any>): Record<string, any> => {
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === '' || v === null || v === undefined) continue;
+    out[k] = v;
+  }
+  return out;
+};
+
+/**
+ * Lê os IDs já existentes de uma coleção. Uma leitura a mais por importação,
+ * em troca de saber quantos títulos são NOVOS e quantos foram ATUALIZADOS —
+ * informação que o gestor precisa para confiar que a base não duplicou.
+ */
+const fetchExistingIds = async (collectionName: string): Promise<Set<string>> => {
+  try {
+    const db = getFirestoreDb();
+    const snapshot = await withTimeout(getDocs(collection(db, collectionName)), 25000, `conferir base ${collectionName}`);
+    return new Set(snapshot.docs.map((d) => d.id));
+  } catch (error) {
+    console.error(`Não foi possível conferir os IDs existentes de ${collectionName}:`, error);
+    return new Set();
+  }
+};
+
+/**
  * Importa títulos de contas a pagar (RFN006) com UPSERT em lote via writeBatch
  * (blocos de 400 operações — a base tem ~6 mil linhas, gravação 1-a-1 seria inviável).
- * DocId determinístico = mov_<TituloMovCodigo>, então reimportações atualizam
- * os dados cadastrais SEM sobrescrever o status de baixa já aplicado
- * (os campos de baixa não são incluídos no payload de importação).
+ *
+ * NÃO DUPLICA, NÃO APAGA, SÓ SOMA
+ * -------------------------------
+ * 1. DocId determinístico `mov_<TituloMovCodigo>`: o mesmo movimento sempre cai
+ *    no mesmo documento, então reimportar o relatório inteiro todo mês não cria
+ *    uma segunda cópia de nada.
+ * 2. `merge: true` + `stripEmpty`: campos novos são acrescentados, campos que
+ *    mudaram são atualizados, campos ausentes no arquivo permanecem como estão.
+ * 3. Os campos de baixa (status, extrato conciliado, código de baixa) não vão
+ *    no payload de importação — o trabalho de conciliação já feito sobrevive à
+ *    reimportação.
+ * 4. `criado_em` só é gravado quando o documento não existia; `atualizado_em`
+ *    marca toda passagem, deixando o histórico auditável.
  */
 export const upsertPayablesBatch = async (
   payables: (Omit<PayableTitle, 'id' | 'status' | 'reconciledStatementId' | 'reconciledSource' | 'reconciledAt'> & {
@@ -1171,55 +1220,67 @@ export const upsertPayablesBatch = async (
     notes?: string;
     reconciledAt?: string;
   })[]
-): Promise<{ count: number; errors: number }> => {
+): Promise<{ count: number; errors: number; created: number; updated: number }> => {
   const db = getFirestoreDb();
-  let count = 0, errors = 0;
+  let count = 0, errors = 0, created = 0, updated = 0;
   const CHUNK = 400;
+  const existingIds = await fetchExistingIds(PAYABLES_COLLECTION);
+  const now = new Date().toISOString();
 
   for (let i = 0; i < payables.length; i += CHUNK) {
     const chunk = payables.slice(i, i + CHUNK);
     try {
       const batch = writeBatch(db);
+      let chunkCreated = 0;
       for (const p of chunk) {
         const docId = `mov_${sanitizeDocId(p.movCode)}`;
-        const payload: Record<string, any> = {
+        const isNew = !existingIds.has(docId);
+        if (isNew) chunkCreated += 1;
+
+        const payload: Record<string, any> = stripEmpty({
           mov_codigo: p.movCode,
-          empresa_nome: p.companyName || '',
-          credor_codigo: p.supplierCode || '',
-          credor_nome: p.supplierName || '',
-          credor_cliente_id: p.supplierCustomerId || '',
-          titulo_codigo: p.titleCode || '',
-          parcela: p.parcela || '',
-          data_vencimento: p.dueDate || '',
-          data_pagamento: p.paymentDate || '',
+          empresa_nome: p.companyName,
+          credor_codigo: p.supplierCode,
+          credor_nome: p.supplierName,
+          credor_cliente_id: p.supplierCustomerId,
+          titulo_codigo: p.titleCode,
+          parcela: p.parcela,
+          data_vencimento: p.dueDate,
+          data_pagamento: p.paymentDate,
           ano: p.year,
           mes_chave: p.monthKey,
-          historico: p.description || '',
-          agente_pagador: p.payingAgent || '',
-          departamento: p.department || '',
+          historico: p.description,
+          agente_pagador: p.payingAgent,
+          departamento: p.department,
           valor: p.amount,
-          importado_em: new Date().toISOString(),
-        };
+          atualizado_em: now,
+        });
 
-        if (p.status) payload.status_baixa = p.status;
+        if (isNew) {
+          payload.criado_em = now;
+          payload.importado_em = now;
+          // O status inicial só é definido na criação. Em um título que já
+          // existe, sobrescrever o status devolveria para "Em Aberto" uma
+          // baixa que o gestor já tinha conferido.
+          if (p.status) payload.status_baixa = p.status;
+          if (p.reconciledAt) payload.baixa_em = p.reconciledAt;
+        }
         if (p.notes) payload.observacoes = p.notes;
-        if (p.reconciledAt) payload.baixa_em = p.reconciledAt;
 
-        batch.set(
-          doc(db, PAYABLES_COLLECTION, docId),
-          payload,
-          { merge: true }
-        );
+        batch.set(doc(db, PAYABLES_COLLECTION, docId), payload, { merge: true });
+        existingIds.add(docId);
       }
       await withTimeout(batch.commit(), 20000, `importar lote de contas a pagar (${chunk.length} títulos)`);
       count += chunk.length;
+      created += chunkCreated;
+      updated += chunk.length - chunkCreated;
     } catch (err) {
       console.error('Erro no batch de contas a pagar:', err);
       errors += chunk.length;
     }
   }
 
-  return { count, errors };
+  return { count, errors, created, updated };
 };
 
 export const updatePayable = async (id: string, fields: Partial<PayableTitle>): Promise<void> => {
@@ -1296,6 +1357,235 @@ export const clearPayables = async (year?: number): Promise<void> => {
     }
   } catch (error) {
     console.error('Error clearing payables:', error);
+    throw error;
+  }
+};
+
+// --- Previsão de Pagamento (RFN046 — Títulos em aberto) ---
+//
+// Coleção SEPARADA da de contas a pagar. Aqui ficam os compromissos que ainda
+// vão sair do caixa; lá, os que já saíram. Se as duas dividissem a mesma
+// coleção, um título pago apareceria como previsto e como realizado no mesmo
+// mês, dobrando o desembolso projetado.
+
+const PAYABLE_FORECAST_COLLECTION = 'contas_a_pagar_previsao';
+
+const forecastFromFirestore = (id: string, data: any): PayableForecastTitle => ({
+  id,
+  titleCode: data.titulo_codigo || '',
+  movType: data.movimento_financeiro || '',
+  companyCode: data.empresa_codigo || '',
+  companyName: data.empresa_nome || '',
+  titleNumber: data.titulo_numero || '',
+  supplierCode: data.credor_codigo || '',
+  supplierName: data.credor_nome || '',
+  supplierCustomerId: data.credor_cliente_id || '',
+  parcela: data.parcela || '',
+  titleType: data.tipo_titulo || '',
+  issueDate: data.data_emissao || '',
+  entryDate: data.data_entrada || '',
+  dueDate: data.data_vencimento || '',
+  paymentDate: data.data_pagamento || '',
+  amount: Number(data.valor) || 0,
+  balance: Number(data.saldo) || 0,
+  status: data.status || '',
+  invoiceCode: data.fatura_codigo || '',
+  fiscalNoteCode: data.nota_fiscal_codigo || '',
+  nossoNumero: data.nosso_numero || '',
+  observation: data.observacao || '',
+  managementAccount: data.conta_gerencial || '',
+  launchClass: data.classificacao_lancamento || '',
+  departmentCode: data.departamento_codigo || '',
+  department: data.departamento || '',
+  collectionAgent: data.agente_cobrador || '',
+  collectionType: data.tipo_cobranca || '',
+  operationNature: data.natureza_operacao || '',
+  year: Number(data.ano) || 0,
+  monthKey: data.mes_chave || '',
+  importedAt: data.importado_em || '',
+});
+
+/**
+ * Busca os títulos a vencer. Sem `year`, traz a base inteira — que é o certo
+ * para esta tela: a pergunta "quanto vou pagar nos próximos 30 dias" atravessa
+ * a virada de ano sem pedir licença, e um filtro anual esconderia justamente
+ * os vencimentos de janeiro quando se está em dezembro.
+ */
+export const fetchPayableForecasts = async (year?: number): Promise<PayableForecastTitle[]> => {
+  try {
+    const db = getFirestoreDb();
+    const q = year
+      ? query(collection(db, PAYABLE_FORECAST_COLLECTION), where('ano', '==', year))
+      : collection(db, PAYABLE_FORECAST_COLLECTION);
+    const snapshot = await withTimeout(getDocs(q), 25000, 'buscar previsão de pagamentos');
+    return snapshot.docs
+      .map((d) => forecastFromFirestore(d.id, d.data()))
+      .sort((a, b) => (a.dueDate < b.dueDate ? -1 : a.dueDate > b.dueDate ? 1 : 0));
+  } catch (error) {
+    console.error('Error fetching payable forecasts:', error);
+    return [];
+  }
+};
+
+/**
+ * UPSERT em lote com docId determinístico `tit_<Titulo_Codigo>`: reimportar o
+ * RFN046 no dia seguinte atualiza os saldos dos títulos que continuam em
+ * aberto em vez de duplicá-los.
+ */
+export const upsertPayableForecastsBatch = async (
+  rows: Omit<PayableForecastTitle, 'id'>[]
+): Promise<{ count: number; errors: number; created: number; updated: number }> => {
+  const db = getFirestoreDb();
+  let count = 0, errors = 0, created = 0, updated = 0;
+  const CHUNK = 400;
+  const now = new Date().toISOString();
+  const existingIds = await fetchExistingIds(PAYABLE_FORECAST_COLLECTION);
+
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK);
+    try {
+      const batch = writeBatch(db);
+      let chunkCreated = 0;
+      for (const t of chunk) {
+        const docId = `tit_${sanitizeDocId(t.titleCode)}`;
+        const isNew = !existingIds.has(docId);
+        if (isNew) chunkCreated += 1;
+
+        const payload: Record<string, any> = stripEmpty({
+          titulo_codigo: t.titleCode,
+          movimento_financeiro: t.movType,
+          empresa_codigo: t.companyCode,
+          empresa_nome: t.companyName,
+          titulo_numero: t.titleNumber,
+          credor_codigo: t.supplierCode,
+          credor_nome: t.supplierName,
+          credor_cliente_id: t.supplierCustomerId,
+          parcela: t.parcela,
+          tipo_titulo: t.titleType,
+          data_emissao: t.issueDate,
+          data_entrada: t.entryDate,
+          data_vencimento: t.dueDate,
+          data_pagamento: t.paymentDate,
+          // Valor e saldo sempre gravados (inclusive zero): é justamente a queda
+          // do saldo que mostra a amortização parcial de um título.
+          valor: t.amount || 0,
+          saldo: t.balance || 0,
+          status: t.status,
+          fatura_codigo: t.invoiceCode,
+          nota_fiscal_codigo: t.fiscalNoteCode,
+          nosso_numero: t.nossoNumero,
+          observacao: t.observation,
+          conta_gerencial: t.managementAccount,
+          classificacao_lancamento: t.launchClass,
+          departamento_codigo: t.departmentCode,
+          departamento: t.department,
+          agente_cobrador: t.collectionAgent,
+          tipo_cobranca: t.collectionType,
+          natureza_operacao: t.operationNature,
+          ano: t.year,
+          mes_chave: t.monthKey,
+          atualizado_em: now,
+        });
+        if (isNew) {
+          payload.criado_em = now;
+          payload.importado_em = now;
+        }
+
+        batch.set(doc(db, PAYABLE_FORECAST_COLLECTION, docId), payload, { merge: true });
+        existingIds.add(docId);
+      }
+      await withTimeout(batch.commit(), 20000, `importar lote de previsão (${chunk.length} títulos)`);
+      count += chunk.length;
+      created += chunkCreated;
+      updated += chunk.length - chunkCreated;
+    } catch (err) {
+      console.error('Erro no batch de previsão de pagamento:', err);
+      errors += chunk.length;
+    }
+  }
+
+  return { count, errors, created, updated };
+};
+
+/**
+ * Quita na previsão os títulos que apareceram como PAGOS no RFN006.
+ *
+ * O RFN006 traz `TituloCodigo`, que é a mesma chave do `Titulo_Codigo` do
+ * RFN046. Quando um título migra de "a vencer" para "pago", ele precisa sair
+ * da previsão na mesma hora — senão o mês passa a ter o compromisso contado
+ * duas vezes no fluxo de caixa: uma como saída realizada (extrato) e outra
+ * como saída futura (previsão).
+ *
+ * O documento não é apagado: fica com saldo zero e a data de pagamento
+ * gravada, o que preserva o rastro de auditoria (quando foi previsto, quando
+ * foi pago) sem contaminar nenhum total.
+ */
+export const settlePayableForecasts = async (
+  settlements: { titleCode: string; paymentDate: string }[]
+): Promise<number> => {
+  const valid = settlements.filter((s) => s.titleCode);
+  if (valid.length === 0) return 0;
+
+  const db = getFirestoreDb();
+  const existingIds = await fetchExistingIds(PAYABLE_FORECAST_COLLECTION);
+  const now = new Date().toISOString();
+  const CHUNK = 400;
+  let settled = 0;
+
+  const targets = valid.filter((s) => existingIds.has(`tit_${sanitizeDocId(s.titleCode)}`));
+  for (let i = 0; i < targets.length; i += CHUNK) {
+    const chunk = targets.slice(i, i + CHUNK);
+    try {
+      const batch = writeBatch(db);
+      for (const s of chunk) {
+        batch.set(
+          doc(db, PAYABLE_FORECAST_COLLECTION, `tit_${sanitizeDocId(s.titleCode)}`),
+          {
+            data_pagamento: s.paymentDate || now.slice(0, 10),
+            saldo: 0,
+            quitado_por: 'RFN006',
+            quitado_em: now,
+            atualizado_em: now,
+          },
+          { merge: true }
+        );
+      }
+      await withTimeout(batch.commit(), 20000, `quitar previsão (${chunk.length} títulos)`);
+      settled += chunk.length;
+    } catch (err) {
+      console.error('Erro ao quitar títulos da previsão:', err);
+    }
+  }
+
+  return settled;
+};
+
+export const deletePayableForecast = async (id: string): Promise<void> => {
+  try {
+    const db = getFirestoreDb();
+    await withTimeout(deleteDoc(doc(db, PAYABLE_FORECAST_COLLECTION, id)), 12000, 'excluir título da previsão');
+  } catch (error) {
+    console.error('Error deleting payable forecast:', error);
+    throw error;
+  }
+};
+
+export const clearPayableForecasts = async (year?: number): Promise<void> => {
+  try {
+    const db = getFirestoreDb();
+    const q = year
+      ? query(collection(db, PAYABLE_FORECAST_COLLECTION), where('ano', '==', year))
+      : collection(db, PAYABLE_FORECAST_COLLECTION);
+    const snapshot = await withTimeout(getDocs(q), 25000, 'buscar previsão para zerar');
+    const CHUNK = 400;
+    const docs = snapshot.docs;
+    for (let i = 0; i < docs.length; i += CHUNK) {
+      const batch = writeBatch(db);
+      docs.slice(i, i + CHUNK).forEach((d) => batch.delete(doc(db, PAYABLE_FORECAST_COLLECTION, d.id)));
+      await withTimeout(batch.commit(), 20000, `zerar lote de previsão (${docs.slice(i, i + CHUNK).length} títulos)`);
+    }
+  } catch (error) {
+    console.error('Error clearing payable forecasts:', error);
     throw error;
   }
 };

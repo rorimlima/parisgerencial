@@ -15,6 +15,7 @@
     "seed:tesouraria:dry": "node scripts/seedTesouraria.mjs --dry",
     "test:extrato": "node scripts/testRfn019Parser.mjs",
     "test:auditoria": "node scripts/testFinancialAudit.mjs",
+    "test:previsao": "node scripts/testPrevisaoPagamento.mjs",
     "test": "node scripts/testRfn019Parser.mjs && node scripts/testFinancialAudit.mjs"
   },
   "dependencies": {

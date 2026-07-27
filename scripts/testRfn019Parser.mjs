@@ -52,9 +52,22 @@ const loadTs = (relPath) => {
   return m.exports;
 };
 
-const { parseRfn019Rows, summarizeRfn019, isInternalTransferRow, normalizeRfn019Date, toAmount } =
-  loadTs('src/utils/rfn019Parser.ts');
-const { statementDocId, buildTesourariaDedupeKey, buildBankDedupeKey } = loadTs('src/utils/statementKeys.ts');
+const {
+  parseRfn019Rows,
+  summarizeRfn019,
+  isInternalTransferRow,
+  counterCashAccountOf,
+  findDuplicateGroups,
+  normalizeRfn019Date,
+  toAmount,
+} = loadTs('src/utils/rfn019Parser.ts');
+const {
+  statementDocId,
+  buildTesourariaDedupeKey,
+  buildBankDedupeKey,
+  isCashAccountCode,
+  extractCashAccountFromText,
+} = loadTs('src/utils/statementKeys.ts');
 
 let passed = 0;
 let failed = 0;
@@ -104,6 +117,53 @@ check('conta gerencial 30108 é transferência', isInternalTransferRow('30108', 
 check('salários NÃO é transferência', !isInternalTransferRow('21023', 'SALARIOS E ORDENADOS'));
 check('compra de peças NÃO é transferência', !isInternalTransferRow('20102', 'COMPRA DE PECAS P/ESTOQUE'));
 check('detecta pelo texto mesmo sem identificador', isInternalTransferRow('', 'TRANSFERENCIA CAIXA 301.01'));
+
+// ── As contas que alimentam a tesouraria 30101 ──────────────────────────────
+// O extrato da 30101 recebe transferência dos caixas 301.07 e 301.10. A regra
+// antiga só citava 301.01 e 301.08 no texto; se o ERP tivesse deixado o
+// identificador em branco, essas entradas passariam como recebimento REAL e
+// inflariam o Resultado Financeiro com dinheiro que ninguém pagou.
+console.log('\n── Contas 301.xx que alimentam a tesouraria ──');
+check('conta gerencial 30107 é transferência', isInternalTransferRow('30107', ''));
+check('conta gerencial 30110 é transferência', isInternalTransferRow('30110', ''));
+check('30107 detectado só pelo texto', isInternalTransferRow('', 'CAIXA 301.07'));
+check('30110 detectado só pelo texto', isInternalTransferRow('', 'TRANSF. P/ CAIXA 301.10'));
+check('identificador com ponto (301.07) é reconhecido', isInternalTransferRow('301.07', ''));
+check('faixa 301 inteira é caixa', isCashAccountCode('30107') && isCashAccountCode('30110') && isCashAccountCode('30101'));
+check('conta fora da faixa 301 NÃO é caixa', !isCashAccountCode('21023') && !isCashAccountCode('20102'));
+check('conta 302xx NÃO é caixa (evita falso positivo)', !isCashAccountCode('30201'));
+
+// Contrapartida: é ela que responde "de onde veio o dinheiro" na auditoria.
+check('contrapartida lida do identificador', counterCashAccountOf('30107', '') === '30107');
+check('contrapartida lida do texto', counterCashAccountOf('', 'CAIXA 301.10 LOJA') === '30110');
+check('extrai 30107 de "CAIXA 301.07"', extractCashAccountFromText('CAIXA 301.07') === '30107');
+check('movimento real não tem contrapartida de caixa', counterCashAccountOf('21023', 'SALARIOS E ORDENADOS') === '');
+
+// ── Detector de duplicidade ────────────────────────────────────────────────
+// Dois códigos DIFERENTES lançando o mesmo valor, no mesmo dia, contra a mesma
+// conta: o padrão de um repasse digitado duas vezes no ERP. A chave por
+// Tesouraria_Codigo não pega isso — são movimentos distintos para o ERP.
+console.log('\n── Detector de duplicidade (mesmo dia, mesmo valor, mesma conta) ──');
+const dupRows = [
+  { date: '2026-03-10', entryAmount: 5000, exitAmount: 0, counterAccountCode: '30107', documentRef: 'A1' },
+  { date: '2026-03-10', entryAmount: 5000, exitAmount: 0, counterAccountCode: '30107', documentRef: 'A2' },
+  { date: '2026-03-10', entryAmount: 5000, exitAmount: 0, counterAccountCode: '30110', documentRef: 'A3' },
+  { date: '2026-03-11', entryAmount: 5000, exitAmount: 0, counterAccountCode: '30107', documentRef: 'A4' },
+  { date: '2026-03-12', entryAmount: 0, exitAmount: 800, counterAccountCode: '', documentRef: 'A5' },
+];
+const dups = findDuplicateGroups(dupRows);
+check('acha o par duplicado', dups.length === 1, `achou ${dups.length}`);
+check('duplicidade é a do 30107 em 10/03', dups[0] && dups[0].counterAccountCode === '30107' && dups[0].date === '2026-03-10');
+check('conta o excedente, não o par inteiro', dups[0] && dups[0].count === 2);
+check('mesma data e valor em conta diferente NÃO é duplicidade', !dups.some((d) => d.counterAccountCode === '30110'));
+check('entrada e saída de mesmo valor não se confundem', !dups.some((d) => d.amount === 800));
+
+// O seed real não pode ter transferência que escapou da regra nova.
+const seedTransfMissed = seed.filter(
+  (e) => !e.isInternalTransfer && isInternalTransferRow('', e.managementAccount || '')
+);
+check('regra nova não reclassifica movimento real do seed', seedTransfMissed.length === 0,
+  `${seedTransfMissed.length} linha(s) mudariam de lado`);
 
 console.log('\n── 2026 (o ano que aparece no painel) ──');
 const s26 = seed.filter((e) => e.year === 2026);

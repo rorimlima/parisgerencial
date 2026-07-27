@@ -38,6 +38,8 @@
 import {
   TESOURARIA_ACCOUNTS,
   buildTesourariaDedupeKey,
+  extractCashAccountFromText,
+  isCashAccountCode,
   normalizeKeyText,
 } from './statementKeys';
 
@@ -55,6 +57,7 @@ export interface Rfn019Row {
   accountLabel: string;
   managementAccount: string;
   isInternalTransfer: boolean;
+  counterAccountCode: string;   // conta 301.xx do outro lado da transferência
 }
 
 const MONTH_KEYS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
@@ -109,12 +112,27 @@ export const toAmount = (raw: any): number => {
  * Duas evidências independentes, porque o ERP nem sempre preenche as duas:
  * o identificador da conta gerencial na faixa 301xx, ou o texto da
  * classificação citando a conta de destino.
+ *
+ * Vale para QUALQUER conta 301.xx, não só as já cadastradas. No extrato da
+ * tesouraria 30101 as entradas vêm dos caixas 301.07 e 301.10 — o mesmo
+ * dinheiro que já saiu de lá. Reconhecer só 301.01 e 301.08 (como era antes)
+ * deixava essas entradas passarem como recebimento real.
  */
 export const isInternalTransferRow = (managementId: any, managementDesc: any): boolean => {
-  const id = (managementId ?? '').toString().trim();
-  if (/^301/.test(id)) return true;
+  if (isCashAccountCode(managementId)) return true;
   const desc = normalizeKeyText(managementDesc);
-  return /caixa\s*301|tesouraria\s*301|301\.01|301\.08/.test(desc);
+  return /caixa\s*301|tesouraria\s*301|301\s*\.\s*\d{2}/.test(desc);
+};
+
+/**
+ * Qual conta de caixa está do outro lado da transferência. Guardar isso é o
+ * que permite auditar depois "quanto do extrato 30101 é dinheiro que veio do
+ * 30107" sem reabrir a planilha original.
+ */
+export const counterCashAccountOf = (managementId: any, managementDesc: any): string => {
+  const digits = (managementId ?? '').toString().replace(/\D/g, '');
+  if (isCashAccountCode(digits)) return digits;
+  return extractCashAccountFromText(managementDesc);
 };
 
 /**
@@ -156,6 +174,9 @@ export const parseRfn019Rows = (rows: any[], accountCode: string): Rfn019Row[] =
     const tipoDoc = (row['Tesouraria_TipoDocumentoDes'] || 'DINHEIRO').toString().trim() || 'DINHEIRO';
     const classificacao = (row['Tesouraria_ContagerencialDesClassificacao'] ?? '').toString().trim();
     const transfer = isInternalTransferRow(row['ContaGerencial_Identificador'], classificacao);
+    const counterAccountCode = transfer
+      ? counterCashAccountOf(row['ContaGerencial_Identificador'], classificacao)
+      : '';
 
     out.push({
       date,
@@ -174,16 +195,86 @@ export const parseRfn019Rows = (rows: any[], accountCode: string): Rfn019Row[] =
       accountLabel,
       managementAccount: classificacao,
       isInternalTransfer: transfer,
+      counterAccountCode,
     });
   }
 
   return out;
 };
 
+/** Quebra das transferências internas por conta de contrapartida. */
+export interface CounterAccountBreakdown {
+  accountCode: string;
+  label: string;
+  count: number;
+  entrada: number;
+  saida: number;
+}
+
+/**
+ * Linhas que repetem data + valor + contrapartida dentro do mesmo arquivo.
+ *
+ * O `Tesouraria_Codigo` já impede que a MESMA linha do ERP entre duas vezes na
+ * base. O que este detector procura é outra coisa: dois códigos diferentes
+ * lançando o mesmo valor, no mesmo dia, contra a mesma conta — o padrão típico
+ * de um repasse digitado em duplicidade no ERP. Não apagamos nada por conta
+ * própria (pode ser um repasse legítimo repetido no mesmo dia); o número é
+ * mostrado para o gestor decidir.
+ */
+export interface DuplicateGroup {
+  date: string;
+  amount: number;
+  counterAccountCode: string;
+  count: number;
+  refs: string[];
+}
+
+export const findDuplicateGroups = (rows: Rfn019Row[]): DuplicateGroup[] => {
+  const map = new Map<string, DuplicateGroup>();
+  for (const r of rows) {
+    const amount = r.entryAmount || r.exitAmount;
+    if (amount <= 0) continue;
+    const key = `${r.date}|${amount.toFixed(2)}|${r.counterAccountCode}|${r.entryAmount > 0 ? 'E' : 'S'}`;
+    const cur = map.get(key);
+    if (cur) {
+      cur.count += 1;
+      cur.refs.push(r.documentRef);
+    } else {
+      map.set(key, {
+        date: r.date,
+        amount,
+        counterAccountCode: r.counterAccountCode,
+        count: 1,
+        refs: [r.documentRef],
+      });
+    }
+  }
+  return [...map.values()].filter((g) => g.count > 1).sort((a, b) => b.amount * b.count - a.amount * a.count);
+};
+
 /** Resumo usado na prévia da importação e no relatório do seeder. */
 export const summarizeRfn019 = (rows: Rfn019Row[]) => {
   const real = rows.filter((r) => !r.isInternalTransfer);
   const transfers = rows.filter((r) => r.isInternalTransfer);
+
+  const byCounter = new Map<string, CounterAccountBreakdown>();
+  for (const r of transfers) {
+    const code = r.counterAccountCode || 'outros';
+    const cur = byCounter.get(code) || {
+      accountCode: code,
+      label: TESOURARIA_ACCOUNTS[code]?.label || (code === 'outros' ? 'Conta não identificada' : `Conta ${code}`),
+      count: 0,
+      entrada: 0,
+      saida: 0,
+    };
+    cur.count += 1;
+    cur.entrada += r.entryAmount;
+    cur.saida += r.exitAmount;
+    byCounter.set(code, cur);
+  }
+
+  const duplicates = findDuplicateGroups(rows);
+
   return {
     total: rows.length,
     entradasReais: real.reduce((a, r) => a + r.entryAmount, 0),
@@ -191,6 +282,10 @@ export const summarizeRfn019 = (rows: Rfn019Row[]) => {
     transferenciasCount: transfers.length,
     transferenciasEntrada: transfers.reduce((a, r) => a + r.entryAmount, 0),
     transferenciasSaida: transfers.reduce((a, r) => a + r.exitAmount, 0),
+    porContraparte: [...byCounter.values()].sort((a, b) => b.entrada + b.saida - (a.entrada + a.saida)),
+    duplicadosCount: duplicates.reduce((a, g) => a + (g.count - 1), 0),
+    duplicadosValor: duplicates.reduce((a, g) => a + g.amount * (g.count - 1), 0),
+    duplicados: duplicates.slice(0, 50),
     anos: Array.from(new Set(rows.map((r) => r.date.slice(0, 4)))).sort(),
   };
 };

@@ -47,6 +47,7 @@ import {
   DEFAULT_TESOURARIA_ACCOUNT,
   TESOURARIA_ACCOUNTS,
   buildBankDedupeKey,
+  extractCashAccountFromText,
 } from '../utils/statementKeys';
 
 interface FinancialStatementViewProps {
@@ -107,6 +108,7 @@ interface RawStatementRow {
   accountLabel?: string;
   managementAccount?: string;
   isInternalTransfer?: boolean;
+  counterAccountCode?: string;
 }
 
 const monthKeyFromIso = (dateStr: string): string => {
@@ -258,6 +260,7 @@ const parseTesourariaRows = (rows: any[], accountCode: string): RawStatementRow[
     accountLabel: r.accountLabel,
     managementAccount: r.managementAccount,
     isInternalTransfer: r.isInternalTransfer,
+    counterAccountCode: r.counterAccountCode,
   }));
 
 // ─── Componente ──────────────────────────────────────────────────────────────
@@ -451,6 +454,7 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
               accountLabel: r.accountLabel,
               managementAccount: r.managementAccount,
               isInternalTransfer: !!r.isInternalTransfer,
+              counterAccountCode: r.counterAccountCode || '',
             }
           : {}),
       };
@@ -473,6 +477,54 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
   const previewTransfers = previewRows.filter((r) => r.valid && r.isInternalTransfer);
   const previewTransferCount = previewTransfers.length;
   const previewTransferValue = previewTransfers.reduce((a, r) => a + r.entryAmount + r.exitAmount, 0);
+
+  // Quebra da prévia por conta de contrapartida — mostra, ANTES de gravar, que
+  // as entradas do extrato 30101 vêm dos caixas 301.07/301.10.
+  const previewTransferByAccount = useMemo(() => {
+    const map = new Map<string, { code: string; label: string; count: number; entrada: number; saida: number }>();
+    previewTransfers.forEach((r) => {
+      const code = r.counterAccountCode || extractCashAccountFromText(r.managementAccount) || 'outros';
+      const cur = map.get(code) || {
+        code,
+        label:
+          TESOURARIA_ACCOUNTS[code]?.label ||
+          (code === 'outros' ? 'Conta não identificada' : `Conta ${code}`),
+        count: 0,
+        entrada: 0,
+        saida: 0,
+      };
+      cur.count += 1;
+      cur.entrada += r.entryAmount;
+      cur.saida += r.exitAmount;
+      map.set(code, cur);
+    });
+    return [...map.values()].sort((a, b) => b.entrada + b.saida - (a.entrada + a.saida));
+  }, [previewRows]);
+
+  // Repasses digitados em duplicidade no ERP: mesmo dia, mesmo valor, mesma
+  // conta, códigos de movimento diferentes. A chave por Tesouraria_Codigo não
+  // pega esses — para o ERP são dois movimentos —, então o alerta é aqui, na
+  // prévia, enquanto ainda dá para conferir antes de gravar.
+  const previewDuplicates = useMemo(() => {
+    const map = new Map<string, { date: string; amount: number; code: string; refs: string[] }>();
+    previewRows
+      .filter((r) => r.valid)
+      .forEach((r) => {
+        const amount = r.entryAmount || r.exitAmount;
+        if (amount <= 0) return;
+        const code = r.counterAccountCode || extractCashAccountFromText(r.managementAccount) || '';
+        const key = `${r.date}|${amount.toFixed(2)}|${code}|${r.entryAmount > 0 ? 'E' : 'S'}`;
+        const cur = map.get(key);
+        if (cur) cur.refs.push(r.documentRef);
+        else map.set(key, { date: r.date, amount, code, refs: [r.documentRef] });
+      });
+    return [...map.values()]
+      .filter((g) => g.refs.length > 1)
+      .sort((a, b) => b.amount * (b.refs.length - 1) - a.amount * (a.refs.length - 1));
+  }, [previewRows]);
+
+  const previewDuplicateExtra = previewDuplicates.reduce((a, g) => a + (g.refs.length - 1), 0);
+  const previewDuplicateValue = previewDuplicates.reduce((a, g) => a + g.amount * (g.refs.length - 1), 0);
 
   const filteredPreview = previewRows.filter((r) => {
     if (previewFilter === 'valid') return r.valid;
@@ -516,8 +568,49 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
   const totalSaidasPeriodo = filteredEntries.reduce((a, e) => a + e.exitAmount, 0);
   const saldoLiquidoPeriodo = totalEntradasPeriodo - totalSaidasPeriodo;
 
-  const totalBancosAno = entries.filter((e) => e.origin === 'banco').reduce((a, e) => a + e.entryAmount, 0);
-  const totalTesourariaAno = entries.filter((e) => e.origin === 'caixa').reduce((a, e) => a + e.entryAmount, 0);
+  // TRANSFERÊNCIA INTERNA NÃO ENTRA NO TOTAL DE ENTRADAS.
+  //
+  // Este card mostrava a soma bruta de todo crédito com origin='caixa',
+  // inclusive o remanejo entre as contas da casa — no extrato da tesouraria
+  // 30101, as entradas vêm dos caixas 301.07 e 301.10, dinheiro que já foi
+  // contado quando saiu de lá. Somar os dois lados conta o mesmo real duas
+  // vezes e o card diverge do Resultado Financeiro, que sempre excluiu essas
+  // linhas (App.tsx → recomputeFinancialFromStatement). Agora os dois números
+  // usam a mesma régra; o valor transferido continua visível, num card próprio.
+  const realEntries = entries.filter((e) => !e.isInternalTransfer);
+  const totalBancosAno = realEntries.filter((e) => e.origin === 'banco').reduce((a, e) => a + e.entryAmount, 0);
+  const totalTesourariaAno = realEntries.filter((e) => e.origin === 'caixa').reduce((a, e) => a + e.entryAmount, 0);
+
+  // Quebra das transferências internas por conta de contrapartida (301.07,
+  // 301.10, ...). É a resposta para "de onde veio esse dinheiro" sem reabrir a
+  // planilha do ERP.
+  const transferEntries = entries.filter((e) => e.isInternalTransfer);
+  const totalTransferenciasAno = transferEntries.reduce((a, e) => a + e.entryAmount + e.exitAmount, 0);
+  const transferBreakdown = useMemo(() => {
+    const map = new Map<string, { code: string; label: string; count: number; entrada: number; saida: number }>();
+    transferEntries.forEach((e) => {
+      // Lançamentos gravados antes deste campo existir não têm
+      // `counterAccountCode`. Em vez de mostrá-los todos como "não
+      // identificada" (o que esconderia justamente a resposta que se quer), a
+      // conta é relida do texto da classificação gerencial, que já estava
+      // gravado. Assim a auditoria funciona na base atual, sem reimportar.
+      const code = e.counterAccountCode || extractCashAccountFromText(e.managementAccount) || 'outros';
+      const cur = map.get(code) || {
+        code,
+        label:
+          TESOURARIA_ACCOUNTS[code]?.label ||
+          (code === 'outros' ? 'Conta não identificada' : `Conta ${code}`),
+        count: 0,
+        entrada: 0,
+        saida: 0,
+      };
+      cur.count += 1;
+      cur.entrada += e.entryAmount;
+      cur.saida += e.exitAmount;
+      map.set(code, cur);
+    });
+    return [...map.values()].sort((a, b) => b.entrada + b.saida - (a.entrada + a.saida));
+  }, [entries]);
 
   const handleExportExcel = () => {
     const data = filteredEntries.map((e) => ({
@@ -584,18 +677,29 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white border border-[#EAE6DF] p-4 rounded-xl shadow-xs">
           <span className="text-[10px] font-bold text-[#8B7D6B] uppercase tracking-wider block">
-            Total Bancos ({selectedYear})
+            Entradas Bancos ({selectedYear})
           </span>
           <p className="text-lg font-black text-[#2D2A26] mt-1">{formatCurrency(totalBancosAno)}</p>
+          <span className="text-[10px] text-[#8B7D6B]">recebimento real, sem transferência interna</span>
         </div>
         <div className="bg-white border border-[#EAE6DF] p-4 rounded-xl shadow-xs">
           <span className="text-[10px] font-bold text-[#8B7D6B] uppercase tracking-wider block">
-            Total Tesouraria/Caixa ({selectedYear})
+            Entradas Tesouraria/Caixa ({selectedYear})
           </span>
           <p className="text-lg font-black text-[#C19A6B] mt-1">{formatCurrency(totalTesourariaAno)}</p>
+          <span className="text-[10px] text-[#8B7D6B]">bate com o Resultado Financeiro</span>
+        </div>
+        <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl shadow-xs">
+          <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wider block">
+            Transferências Internas ({selectedYear})
+          </span>
+          <p className="text-lg font-black text-amber-800 mt-1">{formatCurrency(totalTransferenciasAno)}</p>
+          <span className="text-[10px] text-amber-700">
+            {transferEntries.length} lançamento(s) — fora do total de entradas
+          </span>
         </div>
         <div className="bg-white border border-[#EAE6DF] p-4 rounded-xl shadow-xs">
           <span className="text-[10px] font-bold text-[#8B7D6B] uppercase tracking-wider block">
@@ -604,6 +708,52 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
           <p className="text-lg font-black text-[#2D2A26] mt-1">{entries.length}</p>
         </div>
       </div>
+
+      {/* Auditoria: de onde vem o dinheiro das transferências internas.
+          Responde "as entradas do extrato 30101 vieram do 30107/30110?" com
+          número, sem precisar reabrir a planilha do ERP. */}
+      {transferBreakdown.length > 0 && (
+        <div className="bg-white border border-amber-200 rounded-xl p-4 shadow-xs">
+          <div className="flex items-start gap-2 mb-3">
+            <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-xs font-black text-[#2D2A26]">Origem das transferências internas ({selectedYear})</p>
+              <p className="text-[11px] text-[#8B7D6B] mt-0.5">
+                Dinheiro que trocou de conta dentro da própria empresa (faixa 301.xx). Fica gravado no extrato para o
+                saldo da conta fechar, mas está fora do total de entradas — somá-lo contaria o mesmo real duas vezes.
+              </p>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-[#EAE6DF] text-[10px] uppercase text-[#8B7D6B]">
+                  <th className="text-left py-2 font-bold">Conta de contrapartida</th>
+                  <th className="text-right py-2 font-bold">Lançamentos</th>
+                  <th className="text-right py-2 font-bold">Entrou</th>
+                  <th className="text-right py-2 font-bold">Saiu</th>
+                </tr>
+              </thead>
+              <tbody>
+                {transferBreakdown.map((t) => (
+                  <tr key={t.code} className="border-b border-[#F3F1ED] last:border-0">
+                    <td className="py-2 font-bold text-[#2D2A26]">{t.label}</td>
+                    <td className="py-2 text-right font-mono text-[#433E37]">{t.count}</td>
+                    <td className="py-2 text-right font-mono font-bold text-emerald-700">{formatCurrency(t.entrada)}</td>
+                    <td className="py-2 text-right font-mono font-bold text-rose-700">{formatCurrency(t.saida)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <button
+            onClick={() => { setSourceFilter('transferencias'); setCurrentPage(1); }}
+            className="mt-3 px-3 py-1.5 text-[11px] font-bold bg-amber-100 text-amber-800 hover:bg-amber-200 border border-amber-200 rounded-lg transition-all"
+          >
+            Ver os lançamentos
+          </button>
+        </div>
+      )}
 
       {/* Seletor de Fonte */}
       <div className="bg-white border border-[#EAE6DF] rounded-xl p-4 shadow-xs space-y-3">
@@ -766,6 +916,51 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
                   conciliação, mas <span className="font-bold">não entram como Entradas</span> no Resultado Financeiro —
                   contá-los infla o caixa com dinheiro que a empresa apenas trocou de bolso.
                 </p>
+                {previewTransferByAccount.length > 0 && (
+                  <ul className="mt-2 space-y-0.5 font-mono">
+                    {previewTransferByAccount.map((t) => (
+                      <li key={t.code}>
+                        • <span className="font-bold">{t.label}</span>: {t.count} lançamento(s) — entrou{' '}
+                        {formatCurrency(t.entrada)}, saiu {formatCurrency(t.saida)}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* DUPLICIDADE NO PRÓPRIO ARQUIVO.
+              O Tesouraria_Codigo garante que a mesma LINHA não entre duas
+              vezes. O que ele não pega é o repasse digitado duas vezes no ERP:
+              dois códigos diferentes, mesmo dia, mesmo valor, mesma conta. Nada
+              é bloqueado nem apagado automaticamente — pode ser um repasse
+              legítimo repetido —, mas o gestor precisa ver o número antes de
+              gravar, porque depois ele vira saldo. */}
+          {previewDuplicateExtra > 0 && (
+            <div className="flex items-start gap-2.5 bg-rose-50 border border-rose-200 rounded-lg p-3">
+              <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+              <div className="text-[11px] text-rose-900 leading-relaxed w-full">
+                <p className="font-bold">
+                  Possível duplicidade: {previewDuplicateExtra} lançamento(s) repetem dia, valor e conta
+                  ({formatCurrency(previewDuplicateValue)} de excedente).
+                </p>
+                <p className="mt-0.5">
+                  Códigos de movimento diferentes, então o ERP os trata como lançamentos distintos e a chave de
+                  importação não os funde. Confira antes de gravar — se for digitação repetida, corrija no ERP e
+                  reimporte; a importação atualiza as linhas no lugar, sem duplicar.
+                </p>
+                <ul className="mt-2 space-y-0.5 font-mono">
+                  {previewDuplicates.slice(0, 8).map((g, i) => (
+                    <li key={i}>
+                      • {g.date} — {formatCurrency(g.amount)} × {g.refs.length}
+                      {g.code ? ` — conta ${g.code}` : ''} — códs. {g.refs.slice(0, 6).join(', ')}
+                    </li>
+                  ))}
+                  {previewDuplicates.length > 8 && (
+                    <li>• … e mais {previewDuplicates.length - 8} grupo(s).</li>
+                  )}
+                </ul>
               </div>
             </div>
           )}
