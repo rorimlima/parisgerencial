@@ -17,6 +17,8 @@
     "test:auditoria": "node scripts/testFinancialAudit.mjs",
     "test:previsao": "node scripts/testPrevisaoPagamento.mjs",
     "test:fluxo": "node scripts/testFluxoCaixa.mjs",
+    "import:fluxo-historico:dry": "node scripts/importFluxoCaixaHistorico.mjs \"FLUXO DE CAIXA (1).xlsx\" --dry",
+    "import:fluxo-historico": "node scripts/importFluxoCaixaHistorico.mjs \"FLUXO DE CAIXA (1).xlsx\"",
     "test": "node scripts/testRfn019Parser.mjs && node scripts/testFinancialAudit.mjs"
   },
   "dependencies": {

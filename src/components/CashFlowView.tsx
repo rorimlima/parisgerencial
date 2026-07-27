@@ -160,6 +160,37 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
   const [prefilledHint, setPrefilledHint] = useState(false);
   const [pendingPrefill, setPendingPrefill] = useState(true);
 
+  // ── Buffer de digitação dos campos numéricos ─────────────────────────────
+  //
+  // Todo campo de valor aqui é um input controlado cujo `value` vem do número
+  // já convertido em `draft`. Sem este buffer, digitar "1," dispara o
+  // onChange, `parseInput` converte para o número 1 (a vírgula não faz parte
+  // de nenhum número), e o input re-renderiza mostrando "1" — a vírgula
+  // desaparece antes de dar tempo de digitar a casa decimal, e "1.234,56"
+  // nunca sai do chão.
+  //
+  // A correção mantém, por campo, o TEXTO EXATO que a pessoa está digitando
+  // (rawEdits). Enquanto o campo está em edição, o input mostra esse texto,
+  // não o número. O valor numérico em `draft` já é atualizado a cada tecla
+  // (os cálculos da tela continuam ao vivo), mas a caixa de texto não é
+  // reformatada até o campo perder o foco — aí sim o buffer é descartado e o
+  // input volta a mostrar o número final, já formatado.
+  const [rawEdits, setRawEdits] = useState<Record<string, string>>({});
+  const editKey = (...parts: (string | number)[]) => parts.join('__');
+  const displayValue = (key: string, numeric: number): string =>
+    rawEdits[key] !== undefined ? rawEdits[key] : numeric || '';
+  const beginEdit = (key: string, raw: string, apply: (raw: string) => void) => {
+    setRawEdits((r) => ({ ...r, [key]: raw }));
+    apply(raw);
+  };
+  const endEdit = (key: string) => {
+    setRawEdits((r) => {
+      if (!(key in r)) return r;
+      const { [key]: _discard, ...rest } = r;
+      return rest;
+    });
+  };
+
   const canEdit = userRole !== 'analista';
 
   const planForMonth = useMemo(
@@ -219,6 +250,10 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
     setPrefilledHint(false);
     setSavedMsg(null);
     setSaveError(null);
+    // Ao trocar de mês, qualquer texto em digitação pertence ao mês anterior —
+    // sem isso, um campo que estivesse com "1.234," no meio da digitação
+    // continuaria mostrando esse texto por cima dos valores do mês novo.
+    setRawEdits({});
   }, [planForMonth, monthKey, selectedYear]);
 
   // O pré-preenchimento vive num efeito separado porque o extrato costuma
@@ -775,8 +810,9 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
                 <input
                   type="text"
                   disabled={!canEdit}
-                  value={c.saldo || ''}
-                  onChange={(e) => setConta(idx, 'saldo', e.target.value)}
+                  value={displayValue(editKey('conta', idx), c.saldo)}
+                  onChange={(e) => beginEdit(editKey('conta', idx), e.target.value, (raw) => setConta(idx, 'saldo', raw))}
+                  onBlur={() => endEdit(editKey('conta', idx))}
                   placeholder="0,00"
                   className="w-32 bg-emerald-50/60 border border-[#EAE6DF] rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-right text-emerald-800 font-semibold focus:outline-none focus:border-emerald-400 disabled:opacity-60"
                 />
@@ -916,8 +952,13 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
         <input
           type="text"
           disabled={!canEdit}
-          value={draft.saldoInicial || ''}
-          onChange={(e) => setDraft((d) => ({ ...d, saldoInicial: parseInput(e.target.value), useSaldoAutomatico: false }))}
+          value={displayValue(editKey('saldoInicial'), draft.saldoInicial)}
+          onChange={(e) =>
+            beginEdit(editKey('saldoInicial'), e.target.value, (raw) =>
+              setDraft((d) => ({ ...d, saldoInicial: parseInput(raw), useSaldoAutomatico: false }))
+            )
+          }
+          onBlur={() => endEdit(editKey('saldoInicial'))}
           placeholder="0,00"
           className="w-40 bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg px-3 py-2 text-sm font-mono text-right focus:outline-none focus:border-[#C19A6B] disabled:opacity-60"
         />
@@ -992,8 +1033,9 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
                     <td className="p-1 border-l border-[#EAE6DF]">
                       <input
                         type="text" disabled={!canEdit}
-                        value={draft.weeks[w].recebimentos || ''}
-                        onChange={(e) => setWeekValue(w, 'recebimentos', e.target.value)}
+                        value={displayValue(editKey('receb', w), draft.weeks[w].recebimentos)}
+                        onChange={(e) => beginEdit(editKey('receb', w), e.target.value, (raw) => setWeekValue(w, 'recebimentos', raw))}
+                        onBlur={() => endEdit(editKey('receb', w))}
                         placeholder="0"
                         className="w-full bg-emerald-50/40 border border-transparent hover:border-emerald-200 focus:border-emerald-400 rounded px-1.5 py-1 text-right font-mono text-[11px] focus:outline-none disabled:opacity-60"
                       />
@@ -1002,8 +1044,9 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
                     <td className="p-1">
                       <input
                         type="text" disabled={!canEdit}
-                        value={draft.weeks[w].recebRealizado || ''}
-                        onChange={(e) => setWeekValue(w, 'recebRealizado', e.target.value)}
+                        value={displayValue(editKey('recebReal', w), draft.weeks[w].recebRealizado || 0)}
+                        onChange={(e) => beginEdit(editKey('recebReal', w), e.target.value, (raw) => setWeekValue(w, 'recebRealizado', raw))}
+                        onBlur={() => endEdit(editKey('recebReal', w))}
                         placeholder="0"
                         className="w-full bg-emerald-100/50 border border-transparent hover:border-emerald-300 focus:border-emerald-500 rounded px-1.5 py-1 text-right font-mono text-[11px] text-emerald-800 font-semibold focus:outline-none disabled:opacity-60"
                       />
@@ -1023,9 +1066,9 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
                     <td className="p-1 border-l border-[#EAE6DF]">
                       <input
                         type="text" disabled={!canEdit}
-                        value={draft.weeks[w].desembolsos || ''}
-                        onChange={(e) => setWeekValue(w, 'desembolsos', e.target.value)}
-                        onBlur={() => normalizeDesembolso(w, 'desembolsos')}
+                        value={displayValue(editKey('desemb', w), draft.weeks[w].desembolsos)}
+                        onChange={(e) => beginEdit(editKey('desemb', w), e.target.value, (raw) => setWeekValue(w, 'desembolsos', raw))}
+                        onBlur={() => { normalizeDesembolso(w, 'desembolsos'); endEdit(editKey('desemb', w)); }}
                         title="Saída de caixa — o valor é gravado negativo automaticamente"
                         placeholder="0"
                         className="w-full bg-rose-50/40 border border-transparent hover:border-rose-200 focus:border-rose-400 rounded px-1.5 py-1 text-right font-mono text-[11px] focus:outline-none disabled:opacity-60"
@@ -1035,9 +1078,9 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
                     <td className="p-1">
                       <input
                         type="text" disabled={!canEdit}
-                        value={draft.weeks[w].desembRealizado || ''}
-                        onChange={(e) => setWeekValue(w, 'desembRealizado', e.target.value)}
-                        onBlur={() => normalizeDesembolso(w, 'desembRealizado')}
+                        value={displayValue(editKey('desembReal', w), draft.weeks[w].desembRealizado || 0)}
+                        onChange={(e) => beginEdit(editKey('desembReal', w), e.target.value, (raw) => setWeekValue(w, 'desembRealizado', raw))}
+                        onBlur={() => { normalizeDesembolso(w, 'desembRealizado'); endEdit(editKey('desembReal', w)); }}
                         title="Saída de caixa — o valor é gravado negativo automaticamente"
                         placeholder="0"
                         className="w-full bg-rose-100/50 border border-transparent hover:border-rose-300 focus:border-rose-500 rounded px-1.5 py-1 text-right font-mono text-[11px] text-rose-800 font-semibold focus:outline-none disabled:opacity-60"
@@ -1095,8 +1138,9 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
                     <td className="p-1 border-l border-[#EAE6DF]">
                       <input
                         type="text" disabled={!canEdit}
-                        value={draft.weeks[w].aportes || ''}
-                        onChange={(e) => setWeekValue(w, 'aportes', e.target.value)}
+                        value={displayValue(editKey('aporte', w), draft.weeks[w].aportes)}
+                        onChange={(e) => beginEdit(editKey('aporte', w), e.target.value, (raw) => setWeekValue(w, 'aportes', raw))}
+                        onBlur={() => endEdit(editKey('aporte', w))}
                         placeholder="0"
                         className="w-full bg-[#C19A6B]/10 border border-transparent hover:border-[#C19A6B]/40 focus:border-[#C19A6B] rounded px-1.5 py-1 text-right font-mono text-[11px] focus:outline-none disabled:opacity-60"
                       />
@@ -1321,8 +1365,9 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
                   <input
                     type="text"
                     disabled={!canEdit}
-                    value={p.valor || ''}
-                    onChange={(e) => setPendencia(idx, 'valor', e.target.value)}
+                    value={displayValue(editKey('pendencia', idx), p.valor)}
+                    onChange={(e) => beginEdit(editKey('pendencia', idx), e.target.value, (raw) => setPendencia(idx, 'valor', raw))}
+                    onBlur={() => endEdit(editKey('pendencia', idx))}
                     placeholder="0,00"
                     className="w-36 bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg px-3 py-2 text-xs font-mono text-right text-rose-700 font-semibold focus:outline-none focus:border-[#C19A6B] disabled:opacity-60"
                   />
