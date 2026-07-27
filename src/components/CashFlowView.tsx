@@ -178,7 +178,7 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
   const [rawEdits, setRawEdits] = useState<Record<string, string>>({});
   const editKey = (...parts: (string | number)[]) => parts.join('__');
   const displayValue = (key: string, numeric: number): string =>
-    rawEdits[key] !== undefined ? rawEdits[key] : numeric || '';
+    rawEdits[key] !== undefined ? rawEdits[key] : numeric ? String(numeric) : '';
   const beginEdit = (key: string, raw: string, apply: (raw: string) => void) => {
     setRawEdits((r) => ({ ...r, [key]: raw }));
     apply(raw);
@@ -611,7 +611,7 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
 
   const handleExportMensalPdf = (mKey: string) => {
     const targetPlan = plans.find((p) => p.monthKey === mKey && p.year === selectedYear) || (mKey === monthKey ? draft : undefined);
-    exportCashFlowPdfMensal(targetPlan, statementEntries, selectedYear, mKey);
+    exportCashFlowPdfMensal(targetPlan, statementEntries, selectedYear, mKey, payableForecasts);
   };
 
   const receiptTypes = Object.keys(realized.recebByType).sort();

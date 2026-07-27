@@ -6,6 +6,8 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
+import { PayableForecastTitle } from '../types';
+import { addDaysIso, forecastInRange, formatIsoBr, isOpenForecast, sumForecast, todayIso } from './payableForecast';
 
 export function formatCurrency(value: number | undefined | null): string {
   if (value === undefined || value === null || isNaN(value)) {
@@ -48,7 +50,7 @@ export function parseNumberPtBr(valueStr: string | number): number {
 export interface PdfExportOptions {
   title: string;
   subtitle?: string;
-  summaryCards?: { label: string; value: string; color?: string }[];
+  summaryCards?: { label: string; value: string; color?: 'rose' | 'emerald' | 'amber' }[];
   headers: string[];
   rows: (string | number)[][];
   filename?: string;
@@ -73,7 +75,7 @@ export interface CorporatePdfOptions {
   title: string;
   subtitle?: string;
   periodLabel?: string;
-  summaryCards?: { label: string; value: string; color?: string }[];
+  summaryCards?: { label: string; value: string; color?: 'rose' | 'emerald' | 'amber' }[];
   sections: CorporatePdfSection[];
   orientation?: 'landscape' | 'portrait';
   filename?: string;
@@ -139,6 +141,18 @@ export function exportCorporatePdf(options: CorporatePdfOptions) {
   currentY += 6;
 
   // Summary Cards Box
+  //
+  // `card.color` era um campo declarado no tipo mas nunca lido aqui — todo
+  // card saía com a mesma faixa dourada neutra, inclusive um alerta como
+  // "Necessidade de Aporte" negativa, que no app aparece em vermelho. Um
+  // documento técnico não pode nivelar por baixo um risco financeiro real ao
+  // mesmo destaque visual de um KPI informativo qualquer.
+  const CARD_PALETTE: Record<string, { stripe: [number, number, number]; value: [number, number, number] }> = {
+    rose: { stripe: [225, 29, 72], value: [190, 18, 60] },      // alerta negativo (ex.: necessidade de aporte)
+    emerald: { stripe: [16, 185, 129], value: [4, 120, 87] },   // positivo / dentro do esperado
+    amber: { stripe: [217, 119, 6], value: [180, 83, 9] },      // atenção / limítrofe
+  };
+
   if (options.summaryCards && options.summaryCards.length > 0) {
     const cardCount = options.summaryCards.length;
     const gap = 4;
@@ -148,12 +162,14 @@ export function exportCorporatePdf(options: CorporatePdfOptions) {
 
     options.summaryCards.forEach((card, idx) => {
       const xPos = 14 + idx * (cardWidth + gap);
+      const palette = card.color ? CARD_PALETTE[card.color] : undefined;
+
       doc.setFillColor(248, 250, 252);
       doc.setDrawColor(226, 232, 240);
       doc.roundedRect(xPos, currentY, cardWidth, cardHeight, 1.5, 1.5, 'FD');
 
-      // Top decorative line in card
-      doc.setFillColor(...goldAccent);
+      // Faixa decorativa no topo: dourada por padrão, ou a cor do alerta
+      doc.setFillColor(...(palette ? palette.stripe : goldAccent));
       doc.rect(xPos, currentY, cardWidth, 1, 'F');
 
       doc.setFont('helvetica', 'bold');
@@ -163,7 +179,7 @@ export function exportCorporatePdf(options: CorporatePdfOptions) {
 
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(9.5);
-      doc.setTextColor(15, 23, 42);
+      doc.setTextColor(...(palette ? palette.value : ([15, 23, 42] as [number, number, number])));
       doc.text(card.value, xPos + 3, currentY + 11.5);
     });
 
@@ -743,7 +759,8 @@ export function exportCashFlowPdfMensal(
   plan: any,
   statementEntries: any[],
   selectedYear: number,
-  monthKey: string
+  monthKey: string,
+  payableForecasts: PayableForecastTitle[] = []
 ) {
   const monthLabel = MONTH_NAMES_FULL[monthKey] || monthKey.toUpperCase();
 
@@ -910,6 +927,62 @@ export function exportCashFlowPdfMensal(
     sec4Rows.push(['TOTAL', 'TOTAL DE PENDÊNCIAS REGISTRADAS', formatCurrency(totPend), 'Compromissos a Vencer/Programados']);
   }
 
+  // Sec 5: Posição de Caixa Hoje — Necessidade de Aporte
+  //
+  // MESMA fórmula da tela (ver "Posição de Caixa Hoje" em CashFlowView.tsx),
+  // reproduzida aqui porque o PDF é o documento que sai da mão do gestor —
+  // precisa provar o número, não só declará-lo. `Saldo de Caixa Final` (sec1)
+  // é uma PROJEÇÃO encadeada a partir do saldo inicial digitado; esta seção é
+  // o dinheiro CONTADO por conta, confrontado com os compromissos do
+  // horizonte. As duas coisas respondem perguntas diferentes e não podem ser
+  // confundidas num relatório técnico.
+  const contasCaixa: { nome: string; saldo: number }[] = plan?.contasCaixa || [];
+  const temPosicaoCaixa = contasCaixa.length > 0;
+  const dataPosicao = plan?.posicaoData || todayIso();
+  const horizonteDias = plan?.horizonteAporteDias ?? 30;
+  const dataLimiteHorizonte = addDaysIso(dataPosicao, horizonteDias);
+
+  const disponivelHoje = contasCaixa.reduce((acc, c) => acc + (Number(c.saldo) || 0), 0);
+  const titulosAbertos = payableForecasts.filter(isOpenForecast);
+  const titulosNoHorizonte = forecastInRange(titulosAbertos, '1900-01-01', dataLimiteHorizonte);
+  const compromissosTitulos = sumForecast(titulosNoHorizonte);
+  const titulosVencidos = sumForecast(titulosNoHorizonte.filter((t) => t.dueDate < dataPosicao));
+  const titulosAVencer = compromissosTitulos - titulosVencidos;
+  const compromissosTotal = compromissosTitulos + totPend;
+  const saldoAposCompromissos = disponivelHoje - compromissosTotal;
+  const necessidadeAporte = Math.max(0, -saldoAposCompromissos);
+  const coberturaPct = compromissosTotal > 0 ? (disponivelHoje / compromissosTotal) * 100 : 100;
+
+  const sec5Headers = ['Item', 'Valor (R$)', 'Observação Técnica'];
+  const sec5Rows: (string | number)[][] = [];
+  if (temPosicaoCaixa) {
+    contasCaixa.forEach((c) => {
+      sec5Rows.push([c.nome || 'Conta sem nome', formatCurrency(c.saldo || 0), 'Saldo contado, informado pelo gestor']);
+    });
+    sec5Rows.push(['SALDO DISPONÍVEL (contado)', formatCurrency(disponivelHoje), `Posição apurada em ${formatIsoBr(dataPosicao)}`]);
+    sec5Rows.push(['Títulos a vencer (RFN046)', formatCurrency(titulosAVencer), `Vencimento dentro do horizonte, ainda no prazo`]);
+    sec5Rows.push(['Títulos vencidos e não pagos', formatCurrency(titulosVencidos), 'Em aberto, com vencimento já ultrapassado']);
+    sec5Rows.push(['Pendências digitadas', formatCurrency(totPend), 'Compromissos fora do RFN046 (pró-labore, aluguel, acordos)']);
+    sec5Rows.push([
+      'TOTAL A PAGAR (horizonte)',
+      formatCurrency(compromissosTotal),
+      `Até ${formatIsoBr(dataLimiteHorizonte)} (${horizonteDias} dia(s)) — ${titulosNoHorizonte.length} título(s) + ${pendencias.length} pendência(s)`,
+    ]);
+    sec5Rows.push([
+      'SALDO APÓS COMPROMISSOS',
+      formatCurrency(saldoAposCompromissos),
+      saldoAposCompromissos >= 0 ? 'Caixa cobre os compromissos do horizonte' : 'Déficit projetado — ver necessidade de aporte',
+    ]);
+    sec5Rows.push(['Cobertura', `${coberturaPct.toFixed(1)}%`, 'Disponível ÷ Total a pagar no horizonte']);
+    sec5Rows.push([
+      'NECESSIDADE DE APORTE',
+      necessidadeAporte > 0 ? formatCurrency(necessidadeAporte) : 'R$ 0,00 (sem necessidade)',
+      necessidadeAporte > 0
+        ? `${formatCurrency(compromissosTotal)} a pagar − ${formatCurrency(disponivelHoje)} em caixa`
+        : 'Cobertura integral dos compromissos do horizonte',
+    ]);
+  }
+
   exportCorporatePdf({
     title: `DEMONSTRATIVO DE FLUXO DE CAIXA SEMANAL — ${monthLabel.toUpperCase()} DE ${selectedYear}`,
     subtitle: `Matriz Semanal de Previsto x Realizado, Recebimentos por Tipo, Desembolsos e Pendências`,
@@ -921,6 +994,15 @@ export function exportCashFlowPdfMensal(
       { label: 'Geração de Caixa Líquida', value: formatCurrency(gerCaixaReal) },
       { label: 'Saldo Final de Caixa', value: formatCurrency(saldoFinalReal) },
       { label: 'Acurácia Planejada', value: `${acuracia.toFixed(0)}%` },
+      ...(temPosicaoCaixa
+        ? [
+            {
+              label: 'Necessidade de Aporte',
+              value: necessidadeAporte > 0 ? formatCurrency(necessidadeAporte) : 'Sem necessidade',
+              color: (necessidadeAporte > 0 ? 'rose' : 'emerald') as 'rose' | 'emerald',
+            },
+          ]
+        : []),
     ],
     sections: [
       {
@@ -943,6 +1025,15 @@ export function exportCashFlowPdfMensal(
         headers: sec4Headers,
         rows: sec4Rows,
       },
+      ...(temPosicaoCaixa
+        ? [
+            {
+              title: `Posição de Caixa Hoje — Necessidade de Aporte (apurada em ${formatIsoBr(dataPosicao)}, horizonte de ${horizonteDias} dia(s))`,
+              headers: sec5Headers,
+              rows: sec5Rows,
+            },
+          ]
+        : []),
     ],
     filename: `Paris_Dakar_Fluxo_Caixa_${monthLabel}_${selectedYear}.pdf`,
   });

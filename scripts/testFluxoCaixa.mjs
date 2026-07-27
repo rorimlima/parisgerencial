@@ -7,8 +7,37 @@
  * sinal ou esquecer o aporte no encadeamento, este teste acusa antes de o
  * número errado virar decisão.
  *
+ * A seção 7 carrega o MÓDULO TYPESCRIPT DE VERDADE (src/utils/payableForecast.ts)
+ * — as mesmas funções que tanto a tela (CashFlowView) quanto o PDF mensal
+ * (exportCashFlowPdfMensal, seção "Posição de Caixa Hoje") usam para separar
+ * título a vencer de título vencido dentro do horizonte de aporte. Não é uma
+ * reimplementação à parte: se a régua de datas mudar no arquivo de verdade,
+ * este teste quebra.
+ *
  * Uso:  node scripts/testFluxoCaixa.mjs
  */
+
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+import Module from 'node:module';
+import ts from 'typescript';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const root = resolve(__dirname, '..');
+
+// ── Carrega src/utils/payableForecast.ts de verdade, sem duplicar a lógica ──
+const loadTs = (relPath) => {
+  const abs = resolve(root, relPath);
+  const js = ts.transpileModule(readFileSync(abs, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+  }).outputText;
+  const m = new Module(abs);
+  m.filename = abs;
+  m._compile(js, abs);
+  return m.exports;
+};
+const { isOpenForecast, forecastInRange, sumForecast, addDaysIso } = loadTs('src/utils/payableForecast.ts');
 
 const WEEKS = ['sem01', 'sem02', 'sem03', 'sem04', 'sem05'];
 const brl = (n) => `R$ ${n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -94,6 +123,37 @@ check(
   encadearSaldo(saldoInicial + (caixaContado - saldos[2]), semanas)[2],
   caixaContado
 );
+
+console.log('\n7) Seção "Posição de Caixa Hoje" do PDF mensal (payableForecast.ts de verdade)');
+// Mesmos números do card da tela: Bradesco a vencer dentro do horizonte,
+// PagBank já vencido, e um título de dezembro que NÃO deve entrar no
+// horizonte de 30 dias — prova que o corte de data do PDF é o mesmo da tela.
+const hoje = '2026-07-27';
+const titulos = [
+  { id: '1', balance: 1274.96, dueDate: '2026-08-10', paymentDate: '' },  // a vencer, dentro do horizonte
+  { id: '2', balance: 12766.7, dueDate: '2026-07-01', paymentDate: '' }, // vencido, não pago
+  { id: '3', balance: 5000, dueDate: '2026-12-01', paymentDate: '' },    // aberto, mas fora do horizonte de 30 dias
+  { id: '4', balance: 0, dueDate: '2026-08-01', paymentDate: '' },       // saldo zerado — não é compromisso
+  { id: '5', balance: 3000, dueDate: '2026-08-05', paymentDate: '2026-07-20' }, // já pago — fora da previsão
+];
+
+const abertos = titulos.filter(isOpenForecast);
+check('títulos em aberto (saldo>0 e sem data de pagamento)', abertos.length, 3);
+
+const noHorizonte = forecastInRange(abertos, '1900-01-01', addDaysIso(hoje, 30));
+check('títulos dentro do horizonte de 30 dias (inclui vencidos)', noHorizonte.length, 2);
+check('título de dezembro fica de fora do horizonte de 30 dias', noHorizonte.some((t) => t.id === '3'), false);
+
+const compromissosTitulos = sumForecast(noHorizonte);
+const titulosVencidos = sumForecast(noHorizonte.filter((t) => t.dueDate < hoje));
+const titulosAVencer = compromissosTitulos - titulosVencidos;
+check('total de títulos no horizonte', compromissosTitulos, 1274.96 + 12766.7);
+check('parcela vencida e não paga', titulosVencidos, 12766.7);
+check('parcela ainda a vencer', titulosAVencer, 1274.96);
+
+const totalPendenciasDigitadas = 22927.42;
+const compromissosTotal = compromissosTitulos + totalPendenciasDigitadas;
+check('total a pagar (títulos + pendências) fecha com o card da tela', compromissosTotal, 36969.08);
 
 console.log(
   `\n${failures === 0 ? '✓ TODAS AS VERIFICAÇÕES PASSARAM' : `✗ ${failures} VERIFICAÇÃO(ÕES) FALHOU(RAM)`}\n`
