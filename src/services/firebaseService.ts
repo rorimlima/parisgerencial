@@ -1465,26 +1465,45 @@ export const signInWithGoogleAccount = async (): Promise<User> => {
 //      liberado (primeiro acesso).
 //   2. Se a criação falhar com 'auth/email-already-in-use', a conta já existe
 //      — faz o login normal (senha precisa bater com a já cadastrada).
+//
+// ORDEM: AUTENTICA PRIMEIRO, AUTORIZA DEPOIS
+// ------------------------------------------
+// Esta função já perguntou "esse e-mail está autorizado?" ANTES de autenticar.
+// Duas razões para ter invertido:
+//
+//   1. SEGURANÇA DO BANCO. Com as regras do Firestore apertadas
+//      (firestore.rules), a coleção `usuarios` só é legível por quem já está
+//      autenticado. Perguntar antes do login agora devolveria lista vazia e
+//      ninguém entraria.
+//   2. VAZAMENTO DE CADASTRO. Consultar `usuarios` sem sessão permitia a
+//      qualquer pessoa descobrir, e-mail por e-mail, quem tem acesso ao
+//      sistema e com qual papel — e a mensagem de erro diferenciada
+//      ("não tem acesso" x "senha incorreta") transformava o login num
+//      enumerador de contas.
+//
+// A ordem nova é: autentica no Firebase Auth → confere autorização →
+// se não estiver autorizado, DESLOGA na hora. Ter conta no projeto deixa de
+// significar ter acesso ao sistema; é o mesmo desenho já usado no login
+// com Google.
 export const signInAuthorizedUser = async (email: string, password: string): Promise<User> => {
   const normalizedEmail = email.trim().toLowerCase();
-  const authorizedUser = await resolveAuthorizedUser(normalizedEmail);
-
   const auth = getFirebaseAuthInstance();
 
   try {
     await createUserWithEmailAndPassword(auth, normalizedEmail, password);
-    return authorizedUser; // primeiro acesso: conta criada com a senha digitada
   } catch (createErr: any) {
     if (createErr.code !== 'auth/email-already-in-use') {
       if (createErr.code === 'auth/weak-password') {
         throw new Error('Primeiro acesso: use uma senha com pelo menos 6 caracteres.');
+      }
+      if (createErr.code === 'auth/invalid-email') {
+        throw new Error('E-mail invalido.');
       }
       throw new Error(createErr.message || 'Erro ao autenticar. Tente novamente.');
     }
     // Conta já existe — segue com login normal
     try {
       await signInWithEmailAndPassword(auth, normalizedEmail, password);
-      return authorizedUser;
     } catch (signInErr: any) {
       if (signInErr.code === 'auth/wrong-password' || signInErr.code === 'auth/invalid-credential') {
         throw new Error('Senha incorreta.');
@@ -1494,6 +1513,15 @@ export const signInAuthorizedUser = async (email: string, password: string): Pro
       }
       throw new Error(signInErr.message || 'Erro ao autenticar. Tente novamente.');
     }
+  }
+
+  // Autenticado. Só agora a autorização é consultada — e uma sessão sem
+  // permissão nunca fica de pé.
+  try {
+    return await resolveAuthorizedUser(normalizedEmail);
+  } catch (authErr) {
+    await signOut(auth).catch(() => undefined);
+    throw authErr;
   }
 };
 

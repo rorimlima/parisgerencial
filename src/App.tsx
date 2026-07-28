@@ -37,6 +37,7 @@ const FinancialStatementView = lazy(() => import('./components/FinancialStatemen
 // `movType`. Um só chunk carregado para os dois módulos.
 const TitulosWorkspace = lazy(() => import('./components/TitulosWorkspace').then((m) => ({ default: m.TitulosWorkspace })));
 const CashFlowView = lazy(() => import('./components/CashFlowView').then((m) => ({ default: m.CashFlowView })));
+const DailyMovementView = lazy(() => import('./components/DailyMovementView').then((m) => ({ default: m.DailyMovementView })));
 const BillingView = lazy(() => import('./components/BillingView').then((m) => ({ default: m.BillingView })));
 const StockView = lazy(() => import('./components/StockView').then((m) => ({ default: m.StockView })));
 const SalesView = lazy(() => import('./components/SalesView').then((m) => ({ default: m.SalesView })));
@@ -1673,6 +1674,27 @@ export default function App() {
               onRevertBaixa={(id) => handleRevertBaixaTitulo(activeTab === 'receivables' ? 'R' : 'P', id)}
               onDelete={(id) => handleDeleteTitulo(activeTab === 'receivables' ? 'R' : 'P', id)}
               onClear={() => handleClearTitulos(activeTab === 'receivables' ? 'R' : 'P')}
+              userRole={currentUser.role}
+            />
+          )}
+
+          {activeTab === 'daily' && (
+            /*
+             * Movimento Diário lê os MESMOS states já carregados por
+             * `loadYearData` — não abre consulta própria no Firestore. A tela é
+             * derivada por inteiro de `receivables` + `payables`, então baixar
+             * um título em Contas a Pagar já reflete aqui na próxima carga, sem
+             * segunda fonte de verdade para sair de sincronia.
+             *
+             * Ressalva conhecida: os títulos vêm filtrados por ANO DE
+             * VENCIMENTO (campo `ano`). Um título vencido em 30/12/2025 e pago
+             * em 03/01/2026 mora na base de 2025 — para vê-lo, troque o
+             * exercício no topo. É a mesma régua das demais telas do sistema.
+             */
+            <DailyMovementView
+              receivables={receivables}
+              payables={payables}
+              selectedYear={selectedYear}
               userRole={currentUser.role}
             />
           )}

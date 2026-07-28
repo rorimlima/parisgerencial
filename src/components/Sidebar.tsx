@@ -34,6 +34,7 @@ import {
   ShoppingCart,
   TrendingUp,
   Users,
+  Wallet,
 } from 'lucide-react';
 import { ViewTab } from '../types';
 
@@ -72,6 +73,10 @@ const MENU_GROUPS: MenuGroup[] = [
       { id: 'economic', label: 'Resultado Econômico', icon: BarChart3, description: 'DRE: receita, CMV, margem e ponto de equilíbrio' },
       { id: 'financial', label: 'Resultado Financeiro', icon: DollarSign, description: 'Entradas, saídas, estoque e inadimplência' },
       { id: 'cashflow', label: 'Fluxo de Caixa', icon: TrendingUp, description: 'Planejamento semanal previsto x realizado' },
+      // MOVIMENTO DIÁRIO fica no Gerencial, logo abaixo do Fluxo de Caixa, por
+      // ser a versão realizada e diária da mesma pergunta: o Fluxo planeja por
+      // semana, este mostra o que de fato entrou e saiu em cada dia.
+      { id: 'daily', label: 'Movimento Diário', icon: Wallet, description: 'Caixa realizado dia a dia: recebimentos e pagamentos BAIXADOS, com data início/fim' },
     ],
   },
   {

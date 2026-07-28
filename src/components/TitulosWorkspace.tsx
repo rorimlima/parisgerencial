@@ -26,7 +26,7 @@
  *   IMPORTAR     prévia auditável do RFN046 antes de qualquer gravação
  */
 
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import {
   AlertTriangle,
@@ -75,7 +75,20 @@ import {
 } from '../utils/rfn046Parser';
 import { reconcile } from '../utils/reconciliation';
 import { buildCustomerIndex, normalizePersonCode } from '../utils/linking';
-import { formatIsoBr, todayIso } from '../utils/payableForecast';
+import {
+  DATE_BASIS_LABEL,
+  PeriodFilterState,
+  defaultPeriodFilter,
+  filterByPeriod,
+  diffDaysIso,
+  formatIsoBr,
+  resolvePeriod,
+  round2,
+  sumBy,
+  todayIso,
+  yearsFromItems,
+} from '../utils/periodFilter';
+import { PeriodFilterBar } from './PeriodFilterBar';
 
 // ─── Vocabulário por lado do movimento ───────────────────────────────────────
 
@@ -271,13 +284,33 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
 
   const customerIndex = useMemo(() => buildCustomerIndex(customers), [customers]);
 
-  // ── Recorte do ano ────────────────────────────────────────────────────────
-  // O ano do TÍTULO é o do vencimento (competência). Um título vencido em
-  // dezembro e pago em janeiro pertence a dezembro aqui — é assim que o
-  // relatório fecha com o ERP.
-  const doAno = useMemo(() => titulos.filter((x) => x.year === selectedYear), [titulos, selectedYear]);
+  // ── Recorte de período ────────────────────────────────────────────────────
+  // Começa no exercício selecionado no topo do sistema, por VENCIMENTO — que é
+  // a competência do compromisso e a régua com que o relatório fecha com o ERP.
+  // A partir daí o gestor muda o intervalo e a data-base na própria barra.
+  const [period, setPeriod] = useState<PeriodFilterState>(() => defaultPeriodFilter(selectedYear));
+
+  // Trocar o exercício no topo do sistema arrasta o filtro junto, senão a tela
+  // ficaria mostrando 2025 com "2026" escrito no cabeçalho.
+  useEffect(() => {
+    setPeriod((p) => (p.year === selectedYear ? p : { ...p, year: selectedYear }));
+  }, [selectedYear]);
+
+  const resolved = useMemo(() => resolvePeriod(period), [period]);
+
+  const anosDisponiveis = useMemo(
+    () => yearsFromItems(titulos, (t) => [t.dueDate, t.paymentDate, t.issueDate].filter(Boolean)),
+    [titulos]
+  );
+
+  /** A base da tela: os títulos dentro do período, na data-base escolhida. */
+  const doAno = useMemo(() => filterByPeriod(titulos, resolved), [titulos, resolved]);
 
   // ── Números do topo ───────────────────────────────────────────────────────
+  // Todas as somas passam por `sumBy`, que acumula em CENTAVOS INTEIROS. Somar
+  // 400 floats e arredondar no fim deixa resíduo (426610.79000000004); somando
+  // inteiros, o total bate com o do ERP no centavo, que é o que permite conferir
+  // sem "diferença de arredondamento" inexplicável no rodapé.
   const totals = useMemo(() => {
     const pagos = doAno.filter((x) => x.isPaid);
     const abertos = doAno.filter((x) => !x.isPaid);
@@ -285,22 +318,20 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
     const conciliados = doAno.filter((x) => x.status === 'Baixado Automático' || x.status === 'Baixado Manual');
     const semVinculo = doAno.filter((x) => !customerIndex.get(normalizePersonCode(x.personCode)));
 
-    const sum = (arr: TituloFinanceiro[], f: (x: TituloFinanceiro) => number) => arr.reduce((a, x) => a + f(x), 0);
-
     return {
       totalCount: doAno.length,
-      totalAmount: sum(doAno, (x) => x.amount),
+      totalAmount: sumBy(doAno, (x) => x.amount),
       pagosCount: pagos.length,
-      pagosAmount: sum(pagos, (x) => x.amount),
+      pagosAmount: sumBy(pagos, (x) => x.amount),
       abertosCount: abertos.length,
-      abertosAmount: sum(abertos, (x) => x.balance),
+      abertosAmount: sumBy(abertos, (x) => x.balance),
       vencidosCount: vencidos.length,
-      vencidosAmount: sum(vencidos, (x) => x.balance),
+      vencidosAmount: sumBy(vencidos, (x) => x.balance),
       conciliadosCount: conciliados.length,
-      conciliadosAmount: sum(conciliados, (x) => x.amount),
-      conciliadoPercent: pagos.length > 0 ? (conciliados.length / pagos.length) * 100 : 0,
+      conciliadosAmount: sumBy(conciliados, (x) => x.amount),
+      conciliadoPercent: pagos.length > 0 ? round2((conciliados.length / pagos.length) * 100) : 0,
       semVinculoCount: semVinculo.length,
-      semVinculoAmount: sum(semVinculo, (x) => x.amount),
+      semVinculoAmount: sumBy(semVinculo, (x) => x.amount),
     };
   }, [doAno, hoje, customerIndex]);
 
@@ -310,23 +341,27 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
   );
 
   // ── Curva mensal: previsto (vencimento) x realizado (pagamento) ───────────
+  // Roda sobre a base COMPLETA do ano do filtro, não sobre o recorte: a curva é
+  // o retrato do ano inteiro e serve de contexto para o recorte. Se ela também
+  // fosse filtrada, escolher "últimos 30 dias" deixaria onze meses em branco e
+  // o gráfico perderia a função de mostrar onde o recorte se encaixa.
   const curvaMensal = useMemo(() => {
-    const linhas = MONTH_ORDER.map((mk) => ({ mk, label: MONTH_LABEL[mk], previsto: 0, realizado: 0 }));
-    const idx = new Map(linhas.map((l) => [l.mk, l]));
+    const cents = MONTH_ORDER.map((mk) => ({ mk, label: MONTH_LABEL[mk], previsto: 0, realizado: 0 }));
+    const idx = new Map(cents.map((l) => [l.mk, l]));
     for (const x of titulos) {
       if (x.isPaid) {
         // Realizado mora no mês do PAGAMENTO — é quando o dinheiro se moveu.
-        if (x.paidYear === selectedYear) {
+        if (x.paidYear === period.year) {
           const l = idx.get(x.paidMonthKey);
-          if (l) l.realizado += x.amount;
+          if (l) l.realizado += Math.round(x.amount * 100);
         }
-      } else if (x.year === selectedYear) {
+      } else if (x.year === period.year) {
         const l = idx.get(x.monthKey);
-        if (l) l.previsto += x.balance;
+        if (l) l.previsto += Math.round(x.balance * 100);
       }
     }
-    return linhas;
-  }, [titulos, selectedYear]);
+    return cents.map((l) => ({ ...l, previsto: l.previsto / 100, realizado: l.realizado / 100 }));
+  }, [titulos, period.year]);
 
   const maxCurva = Math.max(1, ...curvaMensal.map((l) => Math.max(l.previsto, l.realizado)));
 
@@ -343,12 +378,15 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
         count: 0,
         linked: !!customerIndex.get(normalizePersonCode(x.personCode)),
       };
-      cur.total += x.amount;
-      if (!x.isPaid) cur.aberto += x.balance;
+      // Acumula em centavos inteiros; a conversão para reais é feita no fim.
+      cur.total += Math.round(x.amount * 100);
+      if (!x.isPaid) cur.aberto += Math.round(x.balance * 100);
       cur.count += 1;
       map.set(key, cur);
     }
-    return Array.from(map.values()).sort((a, b) => b.total - a.total);
+    return Array.from(map.values())
+      .map((v) => ({ ...v, total: v.total / 100, aberto: v.aberto / 100 }))
+      .sort((a, b) => b.total - a.total);
   }, [doAno, customerIndex]);
 
   // ── Aging (só faz sentido no que está vencido e em aberto) ────────────────
@@ -360,17 +398,20 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
       { label: '61 a 90 dias', min: 61, max: 90, total: 0, count: 0, tone: 'bg-rose-500' },
       { label: 'Acima de 90 dias', min: 91, max: Infinity, total: 0, count: 0, tone: 'bg-rose-800' },
     ];
-    const hojeMs = new Date(`${hoje}T00:00:00`).getTime();
     for (const x of doAno) {
       if (x.isPaid || !x.dueDate) continue;
-      const dias = Math.floor((hojeMs - new Date(`${x.dueDate}T00:00:00`).getTime()) / 86400000);
+      // `diffDaysIso` conta em UTC. Subtrair dois `new Date(...T00:00:00)` em
+      // horário local erra por uma hora nas viradas de horário de verão, e o
+      // `Math.floor` transforma essa hora em um dia inteiro — títulos pulando de
+      // faixa de aging sozinhos, uma vez por ano, sem explicação.
+      const dias = diffDaysIso(x.dueDate, hoje);
       const f = faixas.find((z) => dias >= z.min && dias <= z.max);
       if (f) {
-        f.total += x.balance;
+        f.total += Math.round(x.balance * 100);
         f.count += 1;
       }
     }
-    return faixas;
+    return faixas.map((f) => ({ ...f, total: f.total / 100 }));
   }, [doAno, hoje]);
 
   const agingMax = Math.max(1, ...aging.map((f) => f.total));
@@ -414,7 +455,7 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
   const totalPages = Math.max(1, Math.ceil(filtrados.length / PAGE_SIZE));
   const pageSafe = Math.min(page, totalPages);
   const pageItems = filtrados.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
-  const filtradosTotal = filtrados.reduce((a, x) => a + (x.isPaid ? x.amount : x.balance), 0);
+  const filtradosTotal = sumBy(filtrados, (x) => (x.isPaid ? x.amount : x.balance));
 
   const toggleSort = (key: typeof sortKey) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -589,7 +630,12 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
       'Agente cobrador': x.collectionAgent,
       'Observação': x.observation,
     }));
-    exportReportToExcel(linhas, t.title, `${movType === 'R' ? 'contas_a_receber' : 'contas_a_pagar'}_${selectedYear}`);
+    const sufixo = `${resolved.start || 'inicio'}_a_${resolved.end || 'fim'}`.replace(/-/g, '');
+    exportReportToExcel(
+      linhas,
+      t.title,
+      `${movType === 'R' ? 'contas_a_receber' : 'contas_a_pagar'}_${sufixo}_por_${resolved.basis}`
+    );
   };
 
   const limparBase = async () => {
@@ -652,8 +698,9 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
               <h2 className="text-xl font-bold text-[#2D2A26] leading-tight">{t.title}</h2>
               <p className="text-xs text-[#8B7D6B] mt-0.5">{t.subtitle}</p>
               <p className="text-[11px] text-[#8B7D6B] mt-1.5">
-                Exercício <b className="text-[#2D2A26]">{selectedYear}</b> · {totals.totalCount} título(s) ·
-                {' '}Base total: {titulos.length}
+                <b className="text-[#2D2A26]">{resolved.label}</b> por {DATE_BASIS_LABEL[resolved.basis].toLowerCase()} ·{' '}
+                {totals.totalCount.toLocaleString('pt-BR')} título(s) no recorte · base total{' '}
+                {titulos.length.toLocaleString('pt-BR')}
               </p>
             </div>
           </div>
@@ -697,6 +744,16 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
         </div>
       </Card>
 
+      {/* ── Filtro de período ────────────────────────────────────────────── */}
+      <PeriodFilterBar
+        value={period}
+        onChange={setPeriod}
+        resolved={resolved}
+        availableYears={anosDisponiveis}
+        matched={doAno.length}
+        total={titulos.length}
+      />
+
       {feedback && (
         <div
           className={`p-4 rounded-xl border flex items-start gap-3 text-sm ${
@@ -716,7 +773,7 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
       {/* ── KPIs ────────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <Kpi
-          label={`Total ${selectedYear}`}
+          label="Total do período"
           value={formatCurrency(totals.totalAmount)}
           hint={`${totals.totalCount} título(s)`}
           tone="destaque"
@@ -770,10 +827,11 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
           <Card className="p-6">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="text-sm font-bold text-[#2D2A26]">Previsto x Realizado — {selectedYear}</h3>
+                <h3 className="text-sm font-bold text-[#2D2A26]">Previsto x Realizado — {period.year}</h3>
                 <p className="text-[11px] text-[#8B7D6B] mt-0.5">
                   Realizado no mês do <b>pagamento</b> (Titulo_Status = Pago). Previsto no mês do <b>vencimento</b>.
                   São réguas diferentes de propósito: o compromisso e o dinheiro não moram no mesmo mês.
+                  A curva mostra o ano de {period.year} inteiro — é o contexto onde o recorte acima se encaixa.
                 </p>
               </div>
               <div className="flex items-center gap-3 text-[10px] font-bold">
@@ -867,7 +925,7 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
                   </div>
                 ))}
                 {porPessoa.length === 0 && (
-                  <p className="text-xs text-[#8B7D6B] text-center py-6">Nenhum título importado para {selectedYear}.</p>
+                  <p className="text-xs text-[#8B7D6B] text-center py-6">Nenhum título no recorte selecionado.</p>
                 )}
               </div>
             </Card>
@@ -950,7 +1008,7 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
 
           <div className="px-4 py-2 bg-white border-b border-[#EAE6DF] flex items-center justify-between text-[11px] text-[#8B7D6B]">
             <span>
-              {filtrados.length} de {doAno.length} título(s)
+              {filtrados.length.toLocaleString('pt-BR')} de {doAno.length.toLocaleString('pt-BR')} título(s) no recorte
             </span>
             <span>
               Soma exibida: <b className="text-[#2D2A26] tabular-nums">{formatCurrency(filtradosTotal)}</b>{' '}

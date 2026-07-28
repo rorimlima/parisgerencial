@@ -168,6 +168,88 @@ servidor, ele para antes de tocar em qualquer coisa.
 5. Aba **Conciliação** em cada lado: simular, ajustar a régua, aplicar.
 6. **Fluxo de Caixa**: conferir o realizado do mês.
 
+## Filtro de período
+
+Toda tela de títulos tem uma barra de período com duas escolhas — e a segunda é
+a que costuma faltar nos sistemas:
+
+**Quando:** exercício, mês, trimestre, semestre, últimos 30/90 dias, próximos 30
+dias ou intervalo digitado.
+
+**De quê (data-base):** vencimento, pagamento ou emissão.
+
+Um título emitido em 20/05, vencido em 30/06 e pago em 03/07 aparece em três
+meses diferentes conforme a régua. Relatório que não diz qual usou é relatório
+que ninguém consegue conferir — por isso a barra mostra a base em uso ao lado do
+intervalo, e o resumo repete em texto para quem imprime a tela.
+
+Um efeito contraintuitivo, e correto: filtrando por **pagamento**, títulos em
+aberto desaparecem, porque ainda não têm data de pagamento. A barra avisa quando
+isso zera o resultado.
+
+Intervalos são **fechados dos dois lados**: "até 31/07" inclui o dia 31. Semiaberto
+descartaria silenciosamente o último dia do mês, que costuma ser o de maior
+movimento.
+
+## Auditoria da base gravada
+
+```bash
+npm run auditar:titulos              # confere banco × planilha
+npm run auditar:titulos:detalhado    # lista os títulos de cada achado
+```
+
+Só lê — auditoria que corrige o que mede deixa de ser auditoria. Oito perguntas:
+
+1. **Faltou?** título da planilha ausente no banco
+2. **Sobrou?** título no banco fora da planilha
+3. **Bate?** 17 campos conferidos um a um
+4. **Duplicou?** dois documentos para o mesmo `Titulo_Codigo`
+5. **Fecha?** somatórios em centavos inteiros, planilha × banco
+6. **Vinculou?** cobertura do `cod_cliente`
+7. **Conciliou?** baixa sem extrato, extrato inexistente, extrato quitando dois
+   títulos, baixa em título não pago
+8. **Formato antigo?** documentos `mov_*` remanescentes do RFN006
+
+Sai com código 2 se houver erro, para encadear em rotina automática.
+
+**A auditoria se audita:** `npm run test:auditoria-titulos` monta uma base
+sintética com oito defeitos plantados e confere se ela encontra todos. Uma
+auditoria que nunca acusou nada pode estar funcionando — ou pode estar quebrada
+devolvendo "tudo certo" para qualquer entrada.
+
+## Precisão do fluxo de caixa
+
+**Toda soma de dinheiro acumula em centavos inteiros.** Ponto flutuante binário
+não representa 0,79 exatamente: somando as 196 entradas, o total sai
+`426610.79000000004`. Isso não muda o valor exibido, mas quebra qualquer
+comparação automática e reaparece como "diferença de arredondamento" no rodapé.
+As duas planilhas reais demonstram o resíduo — e a soma em centavos elimina.
+
+**O saldo encadeado arredonda a cada semana**, não só no fim. O resíduo da S1
+entra na S2 e é carregado até dezembro; fechar em centavos a cada elo impede a
+projeção de derivar sozinha.
+
+**Régua de semana única.** `weekOfMonthIso` em `periodFilter.ts` serve o fluxo de
+caixa e a previsão de títulos. Enquanto cada tela tinha sua cópia, bastava
+alguém "melhorar" uma para o mesmo título cair na S3 de um lado e na S4 do
+outro. Os cabeçalhos agora mostram o intervalo de dias de cada semana — a S5
+cobre 1 a 3 dias e sempre pareceu "fraca" sem essa informação.
+
+**Aritmética de datas em UTC.** Subtrair dois `new Date(...T00:00:00)` locais
+erra por uma hora na virada do horário de verão, e o `Math.floor` transforma
+essa hora em um dia — títulos pulando de faixa de aging sozinhos, uma vez por
+ano.
+
+**Painel "de onde vem cada real".** Abre a composição do realizado: quanto veio
+do extrato, quanto veio de título pago sem par no extrato, quanto é previsão, e
+a divergência contra o digitado. Quanto mais títulos conciliados, menor a linha
+"sem par" — e mais o realizado se apoia em documento bancário em vez de registro
+do ERP.
+
+> Divergência zero não significa base completa: significa que o digitado bate
+> com o automático. Se o extrato do mês não foi importado inteiro, os dois estão
+> igualmente incompletos.
+
 ## Arquivos
 
 | Arquivo | Papel |
@@ -181,3 +263,7 @@ servidor, ele para antes de tocar em qualquer coisa.
 | `src/utils/payableForecast.ts` | regras de previsão (agora pelo status) |
 | `src/utils/titulosMapping.ts` | tradução título ⇄ documento, compartilhada por app e script |
 | `scripts/importTitulosRfn046.mjs` | carga direta no Firestore |
+| `src/utils/periodFilter.ts` | período, data-base, semana do mês e soma em centavos |
+| `src/components/PeriodFilterBar.tsx` | barra de seleção de período |
+| `scripts/auditarTitulos.mjs` | auditoria banco × planilha (+ autoteste) |
+| `scripts/testPeriodoPrecisao.mjs` | 54 testes de período e precisão monetária |

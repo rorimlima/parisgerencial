@@ -17,6 +17,7 @@ export type ViewTab =
   | 'receivables'
   | 'payables'
   | 'cashflow'
+  | 'daily'
   | 'billing'
   | 'stock'
   | 'sales'

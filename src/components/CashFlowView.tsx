@@ -47,6 +47,7 @@ import {
   Plus,
   RefreshCcw,
   Save,
+  ShieldCheck,
   Trash2,
   TrendingUp,
   Wallet,
@@ -74,6 +75,13 @@ import {
   sumForecast,
   todayIso,
 } from '../utils/payableForecast';
+import {
+  round2,
+  sumBy,
+  sumMoney,
+  weekOfMonthIso,
+  weekRangeLabel,
+} from '../utils/periodFilter';
 import { PdfExportMenu } from './PdfExportMenu';
 
 interface CashFlowViewProps {
@@ -105,14 +113,14 @@ const WEEK_LABELS: Record<CashFlowWeekKey, string> = {
   sem01: 'Semana 1', sem02: 'Semana 2', sem03: 'Semana 3', sem04: 'Semana 4', sem05: 'Semana 5',
 };
 
-// Mapeia uma data (YYYY-MM-DD) para a semana do mês (0..4 → sem01..sem05).
-// Dias 1–7 → S1, 8–14 → S2, 15–21 → S3, 22–28 → S4, 29–31 → S5.
-const weekOfMonth = (iso: string): CashFlowWeekKey => {
-  const day = parseInt((iso || '').slice(8, 10), 10);
-  if (isNaN(day)) return 'sem01';
-  const idx = Math.min(4, Math.max(0, Math.floor((day - 1) / 7)));
-  return WEEKS[idx];
-};
+/**
+ * A régua de semana do mês vem de `periodFilter.ts`, a mesma que a previsão de
+ * títulos usa. Enquanto cada tela tinha a sua cópia, bastava alguém "melhorar"
+ * uma delas para o mesmo título cair na S3 de um lado e na S4 do outro — e o
+ * previsto do fluxo deixar de bater com o previsto de Contas a Pagar sem que
+ * nenhum número estivesse errado isoladamente.
+ */
+const weekOfMonth = (iso: string): CashFlowWeekKey => weekOfMonthIso(iso) as CashFlowWeekKey;
 
 // Classifica um recebimento por tipo, a partir do documento/descrição do extrato.
 const categorizeReceipt = (e: FinancialStatementEntry): string => {
@@ -142,8 +150,16 @@ const emptyPlan = (year: number, monthKey: string): CashFlowPlan => ({
   pendencias: [],
 });
 
+/**
+ * Soma as cinco semanas em CENTAVOS INTEIROS.
+ *
+ * Cada célula do fluxo já é um total de dezenas de lançamentos. Somar cinco
+ * floats e depois somar as linhas, e depois encadear o saldo semana a semana,
+ * empilha resíduo binário até a diferença aparecer no saldo final — centavos
+ * que não existem em lugar nenhum e que ninguém consegue rastrear.
+ */
 const sumWeeks = (fn: (w: CashFlowWeekKey) => number): number =>
-  WEEKS.reduce((acc, w) => acc + fn(w), 0);
+  sumMoney(WEEKS.map((w) => fn(w)));
 
 export const CashFlowView: React.FC<CashFlowViewProps> = ({
   plans,
@@ -236,16 +252,16 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
       if (e.year !== selectedYear || e.monthKey !== monthKey) continue;
       const wk = weekOfMonth(e.date);
       if (e.entryAmount > 0) {
-        weeks[wk].receb += e.entryAmount;
+        weeks[wk].receb += Math.round(e.entryAmount * 100);
         const cat = categorizeReceipt(e);
         if (!recebByType[cat]) recebByType[cat] = zero();
-        recebByType[cat][wk] += e.entryAmount;
+        recebByType[cat][wk] += Math.round(e.entryAmount * 100);
       }
       if (e.exitAmount > 0) {
-        weeks[wk].desemb += e.exitAmount;
+        weeks[wk].desemb += Math.round(e.exitAmount * 100);
         const src = e.sourceLabel || 'Outros';
         if (!desembBySource[src]) desembBySource[src] = zero();
-        desembBySource[src][wk] += e.exitAmount;
+        desembBySource[src][wk] += Math.round(e.exitAmount * 100);
       }
     }
 
@@ -263,24 +279,43 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
     for (const t of receivables) {
       if (!naoConciliado(t)) continue;
       const wk = weekOfMonth(t.paymentDate || t.dueDate);
-      weeks[wk].receb += t.amount;
+      weeks[wk].receb += Math.round(t.amount * 100);
       titulosReceb += t.amount;
       const cat = 'Títulos a receber (sem extrato)';
       if (!recebByType[cat]) recebByType[cat] = zero();
-      recebByType[cat][wk] += t.amount;
+      recebByType[cat][wk] += Math.round(t.amount * 100);
     }
 
     for (const t of payables) {
       if (!naoConciliado(t)) continue;
       const wk = weekOfMonth(t.paymentDate || t.dueDate);
-      weeks[wk].desemb += t.amount;
+      weeks[wk].desemb += Math.round(t.amount * 100);
       titulosDesemb += t.amount;
       const src = 'Títulos pagos (sem extrato)';
       if (!desembBySource[src]) desembBySource[src] = zero();
-      desembBySource[src][wk] += t.amount;
+      desembBySource[src][wk] += Math.round(t.amount * 100);
     }
 
-    return { weeks, recebByType, desembBySource, titulosReceb, titulosDesemb };
+    // Converte de centavos para reais só no fim — ver comentário em sumWeeks.
+    // Os detalhamentos por tipo e por fonte acumulam na MESMA unidade das
+    // semanas de propósito: se um somasse reais e o outro centavos, a linha
+    // "PIX + BOLETO + CARTÃO" deixaria de fechar com a linha "Recebimentos"
+    // por alguns centavos, e o gestor perderia tempo procurando um erro que é
+    // só de arredondamento.
+    for (const w of WEEKS) {
+      weeks[w].receb = weeks[w].receb / 100;
+      weeks[w].desemb = weeks[w].desemb / 100;
+      for (const m of [recebByType, desembBySource]) {
+        for (const k of Object.keys(m)) m[k][w] = m[k][w] / 100;
+      }
+    }
+    return {
+      weeks,
+      recebByType,
+      desembBySource,
+      titulosReceb: round2(titulosReceb),
+      titulosDesemb: round2(titulosDesemb),
+    };
   }, [statementEntries, receivables, payables, selectedYear, monthKey]);
 
   // ── PREVISÃO: títulos EM ABERTO por semana de vencimento ─────────────────
@@ -294,8 +329,8 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
     () => forecastByWeek(receivables, selectedYear, monthKey),
     [receivables, selectedYear, monthKey]
   );
-  const totalForecast = WEEKS.reduce((a, w) => a + forecastWeeks[w], 0);
-  const totalForecastIn = WEEKS.reduce((a, w) => a + forecastWeeksIn[w], 0);
+  const totalForecast = sumMoney(WEEKS.map((w) => forecastWeeks[w]));
+  const totalForecastIn = sumMoney(WEEKS.map((w) => forecastWeeksIn[w]));
 
   // Sincroniza o rascunho editável com o plano salvo quando muda o mês/ano.
   //
@@ -384,10 +419,13 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
     let accPrev = draft.saldoInicial || 0;
     let accAuto = draft.saldoInicial || 0;
     let accReal = draft.saldoInicial || 0;
+    // Arredonda a CADA semana, não só no fim. O saldo é encadeado — o resíduo
+    // da semana 1 entra na semana 2 e é carregado até dezembro. Fechar em
+    // centavos a cada elo é o que impede a projeção de derivar sozinha.
     for (const w of WEEKS) {
-      accPrev += prevGer(w) + aporte(w);
-      accAuto += autoGer(w) + aporte(w);
-      accReal += realGer(w) + aporte(w);
+      accPrev = round2(accPrev + prevGer(w) + aporte(w));
+      accAuto = round2(accAuto + autoGer(w) + aporte(w));
+      accReal = round2(accReal + realGer(w) + aporte(w));
       prevSaldo[w] = accPrev;
       autoSaldo[w] = accAuto;
       realSaldo[w] = accReal;
@@ -418,17 +456,17 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
       (w) => (prevPlan.weeks[w]?.recebRealizado || 0) !== 0 || (prevPlan.weeks[w]?.desembRealizado || 0) !== 0
     );
 
-    let acc = prevPlan.saldoInicial || 0;
+    let acc = Math.round((prevPlan.saldoInicial || 0) * 100);
     if (hasTyped) {
-      acc += typed;
+      acc += Math.round(typed * 100);
     } else {
       for (const e of statementEntries) {
         if (e.year !== selectedYear || e.monthKey !== prevKey) continue;
-        acc += (e.entryAmount || 0) - (e.exitAmount || 0);
+        acc += Math.round((e.entryAmount || 0) * 100) - Math.round((e.exitAmount || 0) * 100);
       }
     }
-    acc += WEEKS.reduce((a, w) => a + (prevPlan.weeks[w]?.aportes || 0), 0);
-    return acc;
+    for (const w of WEEKS) acc += Math.round((prevPlan.weeks[w]?.aportes || 0) * 100);
+    return acc / 100;
   }, [plans, statementEntries, monthKey, selectedYear]);
 
   // ── Edição de células ────────────────────────────────────────────────────
@@ -500,7 +538,7 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
 
   // ── Pendências (obrigações em aberto) ────────────────────────────────────
   const pendencias = draft.pendencias || [];
-  const totalPendencias = pendencias.reduce((a, p) => a + (Number(p.valor) || 0), 0);
+  const totalPendencias = sumBy(pendencias, (p) => Number(p.valor) || 0);
   const setPendencia = (idx: number, field: keyof CashFlowPendencia, raw: string) => {
     setDraft((d) => {
       const list = [...(d.pendencias || [])];
@@ -552,7 +590,7 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
       contasCaixa: (d.contasCaixa && d.contasCaixa.length > 0 ? d.contasCaixa : contas).filter((_, i) => i !== idx),
     }));
 
-  const disponivelHoje = contas.reduce((a, c) => a + (Number(c.saldo) || 0), 0);
+  const disponivelHoje = sumBy(contas, (c) => Number(c.saldo) || 0);
 
   // Compromissos do horizonte: tudo o que está em aberto vencendo de hoje até
   // hoje + N dias, MAIS o que já venceu e não foi pago (atraso não deixa de ser
@@ -564,9 +602,9 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
   );
   const compromissosTitulos = sumForecast(titulosNoHorizonte);
   const titulosVencidos = sumForecast(titulosNoHorizonte.filter((t) => t.dueDate < hojeIso));
-  const compromissosTotal = compromissosTitulos + totalPendencias;
+  const compromissosTotal = round2(compromissosTitulos + totalPendencias);
 
-  const saldoProjetado = disponivelHoje - compromissosTotal;
+  const saldoProjetado = round2(disponivelHoje - compromissosTotal);
   const necessidadeAporte = saldoProjetado < 0 ? Math.abs(saldoProjetado) : 0;
   const cobertura = compromissosTotal > 0 ? (disponivelHoje / compromissosTotal) * 100 : 100;
 
@@ -1074,7 +1112,14 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
               <tr className="bg-[#2D2A26] text-[#EAE6DF]">
                 <th className="p-2.5 text-left sticky left-0 bg-[#2D2A26] z-10 min-w-[150px]">Linha</th>
                 {WEEKS.map((w) => (
-                  <th key={w} colSpan={3} className="p-2 text-center border-l border-[#3F3B35]">{WEEK_LABELS[w]}</th>
+                  <th key={w} colSpan={3} className="p-2 text-center border-l border-[#3F3B35]">
+                    {WEEK_LABELS[w]}
+                    {/* O intervalo de dias sai do rótulo do palpite: a S5 cobre
+                        1 a 3 dias e sempre parece "fraca" sem essa informação. */}
+                    <span className="block text-[9px] font-normal opacity-60 tabular-nums">
+                      {weekRangeLabel(selectedYear, MONTHS.findIndex((m) => m.key === monthKey) + 1, w)}
+                    </span>
+                  </th>
                 ))}
                 <th colSpan={3} className="p-2 text-center border-l border-[#C19A6B] bg-[#3F3B35]">TOTAL</th>
               </tr>
@@ -1479,6 +1524,127 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
             empréstimos). Não alteram o saldo realizado — mas <b>entram integralmente no cálculo da necessidade de
             aporte</b> lá em cima, junto com os títulos a vencer. É aqui que se digita o que o sistema não tem como
             adivinhar.
+          </p>
+        </div>
+      </div>
+
+      {/* ── Conferência de precisão do realizado ────────────────────────── */}
+      <div className="bg-white border border-[#EAE6DF] rounded-xl shadow-xs overflow-hidden">
+        <div className="px-6 py-4 border-b border-[#EAE6DF] bg-[#F9F7F2] flex items-start gap-3">
+          <ShieldCheck className="w-5 h-5 text-[#C19A6B] mt-0.5 shrink-0" />
+          <div>
+            <h3 className="text-sm font-bold text-[#2D2A26]">Conferência do realizado — de onde vem cada real</h3>
+            <p className="text-[11px] text-[#8B7D6B] mt-0.5 max-w-4xl">
+              O realizado automático tem duas fontes, e elas não podem ser somadas cegamente: o extrato é o que o
+              banco viu, o título pago é o que o ERP registrou. Somar as duas conta o mesmo dinheiro duas vezes;
+              usar só uma perde o que andou fora dela. A regra aqui é o extrato mandar e o título entrar apenas
+              quando <b>não</b> achou par na conciliação.
+            </p>
+          </div>
+        </div>
+
+        <div className="p-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Composição das entradas */}
+          <div>
+            <p className="text-[10px] uppercase tracking-wider font-bold text-[#8B7D6B] mb-2">Entradas do mês</p>
+            <div className="space-y-2 text-xs">
+              <div className="flex justify-between items-center py-1.5 border-b border-[#EAE6DF]">
+                <span className="text-[#433E37]">Extrato (Bradesco, PagBank, Caixa/Tesouraria)</span>
+                <span className="font-bold tabular-nums text-[#2D2A26]">
+                  {formatCurrency(round2(totalAutoReceb - realized.titulosReceb - (includeForecast ? totalForecastIn : 0)))}
+                </span>
+              </div>
+              <div className="flex justify-between items-center py-1.5 border-b border-[#EAE6DF]">
+                <span className="text-[#433E37]">
+                  Títulos recebidos sem par no extrato
+                  <span className="block text-[10px] text-[#8B7D6B]">
+                    Pagos no ERP e não conciliados — dinheiro que só o ERP viu
+                  </span>
+                </span>
+                <span className="font-bold tabular-nums text-emerald-700">{formatCurrency(realized.titulosReceb)}</span>
+              </div>
+              {includeForecast && (
+                <div className="flex justify-between items-center py-1.5 border-b border-[#EAE6DF]">
+                  <span className="text-[#433E37]">Títulos a receber (previsão do mês)</span>
+                  <span className="font-bold tabular-nums text-[#C19A6B]">{formatCurrency(totalForecastIn)}</span>
+                </div>
+              )}
+              <div className="flex justify-between items-center py-2 font-bold">
+                <span className="text-[#2D2A26]">Total automático</span>
+                <span className="tabular-nums text-[#2D2A26]">{formatCurrency(totalAutoReceb)}</span>
+              </div>
+              <div className="flex justify-between items-center py-1.5 bg-[#F9F7F2] px-2 rounded-lg">
+                <span className="text-[#433E37]">Digitado no REAL.</span>
+                <span className="tabular-nums font-bold text-[#2D2A26]">{formatCurrency(totalRealReceb)}</span>
+              </div>
+              <div
+                className={`flex justify-between items-center py-1.5 px-2 rounded-lg ${
+                  Math.abs(divReceb) < 0.01 ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-900'
+                }`}
+              >
+                <span className="font-bold">Divergência</span>
+                <span className="tabular-nums font-bold">{formatCurrency(divReceb)}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Composição das saídas */}
+          <div>
+            <p className="text-[10px] uppercase tracking-wider font-bold text-[#8B7D6B] mb-2">Saídas do mês</p>
+            <div className="space-y-2 text-xs">
+              <div className="flex justify-between items-center py-1.5 border-b border-[#EAE6DF]">
+                <span className="text-[#433E37]">Extrato (Bradesco, PagBank, Caixa/Tesouraria)</span>
+                <span className="font-bold tabular-nums text-[#2D2A26]">
+                  {formatCurrency(round2(Math.abs(totalAutoDesemb) - realized.titulosDesemb - (includeForecast ? totalForecast : 0)))}
+                </span>
+              </div>
+              <div className="flex justify-between items-center py-1.5 border-b border-[#EAE6DF]">
+                <span className="text-[#433E37]">
+                  Títulos pagos sem par no extrato
+                  <span className="block text-[10px] text-[#8B7D6B]">
+                    Pagos no ERP e não conciliados — dinheiro que só o ERP viu
+                  </span>
+                </span>
+                <span className="font-bold tabular-nums text-rose-700">{formatCurrency(realized.titulosDesemb)}</span>
+              </div>
+              {includeForecast && (
+                <div className="flex justify-between items-center py-1.5 border-b border-[#EAE6DF]">
+                  <span className="text-[#433E37]">Títulos a vencer (previsão do mês)</span>
+                  <span className="font-bold tabular-nums text-[#C19A6B]">{formatCurrency(totalForecast)}</span>
+                </div>
+              )}
+              <div className="flex justify-between items-center py-2 font-bold">
+                <span className="text-[#2D2A26]">Total automático</span>
+                <span className="tabular-nums text-[#2D2A26]">{formatCurrency(Math.abs(totalAutoDesemb))}</span>
+              </div>
+              <div className="flex justify-between items-center py-1.5 bg-[#F9F7F2] px-2 rounded-lg">
+                <span className="text-[#433E37]">Digitado no REAL.</span>
+                <span className="tabular-nums font-bold text-[#2D2A26]">{formatCurrency(Math.abs(totalRealDesemb))}</span>
+              </div>
+              <div
+                className={`flex justify-between items-center py-1.5 px-2 rounded-lg ${
+                  Math.abs(divDesemb) < 0.01 ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-900'
+                }`}
+              >
+                <span className="font-bold">Divergência</span>
+                <span className="tabular-nums font-bold">{formatCurrency(divDesemb)}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="px-6 py-3 bg-[#F9F7F2] border-t border-[#EAE6DF] text-[10px] text-[#8B7D6B] space-y-1">
+          <p>
+            <b>Divergência zero não significa base completa.</b> Significa que o digitado bate com o automático. Se o
+            extrato do mês não foi importado inteiro, os dois estarão igualmente incompletos.
+          </p>
+          <p>
+            Quanto mais títulos forem conciliados em Contas a Receber / a Pagar, menor a linha "sem par no extrato" —
+            e mais o realizado passa a se apoiar em documento bancário em vez de registro do ERP.
+          </p>
+          <p>
+            Todos os totais são somados em <b>centavos inteiros</b>. Somar valores decimais e arredondar no fim deixa
+            resíduo que se acumula no saldo encadeado e reaparece como diferença sem origem no fechamento do mês.
           </p>
         </div>
       </div>
