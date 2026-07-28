@@ -65,7 +65,7 @@ import {
   TituloMovType,
   TituloPreviewRow,
 } from '../types';
-import { formatCurrency, exportReportToExcel } from '../utils/exportUtils';
+import { formatCurrency, exportReportToExcel, parseNumberPtBr } from '../utils/exportUtils';
 import {
   detectMovType,
   looksLikeRfn046,
@@ -78,6 +78,7 @@ import { buildCustomerIndex, normalizePersonCode } from '../utils/linking';
 import {
   DATE_BASIS_LABEL,
   PeriodFilterState,
+  addDaysIso,
   defaultPeriodFilter,
   filterByPeriod,
   diffDaysIso,
@@ -271,6 +272,19 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 40;
 
+  // ── Baixa manual: busca no extrato ─────────────────────────────────────────
+  // Janela padrão ±15 dias (30 dias no total) em torno da data do título —
+  // ampla o bastante para achar o lançamento mesmo quando o banco compensa
+  // alguns dias depois do combinado, sem forçar o gestor a abrir o extrato à
+  // parte para conferir na mão.
+  const BAIXA_SEARCH_WINDOW_DEFAULT = 15;
+  const [baixaSearchTarget, setBaixaSearchTarget] = useState<TituloFinanceiro | null>(null);
+  const [baixaSearchDays, setBaixaSearchDays] = useState(BAIXA_SEARCH_WINDOW_DEFAULT);
+  const [baixaSearchAmount, setBaixaSearchAmount] = useState('');
+  const [baixaSearchQuery, setBaixaSearchQuery] = useState('');
+  const [baixaBusy, setBaixaBusy] = useState(false);
+  const [baixaError, setBaixaError] = useState<string | null>(null);
+
   // ── Estado da importação ──────────────────────────────────────────────────
   const [preview, setPreview] = useState<TituloPreviewRow[] | null>(null);
   const [previewFile, setPreviewFile] = useState('');
@@ -283,6 +297,97 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
   const [result, setResult] = useState<ReturnType<typeof reconcile> | null>(null);
 
   const customerIndex = useMemo(() => buildCustomerIndex(customers), [customers]);
+
+  // ── Baixa manual: busca no extrato ─────────────────────────────────────────
+  //
+  // Lançamentos já vinculados a OUTRO título não entram na lista — evita casar
+  // o mesmo crédito bancário com dois títulos diferentes. O lançamento já
+  // vinculado a ESTE título continua aparecendo, para permitir revisar ou
+  // trocar a baixa sem precisar reverter primeiro.
+  const usedStatementIds = useMemo(
+    () => new Set(titulos.filter((x) => x.reconciledStatementId).map((x) => x.reconciledStatementId as string)),
+    [titulos]
+  );
+
+  const openBaixaSearch = useCallback((titulo: TituloFinanceiro) => {
+    setBaixaSearchTarget(titulo);
+    setBaixaSearchDays(BAIXA_SEARCH_WINDOW_DEFAULT);
+    setBaixaSearchAmount(String(titulo.balance > 0 ? titulo.balance : titulo.amount));
+    setBaixaSearchQuery('');
+    setBaixaError(null);
+  }, []);
+
+  const closeBaixaSearch = useCallback(() => {
+    setBaixaSearchTarget(null);
+    setBaixaError(null);
+    setBaixaBusy(false);
+  }, []);
+
+  /**
+   * Data de referência da busca: pagamento quando existe, senão vencimento.
+   * Título ainda "Em Aberto" no ERP normalmente não tem `paymentDate` — buscar
+   * ao redor do VENCIMENTO é a melhor aposta disponível para achar o
+   * lançamento que baixou esse compromisso.
+   */
+  const baixaSearchBaseDate = baixaSearchTarget
+    ? baixaSearchTarget.paymentDate || baixaSearchTarget.dueDate
+    : '';
+
+  const baixaSearchResults = useMemo(() => {
+    if (!baixaSearchTarget || !baixaSearchBaseDate) return [];
+    const alvo = baixaSearchTarget;
+    const janela = Math.max(1, Math.min(90, baixaSearchDays));
+    const valorBuscado = parseNumberPtBr(baixaSearchAmount);
+    const temValorBuscado = Number.isFinite(valorBuscado) && valorBuscado > 0;
+    const termo = baixaSearchQuery.trim().toLowerCase();
+
+    const inicio = addDaysIso(baixaSearchBaseDate, -janela);
+    const fim = addDaysIso(baixaSearchBaseDate, janela);
+
+    const matches = statementEntries
+      .filter((e) => {
+        const valorLado = movType === 'R' ? e.entryAmount : e.exitAmount;
+        if (!(valorLado > 0)) return false;
+        if (usedStatementIds.has(e.id) && e.id !== alvo.reconciledStatementId) return false;
+        if (e.date < inicio || e.date > fim) return false;
+        if (termo) {
+          const alvoTexto = `${e.description || ''} ${e.clientName || ''} ${e.documentRef || ''}`.toLowerCase();
+          if (!alvoTexto.includes(termo)) return false;
+        }
+        return true;
+      })
+      .map((e) => {
+        const valorLado = movType === 'R' ? e.entryAmount : e.exitAmount;
+        const diffDays = Math.abs(diffDaysIso(baixaSearchBaseDate, e.date));
+        const diffAmount = temValorBuscado ? round2(Math.abs(valorLado - valorBuscado)) : 0;
+        const quality: 'exato' | 'aproximado' = !temValorBuscado || diffAmount <= 0.01 ? 'exato' : 'aproximado';
+        return { entry: e, valorLado, diffDays, diffAmount, quality };
+      });
+
+    matches.sort((a, b) => {
+      if (a.quality !== b.quality) return a.quality === 'exato' ? -1 : 1;
+      return a.diffAmount * 2 + a.diffDays - (b.diffAmount * 2 + b.diffDays);
+    });
+
+    return matches;
+  }, [baixaSearchTarget, baixaSearchBaseDate, baixaSearchDays, baixaSearchAmount, baixaSearchQuery, statementEntries, usedStatementIds, movType]);
+
+  const confirmBaixa = useCallback(
+    async (statementId?: string, source?: string) => {
+      if (!baixaSearchTarget || baixaBusy) return;
+      setBaixaBusy(true);
+      setBaixaError(null);
+      try {
+        await onManualBaixa(baixaSearchTarget.id, statementId, source);
+        closeBaixaSearch();
+      } catch (err) {
+        setBaixaError(err instanceof Error ? err.message : 'Falha ao processar a baixa. Tente novamente.');
+      } finally {
+        setBaixaBusy(false);
+      }
+    },
+    [baixaSearchTarget, baixaBusy, onManualBaixa, closeBaixaSearch]
+  );
 
   // ── Recorte de período ────────────────────────────────────────────────────
   // Começa no exercício selecionado no topo do sistema, por VENCIMENTO — que é
@@ -1104,8 +1209,8 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
                           <div className="inline-flex items-center gap-1">
                             {x.status === 'Em Aberto' || x.status === 'Conferir' ? (
                               <button
-                                onClick={() => onManualBaixa(x.id)}
-                                title="Dar baixa manual"
+                                onClick={() => openBaixaSearch(x)}
+                                title="Dar baixa manual — buscar no extrato"
                                 className="p-1.5 rounded-md text-emerald-700 hover:bg-emerald-50 border border-transparent hover:border-emerald-200"
                               >
                                 <CheckCircle2 className="w-3.5 h-3.5" />
@@ -1602,6 +1707,194 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
               </Card>
             </>
           )}
+        </div>
+      )}
+
+      {/* ── Modal: Baixa manual — buscar no extrato ─────────────────────────
+       *
+       * Reabre uma tela que existia antes da fusão de Contas a Pagar/Receber
+       * no RFN046 (ver git f57bd29 / e9f7c80). Regra: a busca prioriza a
+       * DATA — janela ajustável, padrão ±15 dias (30 dias no total) em torno
+       * do pagamento (ou do vencimento, quando o título ainda não tem data de
+       * pagamento) — e o VALOR é aproximado, não um filtro rígido: tarifa,
+       * desconto e arredondamento fazem o lançamento do banco não bater
+       * centavo a centavo com o título, e um filtro exato esconderia
+       * exatamente o par certo. Os resultados vêm marcados como "Valor
+       * exato" ou "Aproximado (diferença de R$X)", nessa ordem.
+       */}
+      {baixaSearchTarget && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-emerald-200 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col">
+            {/* Cabeçalho */}
+            <div className="p-5 border-b border-[#EAE6DF]">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h4 className="text-base font-black text-[#2D2A26] flex items-center gap-2">
+                    <Search className="w-5 h-5 text-emerald-600 shrink-0" />
+                    Buscar no extrato para dar baixa
+                  </h4>
+                  <p className="text-xs text-[#8B7D6B] mt-1 truncate">
+                    <span className="font-bold text-[#2D2A26]">{baixaSearchTarget.personName || '—'}</span>{' '}
+                    · {formatCurrency(baixaSearchTarget.balance > 0 ? baixaSearchTarget.balance : baixaSearchTarget.amount)}
+                    {' '}· {t.statementSide}
+                  </p>
+                  <p className="text-[10px] font-mono text-[#C19A6B] mt-0.5">
+                    {baixaSearchTarget.titleNumber || baixaSearchTarget.titleCode}
+                    {baixaSearchTarget.parcela ? ` · ${baixaSearchTarget.parcela}` : ''}
+                    {' · data de referência: '}
+                    {baixaSearchBaseDate ? formatIsoBr(baixaSearchBaseDate) : 'sem data — informe manualmente'}
+                    {!baixaSearchTarget.paymentDate && baixaSearchTarget.dueDate && ' (vencimento, título sem pagamento no ERP)'}
+                  </p>
+                </div>
+                <button onClick={closeBaixaSearch} className="p-1 rounded-lg hover:bg-[#F3F1ED] shrink-0" disabled={baixaBusy}>
+                  <X className="w-4 h-4 text-[#8B7D6B]" />
+                </button>
+              </div>
+
+              {/* Controles: janela de dias + valor buscado + texto */}
+              <div className="flex flex-wrap items-center gap-2 mt-3">
+                <span className="text-[10px] font-bold text-[#8B7D6B] uppercase">Janela:</span>
+                <select
+                  value={baixaSearchDays}
+                  onChange={(e) => setBaixaSearchDays(Number(e.target.value))}
+                  disabled={baixaBusy}
+                  className="bg-[#F9F7F2] border border-[#EAE6DF] text-xs text-[#2D2A26] rounded-lg px-2 py-1.5 font-bold focus:outline-none focus:border-[#C19A6B] disabled:opacity-50"
+                >
+                  <option value={7}>±7 dias</option>
+                  <option value={15}>±15 dias (30 dias no total)</option>
+                  <option value={30}>±30 dias</option>
+                  <option value={60}>±60 dias</option>
+                </select>
+
+                <span className="text-[10px] font-bold text-[#8B7D6B] uppercase ml-1">Valor buscado:</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={baixaSearchAmount}
+                  onChange={(e) => setBaixaSearchAmount(e.target.value.replace(/[^0-9.,]/g, ''))}
+                  disabled={baixaBusy}
+                  placeholder="0,00"
+                  className="w-28 bg-[#F9F7F2] border border-[#EAE6DF] text-xs text-[#2D2A26] rounded-lg px-2 py-1.5 font-bold tabular-nums focus:outline-none focus:border-[#C19A6B] disabled:opacity-50"
+                />
+
+                <div className="relative flex-1 min-w-[160px]">
+                  <Search className="w-3.5 h-3.5 text-[#8B7D6B] absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={baixaSearchQuery}
+                    maxLength={80}
+                    onChange={(e) => setBaixaSearchQuery(e.target.value)}
+                    disabled={baixaBusy}
+                    placeholder="Filtrar por descrição, cliente/beneficiário…"
+                    className="w-full pl-8 bg-[#F9F7F2] border border-[#EAE6DF] text-xs text-[#2D2A26] rounded-lg px-2 py-1.5 font-medium focus:outline-none focus:border-[#C19A6B] disabled:opacity-50"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Resultados */}
+            <div className="p-5 overflow-y-auto flex-1">
+              {baixaError && (
+                <div className="flex items-start gap-2 bg-rose-50 border border-rose-200 rounded-lg p-2.5 mb-3">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-rose-700 font-semibold">{baixaError}</p>
+                </div>
+              )}
+
+              {!baixaSearchBaseDate ? (
+                <div className="text-center py-8">
+                  <AlertTriangle className="w-10 h-10 text-amber-400 mx-auto mb-2" />
+                  <p className="text-sm font-bold text-[#2D2A26]">Título sem data de vencimento nem de pagamento</p>
+                  <p className="text-xs text-[#8B7D6B] mt-1">Não é possível centralizar a busca. Confirme a baixa sem vínculo abaixo.</p>
+                </div>
+              ) : baixaSearchResults.length === 0 ? (
+                <div className="text-center py-8">
+                  <AlertTriangle className="w-10 h-10 text-amber-400 mx-auto mb-2" />
+                  <p className="text-sm font-bold text-[#2D2A26]">Nenhum lançamento encontrado</p>
+                  <p className="text-xs text-[#8B7D6B] mt-1">
+                    Nenhum {t.statementSide} dentro de ±{baixaSearchDays} dias de {formatIsoBr(baixaSearchBaseDate)}.
+                    Aumente a janela ou limpe o filtro de texto acima.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-xs font-bold text-emerald-700 mb-3">
+                    {baixaSearchResults.length} lançamento(s) — clique para confirmar a baixa:
+                  </p>
+                  {baixaSearchResults.map((match) => {
+                    const entry = match.entry;
+                    const jaVinculadoAqui = entry.id === baixaSearchTarget.reconciledStatementId;
+                    return (
+                      <button
+                        key={entry.id}
+                        type="button"
+                        disabled={baixaBusy}
+                        onClick={() => confirmBaixa(entry.id, entry.source)}
+                        className="w-full text-left border border-[#EAE6DF] rounded-xl p-4 hover:border-emerald-400 hover:bg-emerald-50/40 transition-all disabled:opacity-50 disabled:cursor-wait"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                                {entry.sourceLabel}
+                              </span>
+                              <span
+                                className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                  match.quality === 'exato'
+                                    ? 'bg-emerald-600 text-white'
+                                    : 'bg-amber-100 text-amber-800 border border-amber-200'
+                                }`}
+                              >
+                                {match.quality === 'exato' ? 'Valor exato' : `Aproximado (dif. ${formatCurrency(match.diffAmount)})`}
+                              </span>
+                              {jaVinculadoAqui && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800">
+                                  já vinculado a este título
+                                </span>
+                              )}
+                              <span className="text-[11px] font-mono text-[#8B7D6B]">
+                                {formatIsoBr(entry.date)} · {match.diffDays} dia(s) de diferença
+                              </span>
+                            </div>
+                            <p className="text-xs text-[#433E37] mt-1 truncate">{entry.description || '—'}</p>
+                            {entry.clientName && <p className="text-[10px] text-[#8B7D6B] mt-0.5 truncate">{entry.clientName}</p>}
+                          </div>
+                          <span className="text-sm font-black tabular-nums text-[#2D2A26] shrink-0">
+                            {formatCurrency(match.valorLado)}
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Rodapé: confirmar sem vincular */}
+            <div className="p-4 border-t border-[#EAE6DF] bg-[#F9F7F2] rounded-b-2xl flex items-center justify-between gap-3">
+              <p className="text-[10px] text-[#8B7D6B] max-w-[55%]">
+                Sem o lançamento certo na lista? Dá para confirmar a baixa sem vincular a um lançamento do extrato — fica marcada como
+                &quot;Baixado Manual&quot; sem conciliação.
+              </p>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={closeBaixaSearch}
+                  disabled={baixaBusy}
+                  className="px-3.5 py-2 text-xs font-bold text-[#8B7D6B] hover:text-[#2D2A26] disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={() => confirmBaixa()}
+                  disabled={baixaBusy}
+                  className="px-3.5 py-2 text-xs font-bold bg-[#2D2A26] text-white rounded-lg hover:bg-[#433E37] disabled:opacity-50 flex items-center gap-2"
+                >
+                  {baixaBusy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {baixaBusy ? 'Processando…' : 'Confirmar sem vincular'}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
