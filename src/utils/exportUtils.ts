@@ -760,7 +760,7 @@ export function exportCashFlowPdfMensal(
   statementEntries: any[],
   selectedYear: number,
   monthKey: string,
-  payableForecasts: PayableForecastTitle[] = []
+  _payableForecasts: PayableForecastTitle[] = []
 ) {
   const monthLabel = MONTH_NAMES_FULL[monthKey] || monthKey.toUpperCase();
 
@@ -773,23 +773,14 @@ export function exportCashFlowPdfMensal(
     sem05: { receb: 0, desemb: 0 },
   };
 
-  const recebByType: Record<string, Record<string, number>> = {};
-  const desembBySource: Record<string, Record<string, number>> = {};
-
   statementEntries.forEach((e) => {
     if (e.year === selectedYear && e.monthKey === monthKey) {
       const wk = weekOfMonthHelper(e.date);
       if (e.entryAmount > 0) {
         weeksRealized[wk].receb += e.entryAmount;
-        const cat = categorizeReceiptHelper(e);
-        if (!recebByType[cat]) recebByType[cat] = { sem01: 0, sem02: 0, sem03: 0, sem04: 0, sem05: 0 };
-        recebByType[cat][wk] += e.entryAmount;
       }
       if (e.exitAmount > 0) {
         weeksRealized[wk].desemb += e.exitAmount;
-        const src = e.sourceLabel || 'Outros';
-        if (!desembBySource[src]) desembBySource[src] = { sem01: 0, sem02: 0, sem03: 0, sem04: 0, sem05: 0 };
-        desembBySource[src][wk] += e.exitAmount;
       }
     }
   });
@@ -898,122 +889,26 @@ export function exportCashFlowPdfMensal(
     ],
   ];
 
-  // Sec 2: Recebimentos por Tipo — Exibe apenas tipos com lançamentos efetivos
-  const receiptTypes = Object.keys(recebByType);
-  const sec2Headers = ['Tipo de Recebimento', 'Semana 1', 'Semana 2', 'Semana 3', 'Semana 4', 'Semana 5', 'Total Realizado (R$)'];
-  const sec2Rows = receiptTypes
-    .map((type) => {
-      const r = recebByType[type];
-      const tot = WEEKS_KEYS.reduce((a, w) => a + (r[w] || 0), 0);
-      return { type, r, tot };
-    })
-    .filter((item) => item.tot !== 0)
-    .map((item) => [
-      item.type,
-      formatCurrency(item.r['sem01']),
-      formatCurrency(item.r['sem02']),
-      formatCurrency(item.r['sem03']),
-      formatCurrency(item.r['sem04']),
-      formatCurrency(item.r['sem05']),
-      formatCurrency(item.tot),
-    ]);
-
-  if (sec2Rows.length === 0) {
-    sec2Rows.push(['Sem lançamentos de recebimento no período', '-', '-', '-', '-', '-', 'R$ 0,00']);
-  }
-
-  // Sec 3: Desembolsos por Origem — Exibe apenas origens com lançamentos efetivos
-  const paymentSources = Object.keys(desembBySource);
-  const sec3Headers = ['Origem do Desembolso', 'Semana 1', 'Semana 2', 'Semana 3', 'Semana 4', 'Semana 5', 'Total Realizado (R$)'];
-  const sec3Rows = paymentSources
-    .map((src) => {
-      const r = desembBySource[src];
-      const tot = WEEKS_KEYS.reduce((a, w) => a + (r[w] || 0), 0);
-      return { src, r, tot };
-    })
-    .filter((item) => item.tot !== 0)
-    .map((item) => [
-      item.src,
-      formatCurrency(item.r['sem01']),
-      formatCurrency(item.r['sem02']),
-      formatCurrency(item.r['sem03']),
-      formatCurrency(item.r['sem04']),
-      formatCurrency(item.r['sem05']),
-      formatCurrency(item.tot),
-    ]);
-
-  if (sec3Rows.length === 0) {
-    sec3Rows.push(['Sem lançamentos de desembolso no período', '-', '-', '-', '-', '-', 'R$ 0,00']);
-  }
-
-  // Sec 4: Pendências Digitadas
+  // Sec 2: Pendências Digitadas / Obrigações em Aberto
   const pendencias = (plan?.pendencias || []).filter((p: any) => (p.valor || 0) !== 0 || (p.descricao || '').trim().length > 0);
   const totPend = pendencias.reduce((acc: number, p: any) => acc + (p.valor || 0), 0);
-  const sec4Headers = ['Item', 'Descrição da Obrigação em Aberto', 'Valor Pendente (R$)', 'Status / Observação'];
-  const sec4Rows = pendencias.map((p: any, idx: number) => [
+  const sec2Headers = ['Item', 'Descrição da Obrigação em Aberto', 'Valor Pendente (R$)', 'Status / Observação'];
+  const sec2Rows = pendencias.map((p: any, idx: number) => [
     `#${idx + 1}`,
     p.descricao || 'Sem descrição',
     formatCurrency(p.valor || 0),
     'Pendente de Quitação (Programado)',
   ]);
 
-  if (sec4Rows.length === 0) {
-    sec4Rows.push(['-', 'Nenhuma pendência digitada para este mês', 'R$ 0,00', 'Sem compromissos pendentes registrados']);
+  if (sec2Rows.length === 0) {
+    sec2Rows.push(['-', 'Nenhuma pendência digitada para este mês', 'R$ 0,00', 'Sem compromissos pendentes registrados']);
   } else {
-    sec4Rows.push(['TOTAL', 'TOTAL DE PENDÊNCIAS DIGITADAS', formatCurrency(totPend), 'Compromissos em Aberto']);
-  }
-
-  // Sec 5: Posição de Caixa Hoje — Necessidade de Aporte
-  const contasCaixa: { nome: string; saldo: number }[] = plan?.contasCaixa || [];
-  const temPosicaoCaixa = contasCaixa.length > 0;
-  const dataPosicao = plan?.posicaoData || todayIso();
-  const horizonteDias = plan?.horizonteAporteDias ?? 30;
-  const dataLimiteHorizonte = addDaysIso(dataPosicao, horizonteDias);
-
-  const disponivelHoje = contasCaixa.reduce((acc, c) => acc + (Number(c.saldo) || 0), 0);
-  const titulosAbertos = payableForecasts.filter(isOpenForecast);
-  const titulosNoHorizonte = forecastInRange(titulosAbertos, '1900-01-01', dataLimiteHorizonte);
-  const compromissosTitulos = sumForecast(titulosNoHorizonte);
-  const titulosVencidos = sumForecast(titulosNoHorizonte.filter((t) => t.dueDate < dataPosicao));
-  const titulosAVencer = compromissosTitulos - titulosVencidos;
-  const compromissosTotal = compromissosTitulos + totPend;
-  const saldoAposCompromissos = disponivelHoje - compromissosTotal;
-  const necessidadeAporte = Math.max(0, -saldoAposCompromissos);
-  const coberturaPct = compromissosTotal > 0 ? (disponivelHoje / compromissosTotal) * 100 : 100;
-
-  const sec5Headers = ['Item', 'Valor (R$)', 'Observação Técnica'];
-  const sec5Rows: (string | number)[][] = [];
-  if (temPosicaoCaixa) {
-    contasCaixa.forEach((c) => {
-      sec5Rows.push([c.nome || 'Conta sem nome', formatCurrency(c.saldo || 0), 'Saldo contado, informado pelo gestor']);
-    });
-    sec5Rows.push(['SALDO DISPONÍVEL (contado)', formatCurrency(disponivelHoje), `Posição apurada em ${formatIsoBr(dataPosicao)}`]);
-    sec5Rows.push(['Títulos a vencer (RFN046)', formatCurrency(titulosAVencer), `Vencimento dentro do horizonte, ainda no prazo`]);
-    sec5Rows.push(['Títulos vencidos e não pagos', formatCurrency(titulosVencidos), 'Em aberto, com vencimento já ultrapassado']);
-    sec5Rows.push(['Pendências digitadas', formatCurrency(totPend), 'Compromissos fora do RFN046 (pró-labore, aluguel, acordos)']);
-    sec5Rows.push([
-      'TOTAL A PAGAR (horizonte)',
-      formatCurrency(compromissosTotal),
-      `Até ${formatIsoBr(dataLimiteHorizonte)} (${horizonteDias} dia(s)) — ${titulosNoHorizonte.length} título(s) + ${pendencias.length} pendência(s)`,
-    ]);
-    sec5Rows.push([
-      'SALDO APÓS COMPROMISSOS',
-      formatCurrency(saldoAposCompromissos),
-      saldoAposCompromissos >= 0 ? 'Caixa cobre os compromissos do horizonte' : 'Déficit projetado — ver necessidade de aporte',
-    ]);
-    sec5Rows.push(['Cobertura', `${coberturaPct.toFixed(1)}%`, 'Disponível ÷ Total a pagar no horizonte']);
-    sec5Rows.push([
-      'NECESSIDADE DE APORTE',
-      necessidadeAporte > 0 ? formatCurrency(necessidadeAporte) : 'R$ 0,00 (sem necessidade)',
-      necessidadeAporte > 0
-        ? `${formatCurrency(compromissosTotal)} a pagar − ${formatCurrency(disponivelHoje)} em caixa`
-        : 'Cobertura integral dos compromissos do horizonte',
-    ]);
+    sec2Rows.push(['TOTAL', 'TOTAL DE PENDÊNCIAS DIGITADAS', formatCurrency(totPend), 'Compromissos em Aberto']);
   }
 
   exportCorporatePdf({
     title: `DEMONSTRATIVO DE FLUXO DE CAIXA SEMANAL — ${monthLabel.toUpperCase()} DE ${selectedYear}`,
-    subtitle: `Matriz Semanal de Previsto x Realizado, Recebimentos por Tipo, Desembolsos e Pendências`,
+    subtitle: `Matriz Semanal de Previsto vs Realizado e Obrigações em Aberto / Pendências do Mês`,
     periodLabel: `Competência: ${monthLabel}/${selectedYear}`,
     summaryCards: [
       { label: 'Saldo Inicial', value: formatCurrency(saldoInicial) },
@@ -1022,15 +917,7 @@ export function exportCashFlowPdfMensal(
       { label: 'Geração de Caixa Líquida', value: formatCurrency(gerCaixaReal) },
       { label: 'Saldo Final de Caixa', value: formatCurrency(saldoFinalReal) },
       { label: 'Acurácia Planejada', value: `${acuracia.toFixed(0)}%` },
-      ...(temPosicaoCaixa
-        ? [
-            {
-              label: 'Necessidade de Aporte',
-              value: necessidadeAporte > 0 ? formatCurrency(necessidadeAporte) : 'Sem necessidade',
-              color: (necessidadeAporte > 0 ? 'rose' : 'emerald') as 'rose' | 'emerald',
-            },
-          ]
-        : []),
+      { label: 'Total de Pendências', value: formatCurrency(totPend), color: totPend > 0 ? 'rose' : undefined },
     ],
     sections: [
       {
@@ -1039,29 +926,10 @@ export function exportCashFlowPdfMensal(
         rows: sec1Rows,
       },
       {
-        title: 'Recebimentos por Tipo (Efetivados no Extrato)',
+        title: 'Obrigações em Aberto / Pendências do Mês',
         headers: sec2Headers,
         rows: sec2Rows,
       },
-      {
-        title: 'Desembolsos por Origem (Efetivados no Extrato)',
-        headers: sec3Headers,
-        rows: sec3Rows,
-      },
-      {
-        title: 'Obrigações em Aberto / Pendências do Mês',
-        headers: sec4Headers,
-        rows: sec4Rows,
-      },
-      ...(temPosicaoCaixa
-        ? [
-            {
-              title: 'Posição de Caixa Hoje & Necessidade de Aporte',
-              headers: sec5Headers,
-              rows: sec5Rows,
-            },
-          ]
-        : []),
     ],
     filename: `Paris_Dakar_Fluxo_Caixa_${monthLabel}_${selectedYear}.pdf`,
   });
