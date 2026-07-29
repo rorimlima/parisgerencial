@@ -838,104 +838,132 @@ export function exportCashFlowPdfMensal(
 
   const acuracia = totPrevReceb > 0 ? (totRealReceb / totPrevReceb) * 100 : 100;
 
-  // Sec 1: Matriz Semanal
-  const sec1Headers = ['Linha de Caixa', 'S1 (Prev/Real)', 'S2 (Prev/Real)', 'S3 (Prev/Real)', 'S4 (Prev/Real)', 'S5 (Prev/Real)', 'Total Mês (Prev/Real)'];
+  // Sec 1: Matriz Semanal com linhas dedicadas e limpas para Previsto e Realizado
+  const sec1Headers = ['Linha de Fluxo de Caixa', 'Semana 1', 'Semana 2', 'Semana 3', 'Semana 4', 'Semana 5', 'Total Mês (R$)'];
   const sec1Rows = [
     [
-      'Recebimentos (Entradas)',
-      ...WEEKS_KEYS.map((w) => `${formatCurrency(getPrevReceb(w))}\n${formatCurrency(getRealReceb(w))}`),
-      `${formatCurrency(totPrevReceb)}\n${formatCurrency(totRealReceb)}`,
+      'Recebimentos — Previsto (Projetado)',
+      ...WEEKS_KEYS.map((w) => formatCurrency(getPrevReceb(w))),
+      formatCurrency(totPrevReceb),
     ],
     [
-      'Desembolsos (Saídas)',
-      ...WEEKS_KEYS.map((w) => `${formatCurrency(getPrevDesemb(w))}\n${formatCurrency(getRealDesemb(w))}`),
-      `${formatCurrency(totPrevDesemb)}\n${formatCurrency(totRealDesemb)}`,
+      'Recebimentos — Realizado (Efetivo)',
+      ...WEEKS_KEYS.map((w) => formatCurrency(getRealReceb(w))),
+      formatCurrency(totRealReceb),
     ],
     [
-      'Geração de Caixa',
-      ...WEEKS_KEYS.map((w) => `${formatCurrency(getPrevReceb(w) + getPrevDesemb(w))}\n${formatCurrency(getRealReceb(w) + getRealDesemb(w))}`),
-      `${formatCurrency(gerCaixaPrev)}\n${formatCurrency(gerCaixaReal)}`,
+      'Δ Variação Recebimentos (Real. - Prev.)',
+      ...WEEKS_KEYS.map((w) => formatCurrency(getRealReceb(w) - getPrevReceb(w))),
+      formatCurrency(totRealReceb - totPrevReceb),
     ],
     [
-      'Aportes de Capital',
-      ...WEEKS_KEYS.map((w) => `${formatCurrency(getAporte(w))}`),
+      'Desembolsos — Previsto (Projetado)',
+      ...WEEKS_KEYS.map((w) => formatCurrency(getPrevDesemb(w))),
+      formatCurrency(totPrevDesemb),
+    ],
+    [
+      'Desembolsos — Realizado (Efetivo)',
+      ...WEEKS_KEYS.map((w) => formatCurrency(getRealDesemb(w))),
+      formatCurrency(totRealDesemb),
+    ],
+    [
+      'Δ Variação Desembolsos (Real. - Prev.)',
+      ...WEEKS_KEYS.map((w) => formatCurrency(getRealDesemb(w) - getPrevDesemb(w))),
+      formatCurrency(totRealDesemb - totPrevDesemb),
+    ],
+    [
+      'Geração de Caixa Operacional (Previsto)',
+      ...WEEKS_KEYS.map((w) => formatCurrency(getPrevReceb(w) + getPrevDesemb(w))),
+      formatCurrency(gerCaixaPrev),
+    ],
+    [
+      'Geração de Caixa Operacional (Realizado)',
+      ...WEEKS_KEYS.map((w) => formatCurrency(getRealReceb(w) + getRealDesemb(w))),
+      formatCurrency(gerCaixaReal),
+    ],
+    [
+      'Aportes de Capital Efetivados',
+      ...WEEKS_KEYS.map((w) => formatCurrency(getAporte(w))),
       formatCurrency(totAportes),
     ],
     [
-      'Saldo de Caixa Final',
-      ...WEEKS_KEYS.map((w) => `${formatCurrency(prevSaldo[w])}\n${formatCurrency(realSaldo[w])}`),
-      `${formatCurrency(saldoFinalPrev)}\n${formatCurrency(saldoFinalReal)}`,
+      'Saldo Final de Caixa (Previsto)',
+      ...WEEKS_KEYS.map((w) => formatCurrency(prevSaldo[w])),
+      formatCurrency(saldoFinalPrev),
+    ],
+    [
+      'Saldo Final de Caixa (Realizado)',
+      ...WEEKS_KEYS.map((w) => formatCurrency(realSaldo[w])),
+      formatCurrency(saldoFinalReal),
     ],
   ];
 
-  // Sec 2: Recebimentos por Tipo
+  // Sec 2: Recebimentos por Tipo — Exibe apenas tipos com lançamentos efetivos
   const receiptTypes = Object.keys(recebByType);
   const sec2Headers = ['Tipo de Recebimento', 'Semana 1', 'Semana 2', 'Semana 3', 'Semana 4', 'Semana 5', 'Total Realizado (R$)'];
-  const sec2Rows = receiptTypes.map((type) => {
-    const r = recebByType[type];
-    const tot = WEEKS_KEYS.reduce((a, w) => a + (r[w] || 0), 0);
-    return [
-      type,
-      formatCurrency(r['sem01']),
-      formatCurrency(r['sem02']),
-      formatCurrency(r['sem03']),
-      formatCurrency(r['sem04']),
-      formatCurrency(r['sem05']),
-      formatCurrency(tot),
-    ];
-  });
+  const sec2Rows = receiptTypes
+    .map((type) => {
+      const r = recebByType[type];
+      const tot = WEEKS_KEYS.reduce((a, w) => a + (r[w] || 0), 0);
+      return { type, r, tot };
+    })
+    .filter((item) => item.tot !== 0)
+    .map((item) => [
+      item.type,
+      formatCurrency(item.r['sem01']),
+      formatCurrency(item.r['sem02']),
+      formatCurrency(item.r['sem03']),
+      formatCurrency(item.r['sem04']),
+      formatCurrency(item.r['sem05']),
+      formatCurrency(item.tot),
+    ]);
 
   if (sec2Rows.length === 0) {
-    sec2Rows.push(['Sem lançamentos no extrato', '-', '-', '-', '-', '-', 'R$ 0,00']);
+    sec2Rows.push(['Sem lançamentos de recebimento no período', '-', '-', '-', '-', '-', 'R$ 0,00']);
   }
 
-  // Sec 3: Desembolsos por Origem
+  // Sec 3: Desembolsos por Origem — Exibe apenas origens com lançamentos efetivos
   const paymentSources = Object.keys(desembBySource);
   const sec3Headers = ['Origem do Desembolso', 'Semana 1', 'Semana 2', 'Semana 3', 'Semana 4', 'Semana 5', 'Total Realizado (R$)'];
-  const sec3Rows = paymentSources.map((src) => {
-    const r = desembBySource[src];
-    const tot = WEEKS_KEYS.reduce((a, w) => a + (r[w] || 0), 0);
-    return [
-      src,
-      formatCurrency(r['sem01']),
-      formatCurrency(r['sem02']),
-      formatCurrency(r['sem03']),
-      formatCurrency(r['sem04']),
-      formatCurrency(r['sem05']),
-      formatCurrency(tot),
-    ];
-  });
+  const sec3Rows = paymentSources
+    .map((src) => {
+      const r = desembBySource[src];
+      const tot = WEEKS_KEYS.reduce((a, w) => a + (r[w] || 0), 0);
+      return { src, r, tot };
+    })
+    .filter((item) => item.tot !== 0)
+    .map((item) => [
+      item.src,
+      formatCurrency(item.r['sem01']),
+      formatCurrency(item.r['sem02']),
+      formatCurrency(item.r['sem03']),
+      formatCurrency(item.r['sem04']),
+      formatCurrency(item.r['sem05']),
+      formatCurrency(item.tot),
+    ]);
 
   if (sec3Rows.length === 0) {
-    sec3Rows.push(['Sem lançamentos no extrato', '-', '-', '-', '-', '-', 'R$ 0,00']);
+    sec3Rows.push(['Sem lançamentos de desembolso no período', '-', '-', '-', '-', '-', 'R$ 0,00']);
   }
 
-  // Sec 4: Pendências
-  const pendencias = plan?.pendencias || [];
+  // Sec 4: Pendências Digitadas
+  const pendencias = (plan?.pendencias || []).filter((p: any) => (p.valor || 0) !== 0 || (p.descricao || '').trim().length > 0);
   const totPend = pendencias.reduce((acc: number, p: any) => acc + (p.valor || 0), 0);
   const sec4Headers = ['Item', 'Descrição da Obrigação em Aberto', 'Valor Pendente (R$)', 'Status / Observação'];
   const sec4Rows = pendencias.map((p: any, idx: number) => [
     `#${idx + 1}`,
     p.descricao || 'Sem descrição',
     formatCurrency(p.valor || 0),
-    'Pendente de Quitação (Fora do Saldo Actual)',
+    'Pendente de Quitação (Programado)',
   ]);
 
   if (sec4Rows.length === 0) {
-    sec4Rows.push(['-', 'Nenhuma pendência registrada para este mês', 'R$ 0,00', 'Sem compromissos em aberto']);
+    sec4Rows.push(['-', 'Nenhuma pendência digitada para este mês', 'R$ 0,00', 'Sem compromissos pendentes registrados']);
   } else {
-    sec4Rows.push(['TOTAL', 'TOTAL DE PENDÊNCIAS REGISTRADAS', formatCurrency(totPend), 'Compromissos a Vencer/Programados']);
+    sec4Rows.push(['TOTAL', 'TOTAL DE PENDÊNCIAS DIGITADAS', formatCurrency(totPend), 'Compromissos em Aberto']);
   }
 
   // Sec 5: Posição de Caixa Hoje — Necessidade de Aporte
-  //
-  // MESMA fórmula da tela (ver "Posição de Caixa Hoje" em CashFlowView.tsx),
-  // reproduzida aqui porque o PDF é o documento que sai da mão do gestor —
-  // precisa provar o número, não só declará-lo. `Saldo de Caixa Final` (sec1)
-  // é uma PROJEÇÃO encadeada a partir do saldo inicial digitado; esta seção é
-  // o dinheiro CONTADO por conta, confrontado com os compromissos do
-  // horizonte. As duas coisas respondem perguntas diferentes e não podem ser
-  // confundidas num relatório técnico.
   const contasCaixa: { nome: string; saldo: number }[] = plan?.contasCaixa || [];
   const temPosicaoCaixa = contasCaixa.length > 0;
   const dataPosicao = plan?.posicaoData || todayIso();
@@ -1028,7 +1056,7 @@ export function exportCashFlowPdfMensal(
       ...(temPosicaoCaixa
         ? [
             {
-              title: `Posição de Caixa Hoje — Necessidade de Aporte (apurada em ${formatIsoBr(dataPosicao)}, horizonte de ${horizonteDias} dia(s))`,
+              title: 'Posição de Caixa Hoje & Necessidade de Aporte',
               headers: sec5Headers,
               rows: sec5Rows,
             },

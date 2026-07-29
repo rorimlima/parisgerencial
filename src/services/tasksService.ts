@@ -7,7 +7,7 @@
  */
 
 import { collection, deleteDoc, doc, getDocs, query, setDoc, where } from 'firebase/firestore';
-import { getFirestoreDb } from '../firebaseService';
+import { getFirestoreDb } from './firebaseService';
 import { FinancialAttachment, RoutineTask, TaskCategory, TaskPriority, TaskStatus } from '../types';
 
 const TASKS_COLLECTION = 'tarefas_rotinas';

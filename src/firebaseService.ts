@@ -177,3 +177,6 @@ export const excluirTitulo = _deleteTituloDoc;
 export const zerarTitulos = _clearTitulos;
 export const zerarColecao = _clearCollection;
 
+export { getFirestoreDb } from './services/firebaseService';
+
+
