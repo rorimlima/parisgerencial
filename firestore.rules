@@ -201,6 +201,24 @@ service cloud.firestore {
     // =====================================================================
 
     /**
+     * GERENCIADOR DE TAREFAS E ROTINAS DIÁRIAS.
+     */
+    match /tarefas_rotinas/{docId} {
+      allow read: if autorizado();
+      allow create, update: if escritaValida();
+      allow delete: if ehGestorOuAdmin();
+    }
+
+    /**
+     * COMPROVANTES, FRANCESAS E EXTRATOS DO DIA.
+     */
+    match /comprovantes_francesas/{docId} {
+      allow read: if autorizado();
+      allow create, update: if escritaValida();
+      allow delete: if ehGestorOuAdmin();
+    }
+
+    /**
      * TÍTULOS FINANCEIROS — contas a receber e a pagar.
      *
      * Escrita liberada para autorizado porque a baixa manual e a conciliação

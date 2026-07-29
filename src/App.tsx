@@ -41,6 +41,7 @@ const DailyMovementView = lazy(() => import('./components/DailyMovementView').th
 const BillingView = lazy(() => import('./components/BillingView').then((m) => ({ default: m.BillingView })));
 const StockView = lazy(() => import('./components/StockView').then((m) => ({ default: m.StockView })));
 const SalesView = lazy(() => import('./components/SalesView').then((m) => ({ default: m.SalesView })));
+const TaskManagerView = lazy(() => import('./components/TaskManagerView').then((m) => ({ default: m.TaskManagerView })));
 
 /** Esqueleto mostrado enquanto o código de uma tela é baixado. */
 const ViewSkeleton: React.FC = () => (
@@ -1752,6 +1753,18 @@ export default function App() {
               onReload={() => loadSales(true)}
               onLoadYear={handleLoadSalesYear}
               userRole={currentUser.role}
+            />
+          )}
+
+          {activeTab === 'tasks' && (
+            <TaskManagerView
+              onNavigateToModule={(tab) => setActiveTab(tab)}
+              onNavigateToImport={(mod) => {
+                setImportTargetModule(mod);
+                setActiveTab('import');
+              }}
+              userRole={currentUser.role}
+              userName={currentUser.name}
             />
           )}
 

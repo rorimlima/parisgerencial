@@ -21,6 +21,7 @@ export type ViewTab =
   | 'billing'
   | 'stock'
   | 'sales'
+  | 'tasks'
   | 'api-docs'
   | 'postgres-settings';
 
@@ -1101,3 +1102,79 @@ export interface PostgresConfig {
   lastTested?: string;
   error?: string;
 }
+
+// ─── GERENCIADOR DE TAREFAS & INGESTÃO TÉCNICA ──────────────────────────────
+
+export type TaskCategory =
+  | 'extratos_tesouraria'
+  | 'pagamentos_dia'
+  | 'compras_pendentes'
+  | 'vendas_estoque'
+  | 'fechamento_caixa'
+  | 'geral';
+
+export type TaskStatus = 'pendente' | 'em_andamento' | 'aguardando_importacao' | 'concluido' | 'ignorado' | 'cancelado';
+
+export type TaskPriority = 'alta' | 'media' | 'baixa';
+
+export interface TaskChecklistItem {
+  id: string;
+  text: string;
+  done: boolean;
+}
+
+export interface RoutineTask {
+  id: string;
+  dateISO: string; // YYYY-MM-DD
+  title: string;
+  description: string;
+  category: TaskCategory;
+  status: TaskStatus;
+  priority: TaskPriority;
+  assignedTo?: string;
+  spreadsheetSpecId?: string; // Vínculo com especificação de planilha
+  targetViewTab?: ViewTab; // Vínculo com módulo do sistema
+  checklists?: TaskChecklistItem[];
+  completedAt?: string;
+  completedBy?: string;
+  notes?: string;
+  isSystemRoutine?: boolean; // Se foi gerada automaticamente pelo sistema
+  attachmentsCount?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TechnicalSpreadsheetSpec {
+  id: string;
+  code: string; // Ex: 'OFX / XLSX', 'RFN046', 'RPR014', 'RPR001', 'RPR053', 'RFN029', 'DRE_Executivo'
+  name: string;
+  description: string;
+  targetCollection: string; // Coleção Firestore / Tabela Postgres (ex: 'extrato_financeiro', 'contas_a_pagar')
+  dbImpact: string; // Descrição técnica de Engenharia/DBA do impacto
+  expectedColumns: string[];
+  sampleFilename: string;
+  targetModule: ViewTab;
+  importActionType: 'statement' | 'titulos_pay' | 'titulos_rec' | 'billing' | 'sales' | 'stock' | 'delinquency' | 'economic';
+}
+
+// ─── COMPROVANTES, FRANCESAS E EXTRATOS BANCÁRIOS DO DIA ──────────────────────
+
+export type AttachmentType = 'comprovante' | 'francesa' | 'extrato' | 'outro';
+export type BankName = 'Bradesco' | 'PagBank' | 'Caixa' | 'Outro';
+
+export interface FinancialAttachment {
+  id: string;
+  dateISO: string; // YYYY-MM-DD
+  type: AttachmentType;
+  bank: BankName;
+  fileName: string;
+  fileSize: number;
+  fileType: string;
+  fileData?: string; // Base64 ou URL do arquivo guardado no banco
+  uploadedAt: string;
+  uploadedBy: string;
+  taskId?: string; // Vínculo opcional com tarefa específica
+  notes?: string;
+}
+
+
