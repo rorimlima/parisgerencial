@@ -14,6 +14,9 @@
     "seed:tesouraria": "node scripts/seedTesouraria.mjs",
     "seed:tesouraria:dry": "node scripts/seedTesouraria.mjs --dry",
     "test:extrato": "node scripts/testRfn019Parser.mjs",
+    "test:extrato-geral": "node scripts/testExtratoGeralParser.mjs",
+    "import:extrato:dry": "node scripts/importExtratoGeral.mjs --dry",
+    "import:extrato": "node scripts/importExtratoGeral.mjs",
     "test:auditoria": "node scripts/testFinancialAudit.mjs",
     "test:previsao": "node scripts/testPrevisaoPagamento.mjs",
     "test:fluxo": "node scripts/testFluxoCaixa.mjs",
@@ -27,7 +30,7 @@
     "import:titulos:limpo": "node scripts/importTitulosRfn046.mjs --limpar-legado",
     "auditar:titulos": "node scripts/auditarTitulos.mjs",
     "auditar:titulos:detalhado": "node scripts/auditarTitulos.mjs --detalhado",
-    "test": "node scripts/testRfn019Parser.mjs && node scripts/testFinancialAudit.mjs && node scripts/testPeriodoPrecisao.mjs && node scripts/testMovimentoDiario.mjs"
+    "test": "node scripts/testRfn019Parser.mjs && node scripts/testExtratoGeralParser.mjs && node scripts/testFinancialAudit.mjs && node scripts/testPeriodoPrecisao.mjs && node scripts/testMovimentoDiario.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

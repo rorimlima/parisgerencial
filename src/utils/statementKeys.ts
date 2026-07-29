@@ -156,6 +156,41 @@ export const buildBankDedupeKey = (params: {
   return `${base}#${occurrence}`;
 };
 
+/**
+ * Chave do EXTRATO GERAL (formato único de importação, 8 colunas).
+ *
+ * POR QUE A COLUNA "ID" DA PLANILHA NÃO ENTRA AQUI
+ * -----------------------------------------------
+ * O ID do extrato geral é o número da linha, não o ID do movimento no banco.
+ * Número de linha se renumera: inserir um lançamento em fevereiro empurra todos
+ * os IDs seguintes. Se a chave fosse o ID, a próxima exportação da mesma
+ * planilha geraria chaves novas para lançamentos que já estão gravados, e a base
+ * inteira entraria duplicada — o oposto do que este arquivo existe para impedir.
+ *
+ * A identidade é, então, o CONTEÚDO: banco + data + histórico + valor líquido
+ * (com sinal, porque é o sinal que separa entrada de saída). O chamador
+ * acrescenta `#ocorrência` para o caso legítimo de dois lançamentos idênticos no
+ * mesmo dia — duas tarifas iguais, dois PIX do mesmo valor.
+ *
+ * O valor entra com 2 casas fixas: 1500 e 1500.00 têm que gerar a mesma chave,
+ * senão a mesma linha reimportada de um arquivo salvo em outro formato duplica.
+ */
+export const buildExtratoGeralDedupeKey = (params: {
+  bank: string;
+  date: string;
+  description: string;
+  netAmount: number;
+}): string => {
+  const { bank, date, description, netAmount } = params;
+  return [
+    'extrato_geral',
+    normalizeKeyText(bank).replace(/[^a-z0-9]+/g, ''),
+    date,
+    normalizeKeyText(description),
+    netAmount.toFixed(2),
+  ].join('|');
+};
+
 /** Hash FNV-1a de 32 bits, estável entre execuções e plataformas. */
 const fnv1a = (str: string): string => {
   let h = 0x811c9dc5;

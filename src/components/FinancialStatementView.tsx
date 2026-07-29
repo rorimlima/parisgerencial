@@ -4,8 +4,16 @@
  *
  * FinancialStatementView — "Extrato Financeiro"
  *
- * Página de conciliação bancária e de caixa. Importa e normaliza três formatos
- * distintos de extrato em um modelo único (FinancialStatementEntry):
+ * Página de conciliação bancária e de caixa. Normaliza vários formatos de
+ * arquivo em um modelo único (FinancialStatementEntry):
+ *
+ *   - EXTRATO GERAL (formato recomendado): planilha .xlsx com 8 colunas —
+ *     ID, BANCO, LANCAMENTO, DATA, ENTRADA, SAIDA, TIPO, CONTA. UM arquivo com
+ *     TODAS as contas (bancos e caixas) de uma vez: a coluna BANCO diz de qual
+ *     conta é cada linha, então não há mais escolha de conta na tela nem risco
+ *     de importar o extrato de um caixa dentro de outro. É a porta de entrada
+ *     preferencial; ver src/utils/extratoGeralParser.ts.
+ *
  *   - Bradesco: arquivo XML (SpreadsheetML / "Excel XML"), frequentemente salvo com
  *     extensão .XMLS. Colunas: Data, Lançamento, Dcto., Crédito (R$), Débito (R$), Saldo (R$).
  *   - PagSeguro: planilha .xlsx em formato de relatório (cabeçalho com metadados nas
@@ -14,6 +22,10 @@
  *   - Caixa / Tesouraria (RFN019): planilha .xlsx com colunas nomeadas
  *     Tesouraria_DataCaixa, Tesouraria_Valor, Tesouraria_TipoDocumentoDes,
  *     ClienteBeneficiario, Tesouraria_Codigo (chave única), Credito, Debito.
+ *
+ * Os três formatos por fonte continuam aqui porque a base histórica foi
+ * carregada com eles e as chaves precisam continuar reproduzíveis. Para dados
+ * novos, use o EXTRATO GERAL.
  *
  * Após a validação, os lançamentos são gravados (UPSERT, sem duplicidade em
  * reimportações) e usados para atualizar automaticamente os totais de
@@ -33,6 +45,8 @@ import {
   FileCode2,
   FileSpreadsheet,
   Landmark,
+  Link2,
+  Link2Off,
   RefreshCcw,
   Search,
   Trash2,
@@ -40,9 +54,16 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
-import { FinancialStatementEntry, StatementOrigin, StatementSource } from '../types';
+import { FinancialStatementEntry, StatementOrigin, StatementSource, TituloFinanceiro, TituloMovType } from '../types';
 import { exportReportToExcel, formatCurrency, parseNumberPtBr } from '../utils/exportUtils';
 import { parseRfn019Rows } from '../utils/rfn019Parser';
+import {
+  EXTRATO_GERAL_HEADERS,
+  ExtratoGeralRow,
+  parseExtratoGeralRows,
+  summarizeExtratoGeral,
+  validateExtratoGeralHeaders,
+} from '../utils/extratoGeralParser';
 import {
   DEFAULT_TESOURARIA_ACCOUNT,
   TESOURARIA_ACCOUNTS,
@@ -57,13 +78,50 @@ interface FinancialStatementViewProps {
   onDeleteEntry?: (id: string) => void;
   onClearEntries?: (source?: StatementSource) => void;
   userRole: string;
+  /**
+   * Títulos de Contas a Receber/Pagar do exercício em tela. Servem só para
+   * saber quais lançamentos do extrato já foram USADOS numa baixa — a fonte
+   * de verdade da baixa continua sendo o título (`reconciledStatementId`);
+   * aqui só se monta o mapa inverso para exibir na tela do extrato.
+   */
+  receivables?: TituloFinanceiro[];
+  payables?: TituloFinanceiro[];
+}
+
+/** Um título já baixado, do lado de quem consumiu este lançamento do extrato. */
+interface ReconciledInfo {
+  titulo: TituloFinanceiro;
+  movType: TituloMovType;
 }
 
 // ─── Config de fontes suportadas ────────────────────────────────────────────
 
 const MONTH_KEYS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 
-const SOURCE_META: Record<StatementSource, { label: string; shortLabel: string; origin: StatementOrigin; accept: string; hint: string; icon: React.ElementType }> = {
+/**
+ * FORMATO DO ARQUIVO ≠ FONTE DO LANÇAMENTO.
+ *
+ * `StatementSource` é a conta de onde o dinheiro veio (bradesco/pagseguro/
+ * tesouraria) e fica gravada em cada lançamento. O EXTRATO GERAL não é uma
+ * conta nova: é um ARQUIVO que traz várias contas ao mesmo tempo, e cada linha
+ * dele é roteada para a fonte certa pela coluna BANCO. Por isso o formato de
+ * importação tem um tipo próprio — misturar os dois faria aparecer uma fonte
+ * 'extrato_geral' no filtro e nos relatórios, quebrando a separação entre
+ * Entradas Bancos e Entradas Tesouraria do Resultado Financeiro.
+ */
+type ImportFormat = StatementSource | 'extrato_geral';
+
+const SOURCE_META: Record<ImportFormat, { label: string; shortLabel: string; origin: StatementOrigin; accept: string; hint: string; icon: React.ElementType }> = {
+  extrato_geral: {
+    label: 'Extrato Geral — todas as contas (XLSX)',
+    shortLabel: 'Extrato Geral',
+    // A origem real vem linha a linha (coluna BANCO/CONTA); 'banco' aqui é só
+    // o padrão do cartão na tela.
+    origin: 'banco',
+    accept: '.xlsx,.xls,.csv',
+    hint: `Formato único e recomendado. Planilha com as colunas ${EXTRATO_GERAL_HEADERS.join(' | ')}. Um só arquivo com bancos e caixas juntos: a coluna BANCO (BRADESCO, PAGBANK, CAIXA30107, CAIXA30110, ALBA30110, TESOURARIA) roteia cada linha para a conta certa e a coluna CONTA diz se é BANCO ou DINHEIRO. A SAIDA vem negativa; o sinal do valor é o que define entrada ou saída, e a coluna TIPO é conferida contra ele — divergências são listadas na prévia, não corrigidas em silêncio. Reimportar o mesmo arquivo atualiza as linhas, nunca duplica.`,
+    icon: FileSpreadsheet,
+  },
   bradesco: {
     label: 'Bradesco — Extrato Bancário (XML)',
     shortLabel: 'Bradesco',
@@ -109,6 +167,21 @@ interface RawStatementRow {
   managementAccount?: string;
   isInternalTransfer?: boolean;
   counterAccountCode?: string;
+  // ── Preenchidos só pelo EXTRATO GERAL ────────────────────────────────────
+  // Neste formato cada LINHA tem sua própria conta (a planilha traz bancos e
+  // caixas juntos), então fonte, origem e rótulo não podem vir do cartão
+  // selecionado na tela: vêm da própria linha.
+  source?: StatementSource;
+  origin?: StatementOrigin;
+  sourceLabel?: string;
+  bankRaw?: string;
+  sheetId?: string;
+  sheetType?: string;
+  derivedType?: 'ENTRADA' | 'SAIDA';
+  typeDivergence?: boolean;
+  warnings?: string[];
+  /** Erros já apurados pelo parser (o Extrato Geral valida a própria linha). */
+  parseErrors?: string[];
 }
 
 const monthKeyFromIso = (dateStr: string): string => {
@@ -263,9 +336,70 @@ const parseTesourariaRows = (rows: any[], accountCode: string): RawStatementRow[
     counterAccountCode: r.counterAccountCode,
   }));
 
+// ── Adaptador do EXTRATO GERAL ──────────────────────────────────────────────
+// A leitura mora em utils/extratoGeralParser.ts, compartilhada com o script de
+// carga (scripts/importExtratoGeral.mjs) para que tela e script gerem as MESMAS
+// chaves — é o que garante que rodar o script e depois reimportar pela tela não
+// duplique nada. Aqui só adaptamos o resultado ao formato da prévia.
+const adaptExtratoGeralRow = (r: ExtratoGeralRow): RawStatementRow => ({
+  date: r.date,
+  description: r.description,
+  clientName: r.clientName,
+  documentType: r.documentType,
+  documentRef: r.documentRef,
+  entryAmount: r.entryAmount,
+  exitAmount: r.exitAmount,
+  notes: r.notes,
+  dedupeKey: r.dedupeKey,
+  accountCode: r.accountCode,
+  accountLabel: r.accountLabel,
+  managementAccount: r.managementAccount,
+  isInternalTransfer: r.isInternalTransfer,
+  counterAccountCode: r.counterAccountCode,
+  source: r.source,
+  origin: r.origin,
+  sourceLabel: r.sourceLabel,
+  bankRaw: r.bankRaw,
+  sheetId: r.sheetId,
+  sheetType: r.sheetType,
+  derivedType: r.derivedType,
+  typeDivergence: r.typeDivergence,
+  warnings: r.warnings,
+  parseErrors: r.errors,
+});
+
 // ─── Componente ──────────────────────────────────────────────────────────────
 
 type PreviewRow = RawStatementRow & { rowNumber: number; valid: boolean; errors: string[] };
+
+/** Badge de baixa — mesma paleta do StatusPill de Contas a Receber/Pagar,
+ * para o gestor reconhecer o status sem precisar reaprender a cor. */
+const BaixaPill: React.FC<{ info?: ReconciledInfo }> = ({ info }) => {
+  if (!info) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold border whitespace-nowrap bg-[#F3F1ED] text-[#8B7D6B] border-[#EAE6DF]">
+        <Link2Off className="w-3 h-3" />
+        Sem baixa
+      </span>
+    );
+  }
+  const auto = info.titulo.status === 'Baixado Automático';
+  const label = auto ? 'Baixado (auto)' : 'Baixado (manual)';
+  const tooltip = `${info.movType === 'R' ? 'Recebimento' : 'Pagamento'} · ${info.titulo.personName || '—'} · Título ${
+    info.titulo.titleCode
+  }${info.titulo.baixaCode ? ` · ${info.titulo.baixaCode}` : ''}`;
+  return (
+    <span
+      title={tooltip}
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold border whitespace-nowrap ${
+        auto ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-blue-50 text-blue-700 border-blue-200'
+      }`}
+    >
+      <Link2 className="w-3 h-3" />
+      {label}
+    </span>
+  );
+};
 
 export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
   entries,
@@ -274,8 +408,12 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
   onDeleteEntry,
   onClearEntries,
   userRole,
+  receivables,
+  payables,
 }) => {
-  const [sourceType, setSourceType] = useState<StatementSource>('bradesco');
+  // O Extrato Geral é o padrão: é o formato que cobre todas as contas de uma
+  // vez e o único que não exige escolher a conta na mão.
+  const [sourceType, setSourceType] = useState<ImportFormat>('extrato_geral');
   // Conta do RFN019. Obrigatória porque o relatório não diz de qual conta é —
   // ver comentário em utils/statementKeys.ts.
   const [tesourariaAccount, setTesourariaAccount] = useState<string>(DEFAULT_TESOURARIA_ACCOUNT);
@@ -289,6 +427,7 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
   // 'all' | fonte | 'conta:30108' | 'conta:30101' | 'transferencias'
   const [sourceFilter, setSourceFilter] = useState<string>('all');
   const [monthFilter, setMonthFilter] = useState<string>('all');
+  const [reconFilter, setReconFilter] = useState<'all' | 'baixado' | 'livre'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [detailsEntry, setDetailsEntry] = useState<FinancialStatementEntry | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -301,15 +440,43 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
   // Resetar página quando os filtros mudam
   useEffect(() => {
     setCurrentPage(1);
-  }, [sourceFilter, monthFilter, searchQuery]);
+  }, [sourceFilter, monthFilter, reconFilter, searchQuery]);
 
   const canEdit = userRole !== 'analista';
   const meta = SOURCE_META[sourceType];
+
+  // ── Mapa inverso: lançamento do extrato → título que o baixou ────────────
+  //
+  // A baixa é gravada só do lado do TÍTULO (`reconciledStatementId`) — é lá
+  // que o gestor confirma ou reverte. Aqui não se grava nada novo: o mapa é
+  // recalculado a cada render a partir do que já existe, então nunca fica
+  // desatualizado e nunca duplica a fonte de verdade. Só 'Baixado Automático'
+  // e 'Baixado Manual' contam; 'Conferir' é sugestão, ainda não é baixa.
+  const baixaMap = useMemo(() => {
+    const map = new Map<string, ReconciledInfo>();
+    const add = (list: TituloFinanceiro[] | undefined, movType: TituloMovType) => {
+      (list || []).forEach((t) => {
+        if (t.reconciledStatementId && (t.status === 'Baixado Automático' || t.status === 'Baixado Manual')) {
+          map.set(t.reconciledStatementId, { titulo: t, movType });
+        }
+      });
+    };
+    add(receivables, 'R');
+    add(payables, 'P');
+    return map;
+  }, [receivables, payables]);
 
   // ── Processamento de arquivo ──────────────────────────────────────────────
 
   const buildPreview = (raw: RawStatementRow[]) => {
     const rows: PreviewRow[] = raw.map((r, idx) => {
+      // O EXTRATO GERAL já valida cada linha no parser (banco desconhecido,
+      // linha de saldo, valor ausente) e traz o motivo escrito. Revalidar aqui
+      // com uma régua mais pobre apagaria justamente a explicação que o gestor
+      // precisa para corrigir a planilha.
+      if (r.parseErrors) {
+        return { ...r, rowNumber: idx + 1, valid: r.parseErrors.length === 0, errors: r.parseErrors };
+      }
       const errors: string[] = [];
       if (!r.date) errors.push('Data ausente ou inválida');
       if (r.entryAmount === 0 && r.exitAmount === 0) errors.push('Lançamento sem valor de entrada ou saída');
@@ -353,8 +520,9 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
       return;
     }
 
-    if (ext !== 'xlsx' && ext !== 'xls') {
-      alert(`Para ${meta.shortLabel}, envie um arquivo .xlsx ou .xls.`);
+    const allowedExts = sourceType === 'extrato_geral' ? ['xlsx', 'xls', 'csv'] : ['xlsx', 'xls'];
+    if (!ext || !allowedExts.includes(ext)) {
+      alert(`Para ${meta.shortLabel}, envie um arquivo ${allowedExts.map((x) => `.${x}`).join(' ou ')}.`);
       setIsProcessing(false);
       setFileName(null);
       return;
@@ -367,7 +535,25 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
         const workbook = XLSX.read(data, { type: 'array', cellDates: true });
         const ws = workbook.Sheets[workbook.SheetNames[0]];
 
-        if (sourceType === 'pagseguro') {
+        if (sourceType === 'extrato_geral') {
+          const jsonRows = XLSX.utils.sheet_to_json<any>(ws, { defval: '' });
+          if (jsonRows.length === 0) {
+            alert('A planilha está vazia ou o cabeçalho não está na primeira linha.');
+            return;
+          }
+          // Cabeçalho errado é o erro mais comum e o mais traiçoeiro: sem esta
+          // checagem o parser leria tudo como vazio e a tela mostraria "0
+          // lançamentos válidos" sem dizer o motivo.
+          const headerCheck = validateExtratoGeralHeaders(jsonRows[0]);
+          if (!headerCheck.ok) {
+            alert(
+              `Não achei a(s) coluna(s) ${headerCheck.missing.join(', ')} na planilha.\n\n` +
+                `O Extrato Geral espera o cabeçalho na primeira linha:\n${EXTRATO_GERAL_HEADERS.join(' | ')}`
+            );
+            return;
+          }
+          buildPreview(parseExtratoGeralRows(jsonRows).map(adaptExtratoGeralRow));
+        } else if (sourceType === 'pagseguro') {
           const aoa = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '' });
           buildPreview(parsePagSeguroRows(aoa));
         } else {
@@ -429,13 +615,28 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
         dedupeKey = `${base}#${n}`;
       }
 
-      const isTesouraria = sourceType === 'tesouraria';
+      // ROTEAMENTO DA CONTA — quem decide é a LINHA, não o cartão da tela.
+      //
+      // No Extrato Geral um só arquivo traz Bradesco, PagBank e os caixas
+      // juntos, e cada linha já chegou do parser com sua fonte, origem e
+      // rótulo, lidos da coluna BANCO. Usar `sourceType` aqui gravaria a
+      // planilha inteira como se fosse de uma única conta — o dinheiro do
+      // caixa entraria como banco e o Resultado Financeiro passaria a somar
+      // Entradas Bancos que nunca existiram.
+      const isExtratoGeral = sourceType === 'extrato_geral';
+      const rowSource: StatementSource = isExtratoGeral ? r.source || 'bradesco' : (sourceType as StatementSource);
+      const rowOrigin: StatementOrigin = isExtratoGeral ? r.origin || 'banco' : meta.origin;
+      const isTesouraria = rowOrigin === 'caixa';
       return {
-        origin: meta.origin,
-        source: sourceType,
-        // No caixa, o rótulo mostra a conta (Caixa 30108 / Tesouraria 30101):
-        // sem isso as duas contas ficam indistinguíveis na tela e no export.
-        sourceLabel: isTesouraria ? r.accountLabel || meta.shortLabel : meta.shortLabel,
+        origin: rowOrigin,
+        source: rowSource,
+        // No caixa, o rótulo mostra a conta (Caixa 30107 / Tesouraria 30101):
+        // sem isso as contas ficam indistinguíveis na tela e no export.
+        sourceLabel: isExtratoGeral
+          ? r.sourceLabel || r.bankRaw || meta.shortLabel
+          : isTesouraria
+          ? r.accountLabel || meta.shortLabel
+          : meta.shortLabel,
         date: r.date,
         year: parseInt(r.date.slice(0, 4), 10),
         monthKey: monthKeyFromIso(r.date),
@@ -448,11 +649,16 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
         balance: r.balance,
         notes: r.notes,
         dedupeKey,
-        ...(isTesouraria
+        // A marca de transferência interna precisa ir SEMPRE no Extrato Geral,
+        // inclusive nas linhas de banco: é ela que mantém o remanejo entre
+        // contas fora do total de entradas. Gravar só nas linhas de caixa
+        // deixaria um `undefined` no banco, que o cálculo leria como "não é
+        // transferência" e voltaria a inflar o resultado.
+        ...(isTesouraria || isExtratoGeral
           ? {
-              accountCode: r.accountCode,
-              accountLabel: r.accountLabel,
-              managementAccount: r.managementAccount,
+              accountCode: r.accountCode || '',
+              accountLabel: r.accountLabel || '',
+              managementAccount: r.managementAccount || '',
               isInternalTransfer: !!r.isInternalTransfer,
               counterAccountCode: r.counterAccountCode || '',
             }
@@ -523,6 +729,50 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
       .sort((a, b) => b.amount * (b.refs.length - 1) - a.amount * (a.refs.length - 1));
   }, [previewRows]);
 
+  /**
+   * Retrato do EXTRATO GERAL antes de gravar.
+   *
+   * Duas coisas que só este formato pode mostrar e que o gestor precisa ver
+   * ANTES do commit:
+   *  1. a quebra por conta — é a prova de que cada linha foi roteada para o
+   *     banco/caixa certo, o único erro deste formato que não dá alarme sozinho;
+   *  2. as divergências da coluna TIPO — o número gravado seguiu o VALOR, e
+   *     esta é a lista do que corrigir na planilha de origem.
+   */
+  const extratoGeralPreview = useMemo(() => {
+    if (sourceType !== 'extrato_geral' || previewRows.length === 0) return null;
+
+    const byBank = new Map<string, { label: string; origin: StatementOrigin; count: number; entrada: number; saida: number }>();
+    previewRows
+      .filter((r) => r.valid)
+      .forEach((r) => {
+        const key = r.sourceLabel || r.bankRaw || '—';
+        const cur = byBank.get(key) || {
+          label: key,
+          origin: r.origin || 'banco',
+          count: 0,
+          entrada: 0,
+          saida: 0,
+        };
+        cur.count += 1;
+        cur.entrada += r.entryAmount;
+        cur.saida += r.exitAmount;
+        byBank.set(key, cur);
+      });
+
+    const divergences = previewRows.filter((r) => r.typeDivergence);
+    const semHistorico = previewRows.filter(
+      (r) => r.valid && (r.warnings || []).some((w) => w.includes('nome da própria conta'))
+    );
+
+    return {
+      byBank: [...byBank.values()].sort((a, b) => b.count - a.count),
+      divergences,
+      semHistorico,
+      semHistoricoValor: semHistorico.reduce((a, r) => a + r.entryAmount - r.exitAmount, 0),
+    };
+  }, [previewRows, sourceType]);
+
   const previewDuplicateExtra = previewDuplicates.reduce((a, g) => a + (g.refs.length - 1), 0);
   const previewDuplicateValue = previewDuplicates.reduce((a, g) => a + g.amount * (g.refs.length - 1), 0);
 
@@ -547,15 +797,17 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
           ? e.accountCode === sourceFilter.slice(6)
           : e.source === sourceFilter;
       const matchesMonth = monthFilter === 'all' || e.monthKey === monthFilter;
+      const matchesRecon =
+        reconFilter === 'all' ? true : reconFilter === 'baixado' ? baixaMap.has(e.id) : !baixaMap.has(e.id);
       const q = searchQuery.trim().toLowerCase();
       const matchesSearch =
         q === '' ||
         e.description.toLowerCase().includes(q) ||
         (e.clientName || '').toLowerCase().includes(q) ||
         (e.documentRef || '').toLowerCase().includes(q);
-      return matchesSource && matchesMonth && matchesSearch;
+      return matchesSource && matchesMonth && matchesRecon && matchesSearch;
     });
-  }, [entries, sourceFilter, monthFilter, searchQuery]);
+  }, [entries, sourceFilter, monthFilter, reconFilter, searchQuery, baixaMap]);
 
   const paginatedEntries = useMemo(() => {
     const start = (currentPage - 1) * itemsPerPage;
@@ -613,19 +865,26 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
   }, [entries]);
 
   const handleExportExcel = () => {
-    const data = filteredEntries.map((e) => ({
-      Data: e.date,
-      Origem: e.origin === 'banco' ? 'Banco' : 'Caixa/Tesouraria',
-      Fonte: e.sourceLabel,
-      Descrição: e.description,
-      'Cliente/Beneficiário': e.clientName || '',
-      'Tipo Documento': e.documentType || '',
-      'Referência/Documento': e.documentRef || '',
-      Entrada: e.entryAmount,
-      Saída: e.exitAmount,
-      Saldo: e.balance ?? '',
-      Observações: e.notes || '',
-    }));
+    const data = filteredEntries.map((e) => {
+      const rec = baixaMap.get(e.id);
+      return {
+        Data: e.date,
+        Origem: e.origin === 'banco' ? 'Banco' : 'Caixa/Tesouraria',
+        Fonte: e.sourceLabel,
+        Descrição: e.description,
+        'Cliente/Beneficiário': e.clientName || '',
+        'Tipo Documento': e.documentType || '',
+        'Referência/Documento': e.documentRef || '',
+        Entrada: e.entryAmount,
+        Saída: e.exitAmount,
+        Saldo: e.balance ?? '',
+        Baixa: rec ? rec.titulo.status : 'Sem baixa',
+        'Baixa - Título': rec?.titulo.titleCode || '',
+        'Baixa - Pessoa': rec?.titulo.personName || '',
+        'Baixa - Código': rec?.titulo.baixaCode || '',
+        Observações: e.notes || '',
+      };
+    });
     exportReportToExcel(data, `EXTRATO_${selectedYear}`, `Extrato_Financeiro_Paris_Dakar_${selectedYear}.xlsx`);
   };
 
@@ -651,8 +910,9 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
           </div>
           <h2 className="text-xl font-black text-[#2D2A26] mt-1">Extrato Financeiro</h2>
           <p className="text-xs text-[#8B7D6B]">
-            Importação de extratos bancários (Bradesco, PagSeguro) e de caixa/tesouraria (RFN019), com atualização
-            automática das Entradas de Bancos e Tesouraria do Resultado Financeiro.
+            Importação pelo <span className="font-bold">Extrato Geral</span> — um arquivo com todas as contas, bancos e
+            caixas — com atualização automática das Entradas de Bancos e Tesouraria do Resultado Financeiro. Os formatos
+            por fonte (Bradesco XML, PagSeguro, RFN019) continuam aceitos.
           </p>
         </div>
 
@@ -758,11 +1018,12 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
       {/* Seletor de Fonte */}
       <div className="bg-white border border-[#EAE6DF] rounded-xl p-4 shadow-xs space-y-3">
         <p className="text-xs font-bold text-[#2D2A26]">Selecione o tipo de extrato a importar:</p>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {(Object.keys(SOURCE_META) as StatementSource[]).map((key) => {
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {(Object.keys(SOURCE_META) as ImportFormat[]).map((key) => {
             const s = SOURCE_META[key];
             const Icon = s.icon;
             const active = sourceType === key;
+            const isGeral = key === 'extrato_geral';
             return (
               <button
                 key={key}
@@ -780,9 +1041,24 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
               >
                 <Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${active ? 'text-[#C19A6B]' : 'text-[#8B7D6B]'}`} />
                 <div>
-                  <p className="text-xs font-bold">{s.shortLabel}</p>
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-xs font-bold">{s.shortLabel}</p>
+                    {isGeral && (
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[9px] font-extrabold ${
+                          active ? 'bg-[#C19A6B] text-white' : 'bg-[#C19A6B]/15 text-[#C19A6B] border border-[#C19A6B]/30'
+                        }`}
+                      >
+                        RECOMENDADO
+                      </span>
+                    )}
+                  </div>
                   <p className={`text-[10px] mt-0.5 ${active ? 'text-white/70' : 'text-[#8B7D6B]'}`}>
-                    {s.origin === 'banco' ? 'Origem: Banco' : 'Origem: Caixa/Tesouraria'}
+                    {isGeral
+                      ? 'Bancos e caixas no mesmo arquivo'
+                      : s.origin === 'banco'
+                      ? 'Origem: Banco'
+                      : 'Origem: Caixa/Tesouraria'}
                   </p>
                 </div>
               </button>
@@ -897,6 +1173,111 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
             </div>
           </div>
 
+          {/* ── EXTRATO GERAL: para onde foi cada linha ──────────────────────
+              A quebra por conta é a conferência que só existe neste formato.
+              Como um arquivo traz bancos e caixas juntos, um erro de
+              roteamento (dinheiro de caixa entrando como banco) não dispara
+              nenhum outro alarme: o total geral fecha, e só o Resultado
+              Financeiro sai errado, meses depois. Aqui o gestor vê a
+              distribuição antes de gravar. */}
+          {extratoGeralPreview && extratoGeralPreview.byBank.length > 0 && (
+            <div className="border border-[#EAE6DF] bg-[#F9F7F2] rounded-lg p-3">
+              <p className="text-xs font-black text-[#2D2A26] mb-2">Para onde vai cada lançamento</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-[#EAE6DF] text-[10px] uppercase text-[#8B7D6B]">
+                      <th className="text-left py-1.5 font-bold">Conta (coluna BANCO)</th>
+                      <th className="text-left py-1.5 font-bold">Entra como</th>
+                      <th className="text-right py-1.5 font-bold">Lançamentos</th>
+                      <th className="text-right py-1.5 font-bold">Entradas</th>
+                      <th className="text-right py-1.5 font-bold">Saídas</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {extratoGeralPreview.byBank.map((b) => (
+                      <tr key={b.label} className="border-b border-[#EAE6DF]/60 last:border-0">
+                        <td className="py-1.5 font-bold text-[#2D2A26]">{b.label}</td>
+                        <td className="py-1.5">
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                              b.origin === 'banco'
+                                ? 'bg-blue-50 text-blue-800 border-blue-200'
+                                : 'bg-[#C19A6B]/15 text-[#C19A6B] border-[#C19A6B]/30'
+                            }`}
+                          >
+                            {b.origin === 'banco' ? 'Entradas Bancos' : 'Entradas Tesouraria'}
+                          </span>
+                        </td>
+                        <td className="py-1.5 text-right font-mono text-[#433E37]">{b.count}</td>
+                        <td className="py-1.5 text-right font-mono font-bold text-emerald-700">{formatCurrency(b.entrada)}</td>
+                        <td className="py-1.5 text-right font-mono font-bold text-rose-700">{formatCurrency(b.saida)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* ── EXTRATO GERAL: coluna TIPO contra o sinal do valor ───────────
+              Quando as duas discordam, vale o VALOR — é ele que faz o extrato
+              fechar com o saldo do banco. Obedecer ao TIPO inverteria o sinal
+              de um lançamento real. A lista fica visível para a planilha ser
+              corrigida na origem; nada é silenciado. */}
+          {extratoGeralPreview && extratoGeralPreview.divergences.length > 0 && (
+            <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-lg p-3">
+              <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+              <div className="text-[11px] text-amber-900 leading-relaxed w-full">
+                <p className="font-bold">
+                  {extratoGeralPreview.divergences.length} lançamento(s) com a coluna TIPO divergindo do valor.
+                </p>
+                <p className="mt-0.5">
+                  Prevaleceu o <span className="font-bold">sinal do valor</span>, que é o que faz o extrato fechar com o
+                  saldo da conta. Corrija a coluna TIPO na planilha de origem para a divergência não voltar na próxima
+                  importação — o valor gravado aqui já está certo.
+                </p>
+                <ul className="mt-2 space-y-0.5 font-mono">
+                  {extratoGeralPreview.divergences.slice(0, 10).map((r) => (
+                    <li key={r.rowNumber}>
+                      • linha {r.rowNumber}
+                      {r.sheetId ? ` (ID ${r.sheetId})` : ''} — {r.bankRaw} — {r.date} — planilha diz{' '}
+                      <span className="font-bold">{r.sheetType}</span>, gravado como{' '}
+                      <span className="font-bold">{r.derivedType}</span> de{' '}
+                      {formatCurrency(r.entryAmount || r.exitAmount)}
+                    </li>
+                  ))}
+                  {extratoGeralPreview.divergences.length > 10 && (
+                    <li>• … e mais {extratoGeralPreview.divergences.length - 10} lançamento(s).</li>
+                  )}
+                </ul>
+              </div>
+            </div>
+          )}
+
+          {/* ── EXTRATO GERAL: lançamento sem histórico de verdade ───────────
+              Linha cujo histórico é só o nome da própria conta. Entra como
+              movimento REAL de propósito: chamar de transferência interna sem
+              prova apagaria entrada de caixa legítima do resultado. Mas o
+              gestor tem que saber que esse dinheiro está somando. */}
+          {extratoGeralPreview && extratoGeralPreview.semHistorico.length > 0 && (
+            <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-200 rounded-lg p-3">
+              <AlertCircle className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+              <div className="text-[11px] text-blue-900 leading-relaxed">
+                <p className="font-bold">
+                  {extratoGeralPreview.semHistorico.length} lançamento(s) sem histórico — só o nome da própria conta (
+                  {formatCurrency(extratoGeralPreview.semHistoricoValor)}).
+                </p>
+                <p className="mt-0.5">
+                  Entram como <span className="font-bold">movimento real</span> e somam no Resultado Financeiro. Se forem
+                  remanejo entre caixas da empresa, o histórico precisa citar a conta de destino (ex.: "REPASSE PARA
+                  CAIXA 301.01") — só assim o sistema tem como marcá-los como transferência interna e mantê-los fora das
+                  entradas.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* ALERTA DE TRANSFERÊNCIA INTERNA
               Dinheiro que vai da tesouraria para o caixa da mesma empresa não é
               recebimento. Se entrasse como "Entradas de Tesouraria", o Resultado
@@ -1002,12 +1383,13 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
                 <tr className="border-b border-[#EAE6DF] font-bold">
                   <th className="p-2.5 w-10 text-center">#</th>
                   <th className="p-2.5">Status</th>
+                  {sourceType === 'extrato_geral' && <th className="p-2.5">Conta</th>}
                   <th className="p-2.5">Data</th>
                   <th className="p-2.5">Descrição / Cliente</th>
                   <th className="p-2.5">Tipo</th>
                   <th className="p-2.5 text-right">Entrada</th>
                   <th className="p-2.5 text-right">Saída</th>
-                  <th className="p-2.5">Erros</th>
+                  <th className="p-2.5">Erros / Avisos</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#EAE6DF] text-[#433E37]">
@@ -1021,16 +1403,49 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
                         <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">ERRO</span>
                       )}
                     </td>
+                    {sourceType === 'extrato_geral' && (
+                      <td className="p-2.5">
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                            row.origin === 'caixa'
+                              ? 'bg-[#C19A6B]/15 text-[#C19A6B] border-[#C19A6B]/30'
+                              : 'bg-blue-50 text-blue-800 border-blue-200'
+                          }`}
+                          title={row.bankRaw || ''}
+                        >
+                          {row.sourceLabel || row.bankRaw || '-'}
+                        </span>
+                      </td>
+                    )}
                     <td className="p-2.5 font-mono">{row.date || '-'}</td>
                     <td className="p-2.5 max-w-xs truncate" title={row.description}>{row.description || '-'}</td>
-                    <td className="p-2.5 text-[10px]">{row.documentType || '-'}</td>
+                    <td className="p-2.5 text-[10px]">
+                      {row.documentType || '-'}
+                      {/* O TIPO da planilha aparece riscado ao lado do que valeu:
+                          é a forma mais curta de mostrar que o valor mandou. */}
+                      {row.typeDivergence && (
+                        <span className="ml-1 text-amber-700 font-bold" title={`A planilha dizia ${row.sheetType}`}>
+                          (≠ {row.sheetType})
+                        </span>
+                      )}
+                    </td>
                     <td className="p-2.5 text-right font-mono text-emerald-700">
                       {row.entryAmount > 0 ? formatCurrency(row.entryAmount) : '-'}
                     </td>
                     <td className="p-2.5 text-right font-mono text-rose-700">
                       {row.exitAmount > 0 ? formatCurrency(row.exitAmount) : '-'}
                     </td>
-                    <td className="p-2.5 text-rose-700 text-[11px]">{row.errors.length > 0 ? row.errors.join(' | ') : '✓'}</td>
+                    <td className="p-2.5 text-[11px]">
+                      {row.errors.length > 0 ? (
+                        <span className="text-rose-700">{row.errors.join(' | ')}</span>
+                      ) : (row.warnings || []).length > 0 ? (
+                        <span className="text-amber-700" title={(row.warnings || []).join(' | ')}>
+                          {(row.warnings || []).join(' | ')}
+                        </span>
+                      ) : (
+                        '✓'
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -1102,11 +1517,21 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
                 <option key={m} value={m}>{m.toUpperCase()}</option>
               ))}
             </select>
+            <select
+              value={reconFilter}
+              onChange={(e) => setReconFilter(e.target.value as any)}
+              className="bg-[#F9F7F2] border border-[#EAE6DF] text-xs text-[#2D2A26] rounded-lg p-2 font-medium focus:outline-none focus:border-[#C19A6B]"
+              title="Filtra pelo lançamento já ter sido usado (ou não) numa baixa de título"
+            >
+              <option value="all">Baixa: todas</option>
+              <option value="baixado">Só baixadas</option>
+              <option value="livre">Só sem baixa</option>
+            </select>
           </div>
         </div>
 
         {/* Sumário do período filtrado */}
-        <div className="grid grid-cols-3 gap-3 p-4 border-b border-[#EAE6DF] bg-[#F9F7F2]">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 border-b border-[#EAE6DF] bg-[#F9F7F2]">
           <div>
             <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Entradas (filtro)</p>
             <p className="text-sm font-black text-emerald-700">{formatCurrency(totalEntradasPeriodo)}</p>
@@ -1119,6 +1544,13 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
             <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Saldo Líquido (filtro)</p>
             <p className={`text-sm font-black ${saldoLiquidoPeriodo >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
               {formatCurrency(saldoLiquidoPeriodo)}
+            </p>
+          </div>
+          <div>
+            <p className="text-[10px] font-bold text-[#8B7D6B] uppercase">Usados em baixa (filtro)</p>
+            <p className="text-sm font-black text-[#2D2A26]">
+              {filteredEntries.filter((e) => baixaMap.has(e.id)).length}
+              <span className="text-[#8B7D6B] font-bold"> / {filteredEntries.length}</span>
             </p>
           </div>
         </div>
@@ -1134,6 +1566,7 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
                 <th className="p-3 whitespace-nowrap">Tipo</th>
                 <th className="p-3 text-right whitespace-nowrap">Entrada</th>
                 <th className="p-3 text-right whitespace-nowrap">Saída</th>
+                <th className="p-3 text-center whitespace-nowrap">Baixa</th>
                 <th className="p-3 text-center whitespace-nowrap">Ações</th>
               </tr>
             </thead>
@@ -1154,6 +1587,9 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
                   </td>
                   <td className="p-3 text-right font-mono text-rose-700 whitespace-nowrap">
                     {e.exitAmount > 0 ? formatCurrency(e.exitAmount) : '-'}
+                  </td>
+                  <td className="p-3 text-center whitespace-nowrap">
+                    <BaixaPill info={baixaMap.get(e.id)} />
                   </td>
                   <td className="p-3 text-center whitespace-nowrap">
                     <div className="flex items-center justify-center space-x-1.5">
@@ -1179,7 +1615,7 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
               ))}
               {filteredEntries.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="p-6 text-center text-[#8B7D6B]">
+                  <td colSpan={9} className="p-6 text-center text-[#8B7D6B]">
                     Nenhum lançamento importado ainda para este filtro.
                   </td>
                 </tr>
@@ -1284,6 +1720,69 @@ export const FinancialStatementView: React.FC<FinancialStatementViewProps> = ({
                   <p className="text-xs text-[#433E37] bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-3 mt-1">{detailsEntry.notes}</p>
                 </div>
               )}
+
+              {/* Baixa: mostra o título que consumiu este lançamento, se houver.
+                  É a mesma informação da tela de Contas a Receber/Pagar, vista do
+                  outro lado — sem isso o gestor teria que abrir a outra tela e
+                  procurar pelo id do extrato para confirmar o vínculo. */}
+              {(() => {
+                const rec = baixaMap.get(detailsEntry.id);
+                if (!rec) {
+                  return (
+                    <div className="flex items-start gap-2.5 bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-3">
+                      <Link2Off className="w-4 h-4 text-[#8B7D6B] flex-shrink-0 mt-0.5" />
+                      <p className="text-[11px] text-[#8B7D6B]">
+                        Este lançamento ainda não foi usado em nenhuma baixa de título (Contas a Receber/Pagar).
+                      </p>
+                    </div>
+                  );
+                }
+                const auto = rec.titulo.status === 'Baixado Automático';
+                return (
+                  <div
+                    className={`rounded-lg border p-3 ${
+                      auto ? 'bg-emerald-50 border-emerald-200' : 'bg-blue-50 border-blue-200'
+                    }`}
+                  >
+                    <div className="flex items-start gap-2.5">
+                      <Link2 className={`w-4 h-4 flex-shrink-0 mt-0.5 ${auto ? 'text-emerald-700' : 'text-blue-700'}`} />
+                      <div className="w-full">
+                        <p className={`text-xs font-bold ${auto ? 'text-emerald-900' : 'text-blue-900'}`}>
+                          Baixado — {rec.titulo.status}
+                        </p>
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px] mt-2">
+                          <div>
+                            <span className="block text-[10px] font-bold uppercase opacity-70">Movimento</span>
+                            {rec.movType === 'R' ? 'Contas a Receber (entrada)' : 'Contas a Pagar (saída)'}
+                          </div>
+                          <div>
+                            <span className="block text-[10px] font-bold uppercase opacity-70">Título</span>
+                            {rec.titulo.titleCode}
+                          </div>
+                          <div>
+                            <span className="block text-[10px] font-bold uppercase opacity-70">
+                              {rec.movType === 'R' ? 'Cliente' : 'Fornecedor'}
+                            </span>
+                            {rec.titulo.personName || '—'}
+                          </div>
+                          <div>
+                            <span className="block text-[10px] font-bold uppercase opacity-70">Código da baixa</span>
+                            {rec.titulo.baixaCode || '—'}
+                          </div>
+                          <div>
+                            <span className="block text-[10px] font-bold uppercase opacity-70">Baixado em</span>
+                            {rec.titulo.reconciledAt ? rec.titulo.reconciledAt.slice(0, 10) : '—'}
+                          </div>
+                          <div>
+                            <span className="block text-[10px] font-bold uppercase opacity-70">Valor do título</span>
+                            {formatCurrency(rec.titulo.amount)}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
             <div className="p-6 border-t border-[#EAE6DF] flex items-center justify-end bg-[#F9F7F2] rounded-b-xl">
               <button onClick={() => setDetailsEntry(null)} className="px-4 py-2 text-xs font-bold text-[#8B7D6B] hover:text-[#2D2A26]">

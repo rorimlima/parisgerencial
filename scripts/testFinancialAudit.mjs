@@ -127,10 +127,21 @@ check('faturamento de outro ano é ignorado', approx(rowsNotas[0].faturado, 4783
 check('mês sem nota continua caindo para o DRE', rowsNotas[2].faturadoSource === 'dre');
 
 console.log('\n── Contas a pagar e extrato por mês ──');
+// `buildOperatingRows`/`buildAuditChecks` agrupam pelo par de PAGAMENTO
+// (isPaid + paidYear + paidMonthKey), não pelo par de vencimento (year/
+// monthKey) — ver o comentário "DOIS PARES DE ANO/MÊS" em src/types.ts. Os
+// mocks precisam trazer os dois pares porque é isso que o motor lê desde o
+// motor de conciliação (commit 8a25abb); `year`/`monthKey` sozinhos (o
+// vencimento) ficam sem efeito nestas duas conferências.
 const payables = [
-  { id: 'p1', year: 2026, monthKey: 'jan', amount: 200000, status: 'Baixado Automático' },
-  { id: 'p2', year: 2026, monthKey: 'jan', amount: 100000, status: 'Em Aberto' },
-  { id: 'p3', year: 2025, monthKey: 'jan', amount: 500000, status: 'Em Aberto' },
+  // Pago pelo ERP em jan/2026 E já conciliado com o extrato (baixa OK).
+  { id: 'p1', year: 2026, monthKey: 'jan', amount: 200000, status: 'Baixado Automático', isPaid: true, paidYear: 2026, paidMonthKey: 'jan' },
+  // Pago pelo ERP em jan/2026, mas a baixa ainda não achou par no extrato —
+  // é exatamente o caso que a conferência "baixas-pendentes" deve pegar.
+  { id: 'p2', year: 2026, monthKey: 'jan', amount: 100000, status: 'Em Aberto', isPaid: true, paidYear: 2026, paidMonthKey: 'jan' },
+  // Pago em jan/2025: fora do exercício em análise, tem que ser ignorado nas
+  // duas conferências mesmo tendo status 'Em Aberto' igual ao p2.
+  { id: 'p3', year: 2025, monthKey: 'jan', amount: 500000, status: 'Em Aberto', isPaid: true, paidYear: 2025, paidMonthKey: 'jan' },
 ];
 const statementEntries = [
   { id: 's1', year: 2026, monthKey: 'jan', entryAmount: 416305.65, exitAmount: 0 },

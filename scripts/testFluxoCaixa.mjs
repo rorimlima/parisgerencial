@@ -128,13 +128,19 @@ console.log('\n7) Seção "Posição de Caixa Hoje" do PDF mensal (payableForeca
 // Mesmos números do card da tela: Bradesco a vencer dentro do horizonte,
 // PagBank já vencido, e um título de dezembro que NÃO deve entrar no
 // horizonte de 30 dias — prova que o corte de data do PDF é o mesmo da tela.
+// `isOpenForecast` decide pelo `Titulo_Status` (campo `isPaid`), não mais pela
+// presença de `paymentDate` — ver o comentário "O QUE É EM ABERTO DEPOIS DA
+// UNIFICAÇÃO" em src/utils/payableForecast.ts (mudou no commit 8a25abb, junto
+// com o motor de conciliação). Os mocks precisam trazer `isPaid` explícito,
+// senão `undefined` é lido como falsy e todo título — inclusive o já pago —
+// entra na previsão.
 const hoje = '2026-07-27';
 const titulos = [
-  { id: '1', balance: 1274.96, dueDate: '2026-08-10', paymentDate: '' },  // a vencer, dentro do horizonte
-  { id: '2', balance: 12766.7, dueDate: '2026-07-01', paymentDate: '' }, // vencido, não pago
-  { id: '3', balance: 5000, dueDate: '2026-12-01', paymentDate: '' },    // aberto, mas fora do horizonte de 30 dias
-  { id: '4', balance: 0, dueDate: '2026-08-01', paymentDate: '' },       // saldo zerado — não é compromisso
-  { id: '5', balance: 3000, dueDate: '2026-08-05', paymentDate: '2026-07-20' }, // já pago — fora da previsão
+  { id: '1', balance: 1274.96, dueDate: '2026-08-10', paymentDate: '', isPaid: false },  // a vencer, dentro do horizonte
+  { id: '2', balance: 12766.7, dueDate: '2026-07-01', paymentDate: '', isPaid: false }, // vencido, não pago
+  { id: '3', balance: 5000, dueDate: '2026-12-01', paymentDate: '', isPaid: false },    // aberto, mas fora do horizonte de 30 dias
+  { id: '4', balance: 0, dueDate: '2026-08-01', paymentDate: '', isPaid: true },        // saldo zerado — não é compromisso
+  { id: '5', balance: 3000, dueDate: '2026-08-05', paymentDate: '2026-07-20', isPaid: true }, // já pago — fora da previsão
 ];
 
 const abertos = titulos.filter(isOpenForecast);

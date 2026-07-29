@@ -1665,6 +1665,11 @@ export default function App() {
               onDeleteEntry={handleDeleteStatementEntry}
               onClearEntries={handleClearStatementEntries}
               userRole={currentUser.role}
+              /* Só para o extrato mostrar quais lançamentos já foram usados numa
+                 baixa (Contas a Receber/Pagar do mesmo exercício) — a baixa em
+                 si continua vivendo só no título, isto é apenas leitura. */
+              receivables={receivables}
+              payables={payables}
             />
           )}
 

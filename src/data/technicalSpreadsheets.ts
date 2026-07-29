@@ -10,10 +10,25 @@ import { TechnicalSpreadsheetSpec } from '../types';
 
 export const TECHNICAL_SPREADSHEETS: TechnicalSpreadsheetSpec[] = [
   {
+    id: 'spec_extrato_geral',
+    code: 'Extrato Geral',
+    name: 'EXTRATO GERAL — todas as contas (bancos e caixas) em um arquivo',
+    description:
+      'Formato ÚNICO e recomendado de entrada de extrato. Um só arquivo com Bradesco, PagBank e os caixas 301.xx juntos: a coluna BANCO roteia cada linha para a conta certa e a coluna CONTA diz se é BANCO ou DINHEIRO.',
+    targetCollection: 'extrato_financeiro',
+    dbImpact:
+      'Substitui os três formatos por fonte. Gera os lançamentos reais para o motor de conciliação (reconciliation.ts) e as Entradas de Bancos/Tesouraria do Resultado Financeiro. A coluna SAIDA vem NEGATIVA e é o SINAL DO VALOR que define entrada ou saída — a coluna TIPO é apenas conferida contra ele, e as divergências são listadas na prévia em vez de corrigidas em silêncio. Chave determinística por conteúdo (banco, data, histórico, valor) com contador de ocorrência: reimportar atualiza, nunca duplica, mesmo que a coluna ID seja renumerada.',
+    expectedColumns: ['ID', 'BANCO', 'LANCAMENTO', 'DATA', 'ENTRADA', 'SAIDA', 'TIPO', 'CONTA'],
+    sampleFilename: 'extratogeral.xlsx',
+    targetModule: 'statement',
+    importActionType: 'statement',
+  },
+  {
     id: 'spec_extrato_bancario',
     code: 'OFX / XLSX Extrato',
-    name: 'Extratos Bancários Multi-contas (Bradesco, PagBank, Caixa/Tesouraria)',
-    description: 'Extratos de contas correntes, poupanças e caixas operacionais.',
+    name: 'Extratos por fonte — legado (Bradesco XML, PagSeguro, RFN019)',
+    description:
+      'Formatos originais de cada banco/relatório. Mantidos porque a base histórica foi carregada com eles e as chaves precisam continuar reproduzíveis. Para dados novos, use o Extrato Geral.',
     targetCollection: 'extrato_financeiro',
     dbImpact:
       'Gera os lançamentos reais da tesouraria para o motor de conciliação (reconciliation.ts). Alimenta os relatórios de saldo real, fluxo de caixa realizado e conciliação bancária contra os títulos do RFN046. Chave determinística hash (conta, data, documento, valor).',
