@@ -203,11 +203,19 @@ export const buildOperatingRows = (params: {
 
     const recebidoBancos = fin?.entradasBancos || 0;
     const recebidoTesouraria = fin?.entradasTesouraria || 0;
-    const recebido = fin?.totalEntradas || recebidoBancos + recebidoTesouraria;
-    const pago = fin?.totalSaidas || 0;
+    const extratoIn = stmtInByMonth.get(monthKey) || 0;
+    const recebido = (fin?.totalEntradas || 0) > 0
+      ? fin!.totalEntradas
+      : (recebidoBancos + recebidoTesouraria > 0 ? recebidoBancos + recebidoTesouraria : extratoIn);
+
+    const extratoOut = stmtOutByMonth.get(monthKey) || 0;
+    const pagoErp = payablesByMonth.get(monthKey) || 0;
+    const pago = (fin?.totalSaidas || 0) > 0
+      ? fin!.totalSaidas
+      : (extratoOut > 0 ? extratoOut : pagoErp);
 
     // Mês sem qualquer movimento em qualquer base: não entra no painel.
-    if (faturado === 0 && recebido === 0 && pago === 0) continue;
+    if (faturado === 0 && recebido === 0 && pago === 0 && pagoErp === 0 && extratoIn === 0 && extratoOut === 0) continue;
 
     rows.push({
       monthKey,

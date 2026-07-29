@@ -262,6 +262,20 @@ export const updateTituloFields = async (
   if (fields.matchReason !== undefined) data.baixa_motivo = fields.matchReason;
   if (fields.notes !== undefined) data.observacoes = fields.notes;
   if (fields.customerId !== undefined) data.cliente_id = fields.customerId;
+
+  if (fields.isPaid !== undefined) data.pago = fields.isPaid;
+  if (fields.paymentDate !== undefined) data.data_pagamento = fields.paymentDate;
+  if (fields.paidYear !== undefined) data.ano_pagamento = fields.paidYear;
+  if (fields.paidMonthKey !== undefined) data.mes_pagamento = fields.paidMonthKey;
+
+  // Se o status for de baixa e não tiver sido passado isPaid explícito, define como pago
+  if (fields.status && ['Baixado Manual', 'Baixado Automático', 'Conciliado'].includes(fields.status)) {
+    data.pago = true;
+    if (!data.data_pagamento && fields.reconciledAt) data.data_pagamento = fields.reconciledAt;
+  } else if (fields.status === 'Em Aberto') {
+    data.pago = false;
+  }
+
   await withTimeout(
     setDoc(doc(db, collectionFor(movType), id), data, { merge: true }),
     12000,

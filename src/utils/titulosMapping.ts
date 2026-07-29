@@ -130,6 +130,32 @@ export const tituloFromFirestore = (
   fallbackMov: TituloMovType
 ): TituloFinanceiro => {
   const movType: TituloMovType = d.movimento === 'R' || d.movimento === 'P' ? d.movimento : fallbackMov;
+  const statusBaixa: BaixaStatus = (d.status_baixa as BaixaStatus) || 'Em Aberto';
+  const isPaid =
+    d.pago === true ||
+    d.status_erp === 'Pago' ||
+    statusBaixa === 'Baixado Manual' ||
+    statusBaixa === 'Baixado Automático' ||
+    statusBaixa === 'Conciliado';
+
+  const paymentDate = d.data_pagamento || d.baixa_em || '';
+  let paidYear = Number(d.ano_pagamento) || 0;
+  let paidMonthKey = d.mes_pagamento || '';
+
+  if (isPaid && (!paidYear || !paidMonthKey)) {
+    const refDateStr = paymentDate || d.data_vencimento || d.data_emissao || '';
+    if (refDateStr) {
+      const dt = new Date(refDateStr);
+      if (!isNaN(dt.getTime())) {
+        const ALL_MONTH_KEYS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+        if (!paidYear) paidYear = dt.getFullYear();
+        if (!paidMonthKey) paidMonthKey = ALL_MONTH_KEYS[dt.getMonth()];
+      }
+    }
+    if (!paidYear) paidYear = Number(d.ano) || 0;
+    if (!paidMonthKey) paidMonthKey = d.mes_chave || '';
+  }
+
   return {
     id,
     dedupeKey: d.chave || `${movType}_${d.titulo_codigo || ''}`,
@@ -149,18 +175,18 @@ export const tituloFromFirestore = (
     issueDate: d.data_emissao || '',
     entryDate: d.data_entrada || '',
     dueDate: d.data_vencimento || '',
-    paymentDate: d.data_pagamento || '',
+    paymentDate,
     year: Number(d.ano) || 0,
     monthKey: d.mes_chave || '',
-    paidYear: Number(d.ano_pagamento) || 0,
-    paidMonthKey: d.mes_pagamento || '',
+    paidYear,
+    paidMonthKey,
 
     amount: Number(d.valor) || 0,
     balance: Number(d.saldo) || 0,
     penaltyAmount: Number(d.valor_pendente) || 0,
 
     erpStatus: d.status_erp || '',
-    isPaid: d.pago === true,
+    isPaid,
 
     invoiceCode: d.fatura_codigo || '',
     fiscalNoteCode: d.nota_fiscal_codigo || '',
@@ -181,7 +207,7 @@ export const tituloFromFirestore = (
     operationNatureCode: d.natureza_operacao_codigo || '',
     operationNature: d.natureza_operacao || '',
 
-    status: (d.status_baixa as BaixaStatus) || 'Em Aberto',
+    status: statusBaixa,
     reconciledStatementId: d.extrato_id || '',
     reconciledSource: d.extrato_fonte || '',
     reconciledAt: d.baixa_em || '',

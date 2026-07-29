@@ -93,14 +93,33 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     if (setActiveTab) setActiveTab(tab);
   };
 
-  // Meses com dados reais (econômico e financeiro)
+  // Meses com dados reais (econômico, financeiro, extratos, notas ou títulos)
   const allMonthKeys = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
-  const ecoMonthKeys = allMonthKeys.filter((m) => (economicMonths[m]?.receitaBruta || 0) > 0);
-  const finMonthKeys = allMonthKeys.filter((m) => (financialMonths[m]?.totalEntradas || 0) > 0);
-  // Para gráficos, usa todos os meses que têm algum dado
-  const monthKeys = Array.from(new Set([...ecoMonthKeys, ...finMonthKeys])).sort(
-    (a, b) => allMonthKeys.indexOf(a) - allMonthKeys.indexOf(b)
-  );
+
+  const monthKeys = allMonthKeys.filter((m) => {
+    const eco = economicMonths[m];
+    const fin = financialMonths[m];
+    const billing = billingSummaries.find((b) => b.year === selectedYear && b.monthKey === m);
+    const payablesMonth = payables.some((p) => (p.isPaid && p.paidYear === selectedYear && p.paidMonthKey === m) || (p.year === selectedYear && p.monthKey === m));
+    const stmtMonth = statementEntries.some((s) => s.year === selectedYear && s.monthKey === m);
+
+    return (
+      (eco?.receitaBruta || 0) > 0 ||
+      (eco?.cmv || 0) > 0 ||
+      (eco?.despesasFixas || 0) > 0 ||
+      (eco?.resultadoEconomico || 0) !== 0 ||
+      (fin?.totalEntradas || 0) > 0 ||
+      (fin?.entradasBancos || 0) > 0 ||
+      (fin?.entradasTesouraria || 0) > 0 ||
+      (fin?.totalSaidas || 0) > 0 ||
+      (fin?.estoque || 0) > 0 ||
+      (fin?.inadimplenciaMensal || 0) > 0 ||
+      (billing?.grossRevenue || 0) > 0 ||
+      payablesMonth ||
+      stmtMonth
+    );
+  });
+
   const displayMonths = monthKeys.length > 0 ? monthKeys : allMonthKeys.slice(0, 6);
 
   // Calculations for Economic DRE
@@ -114,15 +133,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       : 0;
 
   // Calculations for Financial Cash Flow
-  const totalEntradas = displayMonths.reduce((acc, m) => acc + (financialMonths[m]?.totalEntradas || 0), 0);
+  const totalEntradas = displayMonths.reduce(
+    (acc, m) =>
+      acc +
+      (financialMonths[m]?.totalEntradas ||
+        (financialMonths[m]?.entradasBancos || 0) + (financialMonths[m]?.entradasTesouraria || 0)),
+    0
+  );
   const totalSaidas = displayMonths.reduce((acc, m) => acc + (financialMonths[m]?.totalSaidas || 0), 0);
   const totalResFin = totalEntradas - totalSaidas;
   const avgEstoque =
-    finMonthKeys.length > 0
-      ? finMonthKeys.reduce((acc, m) => acc + (financialMonths[m]?.estoque || 0), 0) / finMonthKeys.length
+    monthKeys.length > 0
+      ? monthKeys.reduce((acc, m) => acc + (financialMonths[m]?.estoque || 0), 0) / monthKeys.length
       : 0;
+
   // Pega a inadimplência acumulada do último mês com dados
-  const lastFinMonth = [...finMonthKeys].pop();
+  const lastFinMonth = [...monthKeys].pop();
   const currentInadAcumulada = lastFinMonth ? (financialMonths[lastFinMonth]?.inadimplenciaAcumulada || 0) : 0;
 
   // Chart Data Preparation

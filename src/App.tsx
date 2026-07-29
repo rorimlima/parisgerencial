@@ -1428,14 +1428,24 @@ export default function App() {
   ) => {
     const lista = movType === 'R' ? receivables : payables;
     const now = new Date().toISOString();
+    const dt = new Date(now);
+    const paidYear = dt.getFullYear();
+    const ALL_MONTH_KEYS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+    const paidMonthKey = ALL_MONTH_KEYS[dt.getMonth()];
     const baixaCode = gerarBaixaCode(movType, lista);
+
     await atualizarTitulo(movType, id, {
       status: 'Baixado Manual',
       reconciledAt: now,
       baixaCode,
       reconciledStatementId: statementId || '',
       reconciledSource: source || '',
+      isPaid: true,
+      paymentDate: now,
+      paidYear,
+      paidMonthKey,
     });
+
     setTitulosState(
       movType,
       lista.map((x) =>
@@ -1443,6 +1453,10 @@ export default function App() {
           ? {
               ...x,
               status: 'Baixado Manual' as BaixaStatus,
+              isPaid: true,
+              paymentDate: now,
+              paidYear,
+              paidMonthKey,
               reconciledAt: now,
               baixaCode,
               reconciledStatementId: statementId || x.reconciledStatementId,
@@ -1462,12 +1476,20 @@ export default function App() {
       reconciledAt: '',
       matchScore: 0,
       matchReason: '',
+      isPaid: false,
     });
     setTitulosState(
       movType,
       lista.map((x) =>
         x.id === id
-          ? { ...x, status: 'Em Aberto' as BaixaStatus, reconciledStatementId: '', reconciledSource: '', reconciledAt: '' }
+          ? {
+              ...x,
+              status: 'Em Aberto' as BaixaStatus,
+              isPaid: false,
+              reconciledStatementId: '',
+              reconciledSource: '',
+              reconciledAt: '',
+            }
           : x
       )
     );
