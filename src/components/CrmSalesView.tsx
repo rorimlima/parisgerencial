@@ -133,11 +133,11 @@ const fmtPct = (n: number) => `${(Number.isFinite(n) ? n : 0).toLocaleString('pt
 const fmtInt = (n: number) => (n ?? 0).toLocaleString('pt-BR');
 
 export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
-  auditedSales,
-  stockItems,
-  customers,
-  sellers,
-  delinquentTitles,
+  auditedSales = [],
+  stockItems = [],
+  customers = [],
+  sellers = [],
+  delinquentTitles = [],
   selectedYear,
 }) => {
   const [activeTab, setActiveTab] = useState<'matrix' | 'abc' | 'customers' | 'sellers'>('matrix');
@@ -149,34 +149,39 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
   const [minMarginFilter, setMinMarginFilter] = useState<number>(0);
   const [copiedScript, setCopiedScript] = useState<string | null>(null);
 
+  const safeAuditedSales = auditedSales || [];
+  const safeStockItems = stockItems || [];
+  const safeCustomers = customers || [];
+  const safeDelinquentTitles = delinquentTitles || [];
+
   // Map de Estoque por produto
   const stockMap = useMemo(() => {
     const map = new Map<string, StockItem>();
-    stockItems.forEach((s) => {
-      if (s.productCode) map.set(s.productCode.toString().trim(), s);
+    safeStockItems.forEach((s) => {
+      if (s?.productCode) map.set(s.productCode.toString().trim(), s);
     });
     return map;
-  }, [stockItems]);
+  }, [safeStockItems]);
 
   // Map de Inadimplência por cliente
   const overdueByCustomer = useMemo(() => {
     const map = new Map<string, number>();
-    delinquentTitles.forEach((t) => {
-      const k = normalizePersonCode(t.customerCode);
+    safeDelinquentTitles.forEach((t) => {
+      const k = normalizePersonCode(t?.customerCode);
       if (!k) return;
       map.set(k, (map.get(k) || 0) + (t.updatedAmount || t.originalAmount || 0));
     });
     return map;
-  }, [delinquentTitles]);
+  }, [safeDelinquentTitles]);
 
   // Map de Clientes do cadastro
   const customerMap = useMemo(() => {
     const map = new Map<string, Customer>();
-    customers.forEach((c) => {
-      if (c.code) map.set(normalizePersonCode(c.code), c);
+    safeCustomers.forEach((c) => {
+      if (c?.code) map.set(normalizePersonCode(c.code), c);
     });
     return map;
-  }, [customers]);
+  }, [safeCustomers]);
 
   // ── 1. Consolidação dos Produtos para o CRM ────────────────────────────────
   const productSummaries = useMemo<ProductCrmSummary[]>(() => {
@@ -192,14 +197,14 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
       }
     >();
 
-    auditedSales.forEach((s) => {
-      const code = (s.productCode || '').toString().trim() || 'SEM_CODIGO';
-      const desc = s.productDescription || 'Produto sem descrição';
-      const brand = s.brandReference || '';
+    safeAuditedSales.forEach((s) => {
+      const code = (s?.productCode || '').toString().trim() || 'SEM_CODIGO';
+      const desc = s?.productDescription || 'Produto sem descrição';
+      const brand = s?.brandReference || '';
       const cur = map.get(code) || { code, desc, brand, qty: 0, net: 0, margin: 0 };
-      cur.qty += s.quantity || 0;
-      cur.net += s.netAmount || 0;
-      cur.margin += s.marginCalculated ?? s.marginErp ?? 0;
+      cur.qty += s?.quantity || 0;
+      cur.net += s?.netAmount || 0;
+      cur.margin += s?.marginCalculated ?? s?.marginErp ?? 0;
       if (!cur.brand && brand) cur.brand = brand;
       map.set(code, cur);
     });
@@ -299,7 +304,7 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
         cumMarginPct: marAbc.cumPct,
       };
     });
-  }, [auditedSales, stockMap]);
+  }, [safeAuditedSales, stockMap]);
 
   // ── 2. Consolidação dos Clientes para o CRM ────────────────────────────────
   const customerSummaries = useMemo<CustomerCrmSummary[]>(() => {
@@ -321,9 +326,9 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
 
     const today = new Date();
 
-    auditedSales.forEach((s) => {
-      const code = normalizePersonCode(s.customerCode || '') || 'SEM_CODIGO';
-      const name = s.customerName || 'Cliente não identificado';
+    safeAuditedSales.forEach((s) => {
+      const code = normalizePersonCode(s?.customerCode || '') || 'SEM_CODIGO';
+      const name = s?.customerName || 'Cliente não identificado';
       const cur = map.get(code) || {
         code,
         name,

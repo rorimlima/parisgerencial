@@ -55,6 +55,61 @@ const ViewSkeleton: React.FC = () => (
   </div>
 );
 
+interface ErrorBoundaryProps {
+  children: React.ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error('Erro de Renderização Capturado no App:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="bg-white p-8 rounded-2xl border border-rose-200 shadow-md max-w-xl mx-auto space-y-4 my-8 text-center">
+          <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto font-bold text-xl">
+            !
+          </div>
+          <h2 className="text-lg font-extrabold text-[#2D2A26]">Aviso de Renderização do Módulo</h2>
+          <p className="text-xs text-[#8B7D6B] leading-relaxed">
+            Ocorreu uma inconsistência temporária de exibição nesta tela. Clique no botão abaixo para restaurar a navegação.
+          </p>
+          {this.state.error?.message && (
+            <p className="text-[11px] text-rose-700 font-mono bg-rose-50 p-3 rounded-lg text-left overflow-x-auto border border-rose-200">
+              {this.state.error.message}
+            </p>
+          )}
+          <button
+            onClick={() => {
+              this.setState({ hasError: false, error: null });
+              window.location.reload();
+            }}
+            className="px-6 py-2.5 bg-[#2D2A26] hover:bg-[#3F3B35] text-white font-bold text-xs uppercase tracking-wider rounded-xl transition-all shadow-sm"
+          >
+            Recarregar Módulo
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 import {
   getEconomicData,
   getFinancialData,
@@ -1651,7 +1706,8 @@ export default function App() {
 
         {/* Main Content */}
         <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 space-y-6">
-          <Suspense fallback={<ViewSkeleton />}>
+          <ErrorBoundary key={activeTab}>
+            <Suspense fallback={<ViewSkeleton />}>
           {activeTab === 'dashboard' && (
             <DashboardView
               economicMonths={economicData}
@@ -1898,6 +1954,7 @@ export default function App() {
             <UserManagementView currentUser={currentUser} />
           )}
           </Suspense>
+          </ErrorBoundary>
         </main>
       </div>
 
