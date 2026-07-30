@@ -344,6 +344,7 @@ export interface TituloFinanceiro {
   // ── Valores ────────────────────────────────────────────────────────────────
   amount: number;                // Titulo_Valor — valor do título
   balance: number;               // Titulo_Saldo — o que ainda falta liquidar
+  paidAmount?: number;           // Valor efetivamente pago na baixa manual
   penaltyAmount: number;         // Titulo_MovValorPen
 
   // ── Situação no ERP — é isto que libera o lançamento para o realizado ──────

@@ -248,7 +248,7 @@ export interface TitulosWorkspaceProps {
   onSaveSettings: (s: ReconciliationSettings) => void;
   onImport: (titulos: TituloFinanceiro[]) => Promise<void>;
   onApplyMatches: (matches: ReconciliationMatch[], status: BaixaStatus) => Promise<void>;
-  onManualBaixa: (id: string, statementId?: string, source?: string) => Promise<void>;
+  onManualBaixa: (id: string, statementId?: string, source?: string, paidAmount?: number) => Promise<void>;
   /**
    * Grava a conta de origem apontada pelo gestor. `accountKey` vazio LIMPA a
    * escolha e devolve o título à conta inferida pela baixa — sem esse caminho de
@@ -315,6 +315,7 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
   const [baixaSearchQuery, setBaixaSearchQuery] = useState('');
   const [baixaBusy, setBaixaBusy] = useState(false);
   const [baixaError, setBaixaError] = useState<string | null>(null);
+  const [editedPaidAmounts, setEditedPaidAmounts] = useState<Record<string, number>>({});
 
   // ── Estado da importação ──────────────────────────────────────────────────
   const [preview, setPreview] = useState<TituloPreviewRow[] | null>(null);
@@ -380,12 +381,21 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
   );
 
   const openBaixaSearch = useCallback((titulo: TituloFinanceiro) => {
+    const currentPaid =
+      editedPaidAmounts[titulo.id] !== undefined
+        ? editedPaidAmounts[titulo.id]
+        : titulo.paidAmount !== undefined && titulo.paidAmount > 0
+        ? titulo.paidAmount
+        : titulo.balance > 0
+        ? titulo.balance
+        : titulo.amount;
+
     setBaixaSearchTarget(titulo);
     setBaixaSearchDays(BAIXA_SEARCH_WINDOW_DEFAULT);
-    setBaixaSearchAmount(String(titulo.balance > 0 ? titulo.balance : titulo.amount));
+    setBaixaSearchAmount(String(currentPaid));
     setBaixaSearchQuery('');
     setBaixaError(null);
-  }, []);
+  }, [editedPaidAmounts]);
 
   const closeBaixaSearch = useCallback(() => {
     setBaixaSearchTarget(null);
@@ -448,7 +458,15 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
       setBaixaBusy(true);
       setBaixaError(null);
       try {
-        await onManualBaixa(baixaSearchTarget.id, statementId, source);
+        const parsedAmt = parseNumberPtBr(baixaSearchAmount);
+        const valorPagoFinal =
+          editedPaidAmounts[baixaSearchTarget.id] !== undefined
+            ? editedPaidAmounts[baixaSearchTarget.id]
+            : Number.isFinite(parsedAmt) && parsedAmt > 0
+            ? parsedAmt
+            : baixaSearchTarget.paidAmount || baixaSearchTarget.amount;
+
+        await onManualBaixa(baixaSearchTarget.id, statementId, source, valorPagoFinal);
         closeBaixaSearch();
       } catch (err) {
         setBaixaError(err instanceof Error ? err.message : 'Falha ao processar a baixa. Tente novamente.');
@@ -1400,26 +1418,27 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
           )}
 
           {/* Tabela */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
+          <div className="overflow-x-auto shadow-2xs rounded-xl border border-[#EAE6DF] bg-white">
+            <table className="w-full text-xs border-collapse">
               <thead className="bg-[#F3F1ED] text-[#8B7D6B]">
                 <tr>
                   {[
                     { k: 'personName' as const, label: t.personLabel, align: 'left' },
                     { k: null, label: 'Título', align: 'left' },
-                    { k: 'dueDate' as const, label: 'Vencimento', align: 'left' },
-                    { k: 'paymentDate' as const, label: 'Pagamento', align: 'left' },
+                    { k: 'dueDate' as const, label: 'Vencimento', align: 'center' },
+                    { k: 'paymentDate' as const, label: 'Pagamento', align: 'center' },
                     { k: 'amount' as const, label: 'Valor', align: 'right' },
+                    { k: null, label: 'Valor Pago', align: 'right' },
                     { k: null, label: 'Saldo', align: 'right' },
                     { k: null, label: 'ERP', align: 'center' },
                     { k: null, label: 'Baixa', align: 'center' },
                     { k: null, label: t.originLabel, align: 'left' },
-                    { k: null, label: '', align: 'right' },
+                    { k: null, label: 'Ações', align: 'center' },
                   ].map((c, i) => (
                     <th
                       key={i}
                       onClick={() => c.k && toggleSort(c.k)}
-                      className={`px-3 py-2.5 text-[10px] uppercase tracking-wider font-bold whitespace-nowrap ${
+                      className={`px-1.5 py-2 text-[10px] uppercase tracking-wider font-bold whitespace-nowrap ${
                         c.align === 'right' ? 'text-right' : c.align === 'center' ? 'text-center' : 'text-left'
                       } ${c.k ? 'cursor-pointer hover:text-[#2D2A26] select-none' : ''}`}
                     >
@@ -1435,75 +1454,115 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
                 {pageItems.map((x) => {
                   const vencido = !x.isPaid && !!x.dueDate && x.dueDate < hoje;
                   const linked = !!customerIndex.get(normalizePersonCode(x.personCode));
+
+                  const currentPaid =
+                    editedPaidAmounts[x.id] !== undefined
+                      ? editedPaidAmounts[x.id]
+                      : x.paidAmount !== undefined && x.paidAmount > 0
+                      ? x.paidAmount
+                      : x.balance > 0
+                      ? x.balance
+                      : x.amount;
+
                   return (
                     <tr key={x.id} className={`hover:bg-[#F9F7F2] transition-colors ${vencido ? 'bg-rose-50/40' : ''}`}>
-                      <td className="px-3 py-2.5 max-w-[240px]">
-                        <div className="flex items-center gap-1.5">
+                      {/* 1. FORNECEDOR / CLIENTE */}
+                      <td className="px-1.5 py-1.5 max-w-[140px] lg:max-w-[170px]">
+                        <div className="flex items-start gap-1">
                           {linked ? (
-                            <Link2 className="w-3 h-3 text-emerald-600 shrink-0" />
+                            <Link2 className="w-3 h-3 text-emerald-600 shrink-0 mt-0.5" />
                           ) : (
-                            <Link2Off className="w-3 h-3 text-amber-500 shrink-0" />
+                            <Link2Off className="w-3 h-3 text-amber-500 shrink-0 mt-0.5" />
                           )}
-                          <span className="font-bold text-[#2D2A26] truncate" title={x.personName}>
+                          <span className="font-bold text-[#2D2A26] text-[11px] leading-tight break-words whitespace-normal line-clamp-2" title={x.personName}>
                             {x.personName || '—'}
                           </span>
                         </div>
-                        <span className="text-[10px] text-[#8B7D6B] font-mono">
+                        <span className="text-[9px] text-[#8B7D6B] font-mono block truncate mt-0.5">
                           cód. {x.personCode || '—'} · {x.department || 'sem depto'}
                         </span>
                       </td>
-                      <td className="px-3 py-2.5">
-                        <span className="font-mono text-[11px] text-[#433E37]">{x.titleNumber || x.titleCode}</span>
-                        <span className="block text-[10px] text-[#8B7D6B]">
+
+                      {/* 2. TÍTULO */}
+                      <td className="px-1.5 py-1.5 max-w-[90px]">
+                        <span className="font-mono text-[10px] text-[#433E37] block truncate" title={x.titleNumber || x.titleCode}>
+                          {x.titleNumber || x.titleCode}
+                        </span>
+                        <span className="block text-[9px] text-[#8B7D6B] truncate">
                           {x.parcela || '—'} · {x.titleType || '—'}
                         </span>
                       </td>
-                      <td className={`px-3 py-2.5 whitespace-nowrap ${vencido ? 'text-rose-700 font-bold' : 'text-[#433E37]'}`}>
+
+                      {/* 3. VENCIMENTO */}
+                      <td className={`px-1 py-1.5 whitespace-nowrap text-center text-[10px] ${vencido ? 'text-rose-700 font-bold' : 'text-[#433E37]'}`}>
                         {formatIsoBr(x.dueDate)}
                       </td>
-                      <td className="px-3 py-2.5 whitespace-nowrap text-[#433E37]">{formatIsoBr(x.paymentDate)}</td>
-                      <td className="px-3 py-2.5 text-right font-bold tabular-nums text-[#2D2A26] whitespace-nowrap">
+
+                      {/* 4. PAGAMENTO */}
+                      <td className="px-1 py-1.5 whitespace-nowrap text-center text-[10px] text-[#433E37]">
+                        {formatIsoBr(x.paymentDate)}
+                      </td>
+
+                      {/* 5. VALOR */}
+                      <td className="px-1.5 py-1.5 text-right font-bold tabular-nums text-[11px] text-[#2D2A26] whitespace-nowrap">
                         {formatCurrency(x.amount)}
                       </td>
+
+                      {/* 6. VALOR PAGO (EDITÁVEL) */}
+                      <td className="px-1.5 py-1.5 text-right whitespace-nowrap">
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={currentPaid}
+                          onChange={(e) => {
+                            const v = parseFloat(e.target.value);
+                            setEditedPaidAmounts((prev) => ({ ...prev, [x.id]: isNaN(v) ? 0 : v }));
+                          }}
+                          disabled={!canEdit}
+                          title="Valor pago a ser confirmado na baixa manual"
+                          className="w-[82px] text-right font-bold text-[11px] tabular-nums px-1 py-0.5 rounded border border-[#C19A6B]/50 bg-amber-50/60 focus:bg-white focus:border-[#C19A6B] focus:outline-none focus:ring-1 focus:ring-[#C19A6B] text-[#2D2A26]"
+                        />
+                      </td>
+
+                      {/* 7. SALDO */}
                       <td
-                        className={`px-3 py-2.5 text-right tabular-nums whitespace-nowrap ${
+                        className={`px-1.5 py-1.5 text-right tabular-nums text-[10px] whitespace-nowrap ${
                           x.balance > 0 ? 'text-amber-700 font-bold' : 'text-[#8B7D6B]'
                         }`}
                       >
                         {formatCurrency(x.balance)}
                       </td>
-                      <td className="px-3 py-2.5 text-center">
+
+                      {/* 8. ERP */}
+                      <td className="px-1 py-1.5 text-center">
                         <ErpPill titulo={x} />
                       </td>
-                      <td className="px-3 py-2.5 text-center">
+
+                      {/* 9. BAIXA */}
+                      <td className="px-1 py-1.5 text-center">
                         <StatusPill status={x.status} />
                         {x.matchScore !== undefined && x.matchScore > 0 && (
-                          <span className="block text-[9px] text-[#8B7D6B] mt-0.5" title={x.matchReason}>
+                          <span className="block text-[8px] text-[#8B7D6B] mt-0.5" title={x.matchReason}>
                             score {x.matchScore}
                           </span>
                         )}
                       </td>
-                      {/* CONTA DE ORIGEM.
-                          O `value` do select vem da origem RESOLVIDA, não do campo
-                          gravado: assim o título baixado contra o extrato já
-                          aparece com a conta certa sem ninguém ter tocado nele. Ao
-                          escolher, a decisão passa a ser do gestor e vence a baixa
-                          (ver utils/paymentAccounts.ts). A opção "— usar a conta da
-                          baixa —" é o caminho de volta. */}
-                      <td className="px-3 py-2.5 whitespace-nowrap">
+
+                      {/* 10. CONTA DE ORIGEM */}
+                      <td className="px-1 py-1.5 whitespace-nowrap">
                         {(() => {
                           const origem = originByTitulo.get(x.id);
                           const key = origem?.accountKey || '';
                           const definidoPeloGestor = origem?.source === 'gestor';
                           if (!canEdit) {
                             return origem && key ? (
-                              <span className="text-[11px] text-[#433E37] font-bold">{origem.label}</span>
+                              <span className="text-[10px] text-[#433E37] font-bold">{origem.label}</span>
                             ) : (
-                              <span className="text-[11px] text-[#8B7D6B]">—</span>
+                              <span className="text-[10px] text-[#8B7D6B]">—</span>
                             );
                           }
                           return (
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-0.5">
                               <select
                                 value={definidoPeloGestor ? key : ''}
                                 onChange={(e) => {
@@ -1520,7 +1579,7 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
                                   );
                                 }}
                                 title={`${t.originHint}${origem?.label ? ` — hoje: ${origem.label}` : ''}`}
-                                className={`text-[11px] px-1.5 py-1 rounded-md border bg-white max-w-[152px] ${
+                                className={`text-[10px] px-1 py-0.5 rounded border bg-white max-w-[110px] truncate ${
                                   definidoPeloGestor
                                     ? 'border-[#C19A6B] text-[#2D2A26] font-bold'
                                     : key
@@ -1537,29 +1596,31 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
                                   </option>
                                 ))}
                                 <option value="__ADD_NEW__" className="font-semibold text-amber-800 bg-amber-50">
-                                  + Cadastrar nova origem...
+                                  + Cadastrar origem...
                                 </option>
                               </select>
                               <button
                                 type="button"
                                 onClick={() => openCreateOriginModal(x.id)}
                                 title="Cadastrar nova origem manualmente"
-                                className="p-1 rounded text-[#8B7D6B] hover:text-amber-800 hover:bg-amber-100 transition-colors shrink-0"
+                                className="p-0.5 rounded text-[#8B7D6B] hover:text-amber-800 hover:bg-amber-100 transition-colors shrink-0"
                               >
-                                <Plus className="w-3.5 h-3.5" />
+                                <Plus className="w-3 h-3" />
                               </button>
                             </div>
                           );
                         })()}
                       </td>
-                      <td className="px-3 py-2.5 text-right whitespace-nowrap">
+
+                      {/* 11. AÇÕES */}
+                      <td className="px-1 py-1.5 text-center whitespace-nowrap">
                         {canEdit && (
-                          <div className="inline-flex items-center gap-1">
+                          <div className="inline-flex items-center gap-0.5">
                             {x.status === 'Em Aberto' || x.status === 'Conferir' ? (
                               <button
                                 onClick={() => openBaixaSearch(x)}
-                                title="Dar baixa manual — buscar no extrato"
-                                className="p-1.5 rounded-md text-emerald-700 hover:bg-emerald-50 border border-transparent hover:border-emerald-200"
+                                title="Dar baixa manual (confirmar valor pago)"
+                                className="p-1 rounded-md text-emerald-700 bg-emerald-50/80 hover:bg-emerald-100 border border-emerald-300/60 shadow-2xs"
                               >
                                 <CheckCircle2 className="w-3.5 h-3.5" />
                               </button>
@@ -1567,7 +1628,7 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
                               <button
                                 onClick={() => onRevertBaixa(x.id)}
                                 title="Reverter baixa"
-                                className="p-1.5 rounded-md text-[#8B7D6B] hover:bg-[#F3F1ED] border border-transparent hover:border-[#EAE6DF]"
+                                className="p-1 rounded-md text-[#8B7D6B] hover:bg-[#F3F1ED] border border-transparent hover:border-[#EAE6DF]"
                               >
                                 <RefreshCcw className="w-3.5 h-3.5" />
                               </button>
@@ -1575,7 +1636,7 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
                             <button
                               onClick={() => onDelete(x.id)}
                               title="Excluir título"
-                              className="p-1.5 rounded-md text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200"
+                              className="p-1 rounded-md text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
@@ -1587,7 +1648,7 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
                 })}
                 {pageItems.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="px-3 py-12 text-center text-[#8B7D6B]">
+                    <td colSpan={11} className="px-3 py-12 text-center text-[#8B7D6B]">
                       Nenhum título encontrado com os filtros atuais.
                     </td>
                   </tr>

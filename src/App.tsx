@@ -1480,7 +1480,8 @@ export default function App() {
     movType: TituloMovType,
     id: string,
     statementId?: string,
-    source?: string
+    source?: string,
+    paidAmount?: number
   ) => {
     const lista = movType === 'R' ? receivables : payables;
     const now = new Date().toISOString();
@@ -1489,6 +1490,9 @@ export default function App() {
     const ALL_MONTH_KEYS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
     const paidMonthKey = ALL_MONTH_KEYS[dt.getMonth()];
     const baixaCode = gerarBaixaCode(movType, lista);
+
+    const existing = lista.find((x) => x.id === id);
+    const finalPaidAmount = paidAmount !== undefined ? paidAmount : (existing?.paidAmount || existing?.amount || 0);
 
     await atualizarTitulo(movType, id, {
       status: 'Baixado Manual',
@@ -1500,6 +1504,7 @@ export default function App() {
       paymentDate: now,
       paidYear,
       paidMonthKey,
+      paidAmount: finalPaidAmount,
     });
 
     setTitulosState(
@@ -1517,6 +1522,7 @@ export default function App() {
               baixaCode,
               reconciledStatementId: statementId || x.reconciledStatementId,
               reconciledSource: source || x.reconciledSource,
+              paidAmount: finalPaidAmount,
             }
           : x
       )
@@ -1779,8 +1785,8 @@ export default function App() {
               onApplyMatches={(matches, status) =>
                 handleApplyMatches(activeTab === 'receivables' ? 'R' : 'P', matches, status)
               }
-              onManualBaixa={(id, sid, src) =>
-                handleManualBaixaTitulo(activeTab === 'receivables' ? 'R' : 'P', id, sid, src)
+              onManualBaixa={(id, sid, src, pAmt) =>
+                handleManualBaixaTitulo(activeTab === 'receivables' ? 'R' : 'P', id, sid, src, pAmt)
               }
               onSetOrigin={(id, accountKey, accountLabel) =>
                 handleSetTituloOrigin(activeTab === 'receivables' ? 'R' : 'P', id, accountKey, accountLabel)
