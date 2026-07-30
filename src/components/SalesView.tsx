@@ -96,9 +96,10 @@ interface SalesViewProps {
   userRole: string;
 }
 
-type SalesTab = 'geral' | 'vendedores' | 'clientes' | 'produtos' | 'auditoria' | 'vinculos';
+type SalesTab = 'crm' | 'geral' | 'vendedores' | 'clientes' | 'produtos' | 'auditoria' | 'vinculos';
 
 const TABS: { id: SalesTab; label: string }[] = [
+  { id: 'crm', label: '🔥 CRM & Curva ABC' },
   { id: 'geral', label: 'Visão Geral' },
   { id: 'vendedores', label: 'Vendedores' },
   { id: 'clientes', label: 'Clientes' },
@@ -126,7 +127,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
   onLoadYear,
   userRole,
 }) => {
-  const [tab, setTab] = useState<SalesTab>('geral');
+  const [tab, setTab] = useState<SalesTab>('crm');
   const [searchInput, setSearchInput] = useState('');
   const search = useDebouncedValue(searchInput, 300);
   const [sellerFilter, setSellerFilter] = useState('all');
@@ -743,6 +744,16 @@ export const SalesView: React.FC<SalesViewProps> = ({
 
       {!isLoading && items.length > 0 && (
         <>
+          {tab === 'crm' && (
+            <CrmSalesView
+              auditedSales={audit.audited}
+              stockItems={stockItems}
+              customers={customers}
+              sellers={registeredSellers}
+              delinquentTitles={delinquentTitles}
+              selectedYear={selectedYear}
+            />
+          )}
           {tab === 'geral' && <OverviewTab months={months} audit={audit} thresholds={thresholds} />}
           {tab === 'vendedores' && <SellersTab rows={sellers} thresholds={thresholds} />}
           {tab === 'clientes' && (

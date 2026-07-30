@@ -344,41 +344,14 @@ service cloud.firestore {
       allow write: if escritaValida();
     }
 
-    // Detalhe de vendas particionado por ano: vendas_2024, vendas_2025, ...
+    // Detalhe de vendas particionado por ano: vendas_2024, vendas_2025, vendas_0, etc.
     // O código usa salesCollectionForYear(year) => `vendas_${year}`.
-    match /vendas_2022/{docId} {
+    match /vendas_{year}/{docId} {
       allow read: if autorizado();
       allow write: if escritaValida();
     }
-    match /vendas_2023/{docId} {
-      allow read: if autorizado();
-      allow write: if escritaValida();
-    }
-    match /vendas_2024/{docId} {
-      allow read: if autorizado();
-      allow write: if escritaValida();
-    }
-    match /vendas_2025/{docId} {
-      allow read: if autorizado();
-      allow write: if escritaValida();
-    }
-    match /vendas_2026/{docId} {
-      allow read: if autorizado();
-      allow write: if escritaValida();
-    }
-    match /vendas_2027/{docId} {
-      allow read: if autorizado();
-      allow write: if escritaValida();
-    }
-    match /vendas_2028/{docId} {
-      allow read: if autorizado();
-      allow write: if escritaValida();
-    }
-    match /vendas_2029/{docId} {
-      allow read: if autorizado();
-      allow write: if escritaValida();
-    }
-    match /vendas_2030/{docId} {
+    // Auditoria de vendas (snapshot anual de desvios e riscos).
+    match /vendas_auditoria/{docId} {
       allow read: if autorizado();
       allow write: if escritaValida();
     }
