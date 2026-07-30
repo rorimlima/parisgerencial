@@ -83,6 +83,10 @@ const withTimeout = <T,>(promise: Promise<T>, ms: number, label: string): Promis
  * 30/12 compensa no extrato em 03/01; filtrando por ano, o par nunca é
  * encontrado. As telas filtram por ano; o motor de baixa, não.
  */
+/**
+ * Busca títulos de um lado do movimento.
+ * Aplica deduplicação automática em memória para garantir integridade.
+ */
 export const fetchTitulos = async (
   movType: TituloMovType,
   year?: number
@@ -96,9 +100,35 @@ export const fetchTitulos = async (
       25000,
       `buscar ${movType === 'R' ? 'contas a receber' : 'contas a pagar'}`
     );
-    return snapshot.docs
-      .map((d) => tituloFromFirestore(d.id, d.data(), movType))
-      .sort((a, b) => (a.dueDate < b.dueDate ? 1 : a.dueDate > b.dueDate ? -1 : 0));
+    const rawList = snapshot.docs.map((d) => tituloFromFirestore(d.id, d.data(), movType));
+
+    // Deduplicação inteligente em memória (prioriza títulos baixados / conciliados)
+    const uniqueMap = new Map<string, TituloFinanceiro>();
+    for (const t of rawList) {
+      const code = (t.titleCode || '').toString().trim();
+      const num = (t.titleNumber || '').toString().trim();
+      const parc = (t.parcela || '').toString().trim();
+      const person = (t.personCode || t.personName || '').toString().trim();
+      const val = Math.round((t.amount || 0) * 100);
+      const venc = (t.dueDate || '').toString().trim();
+
+      const key = `${movType}_${person}_${code}_${num}_${parc}_${val}_${venc}`;
+      const existing = uniqueMap.get(key);
+
+      if (!existing) {
+        uniqueMap.set(key, t);
+      } else {
+        const exScore = (existing.isPaid ? 20 : 0) + (existing.paidAmount ? 10 : 0) + (existing.reconciledStatementId ? 10 : 0);
+        const tScore = (t.isPaid ? 20 : 0) + (t.paidAmount ? 10 : 0) + (t.reconciledStatementId ? 10 : 0);
+        if (tScore > exScore) {
+          uniqueMap.set(key, t);
+        }
+      }
+    }
+
+    return Array.from(uniqueMap.values()).sort((a, b) =>
+      a.dueDate < b.dueDate ? 1 : a.dueDate > b.dueDate ? -1 : 0
+    );
   } catch (error) {
     console.error(`Erro ao buscar títulos (${movType}):`, error);
     return [];
@@ -130,11 +160,6 @@ export interface UpsertResult {
 
 /**
  * Grava os títulos em blocos de 400 operações (limite prático do writeBatch).
- * Gravar 1 a 1 uma base de 400+ linhas custaria minutos e travaria a tela.
- *
- * O status de baixa inicial só é definido em documento NOVO: sobrescrever o
- * status de um título já existente devolveria para "Em Aberto" uma baixa que o
- * gestor já tinha conferido.
  */
 export const upsertTitulosBatch = async (titulos: TituloFinanceiro[]): Promise<UpsertResult> => {
   if (titulos.length === 0) return { count: 0, created: 0, updated: 0, errors: 0 };
@@ -155,7 +180,7 @@ export const upsertTitulosBatch = async (titulos: TituloFinanceiro[]): Promise<U
       let chunkCreated = 0;
 
       for (const t of chunk) {
-        const docId = tituloDocId(t.titleCode);
+        const docId = tituloDocId(t.titleCode, t.parcela, t.personCode);
         const isNew = !existingIds.has(docId);
         if (isNew) chunkCreated += 1;
 
@@ -182,6 +207,106 @@ export const upsertTitulosBatch = async (titulos: TituloFinanceiro[]): Promise<U
   }
 
   return { count, created, updated, errors };
+};
+
+// ─── Remoção FÍSICA de Duplicidades no Firestore ──────────────────────────────
+
+export interface DeduplicateResult {
+  movType: TituloMovType;
+  totalBefore: number;
+  totalAfter: number;
+  duplicatesRemoved: number;
+  duplicateGroupsFound: number;
+}
+
+/**
+ * Varre a coleção no Firestore, encontra registros duplicados e remove fisicamente
+ * as cópias redundantes, preservando o melhor título baixado/conciliado.
+ */
+export const removeDuplicateTitulosFromFirestore = async (
+  movType: TituloMovType
+): Promise<DeduplicateResult> => {
+  try {
+    const db = getFirestoreDb();
+    const col = collectionFor(movType);
+    const snapshot = await withTimeout(
+      getDocs(collection(db, col)),
+      30000,
+      `buscar títulos para verificação de duplicidades (${movType})`
+    );
+
+    const docs = snapshot.docs;
+    const totalBefore = docs.length;
+
+    // Agrupa os documentos por impressão digital (fingerprint)
+    const groups = new Map<string, Array<{ id: string; data: any; score: number }>>();
+
+    for (const d of docs) {
+      const data = d.data();
+      const code = (data.titulo_codigo || '').toString().trim();
+      const num = (data.titulo_numero || '').toString().trim();
+      const parc = (data.parcela || '').toString().trim();
+      const person = (data.pessoa_codigo || data.pessoa_nome || '').toString().trim();
+      const val = Math.round((data.valor || 0) * 100);
+      const venc = (data.data_vencimento || '').toString().trim();
+
+      const fingerprint = `${movType}_${person}_${code}_${num}_${parc}_${val}_${venc}`;
+
+      let score = 0;
+      const isPaid = data.pago === true || data.status_baixa === 'Baixado Manual' || data.status_baixa === 'Conciliado' || data.status_baixa === 'Baixado Automático';
+      if (isPaid) score += 20;
+      if (data.reconciled_statement_id || data.reconciled_source) score += 15;
+      if (data.origin_account_key) score += 15;
+      if (data.valor_pago && data.valor_pago > 0) score += 10;
+      if (data.cliente_id) score += 5;
+      if (data.departamento) score += 5;
+      if (data.observacao) score += 3;
+      if (data.atualizado_em) score += 1;
+
+      const cur = groups.get(fingerprint) || [];
+      cur.push({ id: d.id, data, score });
+      groups.set(fingerprint, cur);
+    }
+
+    let duplicatesRemoved = 0;
+    let duplicateGroupsFound = 0;
+    const deleteDocIds: string[] = [];
+
+    for (const [_, items] of groups.entries()) {
+      if (items.length > 1) {
+        duplicateGroupsFound += 1;
+        // Ordena por score decrescente (o mais completo/baixado fica no topo)
+        items.sort((a, b) => b.score - a.score);
+        // Mantém items[0] e marca os demais (items[1..N]) para exclusão
+        for (let i = 1; i < items.length; i++) {
+          deleteDocIds.push(items[i].id);
+        }
+      }
+    }
+
+    const CHUNK = 400;
+    for (let i = 0; i < deleteDocIds.length; i += CHUNK) {
+      const batch = writeBatch(db);
+      const chunk = deleteDocIds.slice(i, i + CHUNK);
+      for (const id of chunk) {
+        batch.delete(doc(db, col, id));
+      }
+      await withTimeout(batch.commit(), 25000, `deletar lote de duplicidades (${chunk.length})`);
+      duplicatesRemoved += chunk.length;
+    }
+
+    const totalAfter = totalBefore - duplicatesRemoved;
+    return {
+      movType,
+      totalBefore,
+      totalAfter,
+      duplicatesRemoved,
+      duplicateGroupsFound,
+    };
+  } catch (error) {
+    console.error(`Erro ao remover duplicidades de ${movType}:`, error);
+    throw error;
+  }
 };
 
 // ─── Conciliação / baixa ─────────────────────────────────────────────────────

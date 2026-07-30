@@ -54,7 +54,9 @@ import {
   Users,
   X,
   Plus,
+  ShieldCheck,
 } from 'lucide-react';
+import { removeDuplicateTitulosFromFirestore } from '../services/titulosService';
 
 import {
   BaixaStatus,
@@ -476,6 +478,33 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
     },
     [baixaSearchTarget, baixaBusy, onManualBaixa, closeBaixaSearch]
   );
+
+  const handleRemoveDuplicates = async () => {
+    setBusy('dedup');
+    setFeedback(null);
+    try {
+      const res = await removeDuplicateTitulosFromFirestore(movType);
+      if (res.duplicatesRemoved > 0) {
+        setFeedback({
+          tone: 'ok',
+          text: `Verificação concluída: ${res.duplicatesRemoved} registro(s) duplicados foram identificados e removidos da base de ${t.title} (${res.totalBefore} -> ${res.totalAfter}).`,
+        });
+        onReload();
+      } else {
+        setFeedback({
+          tone: 'ok',
+          text: `Verificação concluída: Nenhuma duplicidade encontrada na base de ${t.title} (${res.totalAfter} registros únicos).`,
+        });
+      }
+    } catch (err) {
+      setFeedback({
+        tone: 'erro',
+        text: `Erro ao conferir duplicidades: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setBusy('');
+    }
+  };
 
   // ── Recorte de período ────────────────────────────────────────────────────
   // Começa no exercício selecionado no topo do sistema, por VENCIMENTO — que é
@@ -1020,6 +1049,15 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
                 >
                   <UploadCloud className="w-4 h-4" />
                   Importar RFN046
+                </button>
+                <button
+                  onClick={handleRemoveDuplicates}
+                  disabled={busy !== '' || titulos.length === 0}
+                  className="px-3.5 py-2.5 text-xs font-bold bg-amber-50 text-amber-900 hover:bg-amber-100 border border-amber-300 rounded-lg shadow-xs transition-all flex items-center gap-1.5 disabled:opacity-50"
+                  title="Verificar e remover registros duplicados no Firestore"
+                >
+                  <ShieldCheck className="w-4 h-4 text-amber-600" />
+                  Limpar duplicidades
                 </button>
                 <button
                   onClick={limparBase}

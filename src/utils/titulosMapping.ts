@@ -38,14 +38,25 @@ export const sanitizeDocId = (raw: string): string => {
 };
 
 /**
- * ID determinístico do documento: `tit_<Titulo_Codigo>`.
- *
- * É esta função que faz reimportar ser inofensivo. O mesmo título sempre cai no
- * mesmo documento, então subir o relatório inteiro toda semana atualiza o que
- * mudou em vez de criar uma segunda cópia de tudo. Vale para a tela e para o
- * script — os dois chamam daqui.
+ * ID determinístico do documento: `tit_<Titulo_Codigo>_<parcela>_<personCode>`.
+ * Inclui parcela e código da pessoa para evitar colisões entre títulos com o mesmo código.
  */
-export const tituloDocId = (titleCode: string): string => `tit_${sanitizeDocId(titleCode)}`;
+export const tituloDocId = (titleCode: string, parcela?: string, personCode?: string): string => {
+  const code = sanitizeDocId(titleCode || 'sem_codigo');
+  const pStr = parcela ? `_${sanitizeDocId(parcela)}` : '';
+  const cStr = personCode ? `_${sanitizeDocId(personCode)}` : '';
+  return `tit_${code}${pStr}${cStr}`;
+};
+
+/** Gera um ID com data e carimbo de horário único para novos lançamentos */
+export const createUniqueTimestampedDocId = (titleCode: string, parcela?: string): string => {
+  const now = new Date();
+  const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}_${now.getMilliseconds()}`;
+  const rand = Math.random().toString(36).substring(2, 6);
+  const code = sanitizeDocId(titleCode || 'sem_codigo');
+  const pStr = parcela ? `_${sanitizeDocId(parcela)}` : '';
+  return `tit_${code}${pStr}_${ts}_${rand}`;
+};
 
 /**
  * Tira do payload as chaves vazias.
