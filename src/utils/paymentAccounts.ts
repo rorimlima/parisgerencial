@@ -159,6 +159,84 @@ export const PAYMENT_ACCOUNT_BY_CODE: Record<string, PaymentAccount> = PAYMENT_A
   {} as Record<string, PaymentAccount>
 );
 
+const CUSTOM_ACCOUNTS_KEY = 'pdk_custom_payment_accounts';
+let memoryCustomAccounts: PaymentAccount[] = [];
+
+export const getCustomAccounts = (): PaymentAccount[] => {
+  if (typeof window === 'undefined') return memoryCustomAccounts;
+  try {
+    const raw = localStorage.getItem(CUSTOM_ACCOUNTS_KEY);
+    if (!raw) return memoryCustomAccounts;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed.filter((a) => a && typeof a.code === 'string' && typeof a.label === 'string');
+    }
+  } catch (e) {
+    console.warn('Erro ao carregar contas customizadas:', e);
+  }
+  return memoryCustomAccounts;
+};
+
+export const getAllPaymentAccounts = (): PaymentAccount[] => {
+  return [...PAYMENT_ACCOUNTS, ...getCustomAccounts()];
+};
+
+export const getPaymentAccountByCode = (code: string): PaymentAccount | undefined => {
+  if (!code) return undefined;
+  if (PAYMENT_ACCOUNT_BY_CODE[code]) return PAYMENT_ACCOUNT_BY_CODE[code];
+  return getCustomAccounts().find((a) => a.code === code);
+};
+
+export interface CreateCustomAccountInput {
+  label: string;
+  paymentForm: PaymentForm;
+  accountCode?: string;
+  description?: string;
+}
+
+export const addCustomAccount = (input: CreateCustomAccountInput): PaymentAccount => {
+  const label = input.label.trim();
+  const paymentForm = input.paymentForm;
+  const rawCode = input.accountCode?.trim() || '';
+  const isCaixa = paymentForm === 'Dinheiro';
+  const origin: StatementOrigin = isCaixa ? 'caixa' : 'banco';
+  const statementSource: StatementSource = isCaixa ? 'tesouraria' : 'bradesco';
+
+  const baseSlug = normalizeAccountToken(label) || (isCaixa ? `caixa${rawCode}` : 'banco');
+  const code = `custom_${baseSlug}_${Date.now().toString(36)}`;
+
+  const newAccount: PaymentAccount = {
+    code,
+    accountCode: rawCode,
+    label,
+    shortLabel: label,
+    origin,
+    paymentForm,
+    statementSource,
+    bankTokens: [normalizeAccountToken(label), normalizeAccountToken(code)],
+    description: input.description?.trim() || `Conta cadastrada manualmente: ${label}`,
+  };
+
+  memoryCustomAccounts = [...memoryCustomAccounts, newAccount];
+  const existing = getCustomAccounts();
+  const updated = existing.some((a) => a.code === newAccount.code) ? existing : [...existing, newAccount];
+
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(CUSTOM_ACCOUNTS_KEY, JSON.stringify(updated));
+    } catch (e) {
+      console.error('Erro ao salvar nova conta customizada:', e);
+    }
+  }
+
+  // Atualiza cache em tempo de execução
+  PAYMENT_ACCOUNT_BY_CODE[code] = newAccount;
+  TOKEN_INDEX.set(normalizeAccountToken(code), newAccount);
+  TOKEN_INDEX.set(normalizeAccountToken(label), newAccount);
+
+  return newAccount;
+};
+
 /** Índice token da coluna BANCO → conta. Montado uma vez, no carregamento. */
 const TOKEN_INDEX: Map<string, PaymentAccount> = (() => {
   const m = new Map<string, PaymentAccount>();
@@ -181,7 +259,11 @@ export const findAccountByBankText = (raw: any): PaymentAccount | null => {
   const token = normalizeAccountToken(raw);
   if (!token) return null;
 
-  const direct = TOKEN_INDEX.get(token);
+  const direct =
+    TOKEN_INDEX.get(token) ||
+    getCustomAccounts().find(
+      (a) => normalizeAccountToken(a.label) === token || normalizeAccountToken(a.code) === token
+    );
   if (direct) return direct;
 
   // Conta 301.xx aberta no ERP depois deste cadastro: o código no nome é prova
@@ -189,7 +271,7 @@ export const findAccountByBankText = (raw: any): PaymentAccount | null => {
   // nova volte a cair em "não identificada" em silêncio.
   const cashCode = extractCashAccountFromText(raw);
   if (cashCode) {
-    const known = PAYMENT_ACCOUNTS.find((a) => a.accountCode === cashCode);
+    const known = getAllPaymentAccounts().find((a) => a.accountCode === cashCode);
     if (known) return known;
     const nome = (raw ?? '').toString().trim();
     return {
@@ -281,7 +363,7 @@ export const resolveTituloOrigin = (
 ): TituloOrigin => {
   // 1. Escolha explícita do gestor.
   if (titulo.originAccountKey) {
-    const a = PAYMENT_ACCOUNT_BY_CODE[titulo.originAccountKey] || findAccountByBankText(titulo.originAccountKey);
+    const a = getPaymentAccountByCode(titulo.originAccountKey) || findAccountByBankText(titulo.originAccountKey);
     if (a) return originFromAccount(a, 'gestor');
   }
 

@@ -53,9 +53,11 @@ const loadTs = (relPath) => {
 const {
   PAYMENT_ACCOUNTS,
   PAYMENT_ACCOUNT_BY_CODE,
+  addCustomAccount,
   buildStatementIndex,
   findAccountByBankText,
   findAccountByStatementEntry,
+  getAllPaymentAccounts,
   resolveTituloOrigin,
   summarizeByOrigin,
   tituloExpenseClass,
@@ -127,6 +129,15 @@ check(
   (() => {
     const a = findAccountByBankText('CAIXA 301.55');
     return a && a.accountCode === '30155' && a.paymentForm === 'Dinheiro';
+  })()
+);
+check(
+  'cadastro manual de nova origem customizada funciona',
+  (() => {
+    const custom = addCustomAccount({ label: 'Banco Cora Teste', paymentForm: 'Banco', description: 'Teste' });
+    const resolved = findAccountByBankText('Banco Cora Teste');
+    const all = getAllPaymentAccounts();
+    return custom && custom.code.startsWith('custom_') && resolved?.code === custom.code && all.some(x => x.code === custom.code);
   })()
 );
 

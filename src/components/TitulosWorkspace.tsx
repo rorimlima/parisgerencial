@@ -53,6 +53,7 @@ import {
   UploadCloud,
   Users,
   X,
+  Plus,
 } from 'lucide-react';
 
 import {
@@ -78,9 +79,14 @@ import { buildCustomerIndex, normalizePersonCode } from '../utils/linking';
 import {
   PAYMENT_ACCOUNTS,
   PAYMENT_ACCOUNT_BY_CODE,
+  addCustomAccount,
   buildStatementIndex,
+  getAllPaymentAccounts,
+  getPaymentAccountByCode,
   resolveTituloOrigin,
   summarizeByOrigin,
+  PaymentAccount,
+  PaymentForm,
 } from '../utils/paymentAccounts';
 import {
   DATE_BASIS_LABEL,
@@ -316,6 +322,45 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
   const [previewIssues, setPreviewIssues] = useState<string[]>([]);
   const [showInvalidOnly, setShowInvalidOnly] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // ── Contas de Origem (Nativas + Customizadas) ──────────────────────────────
+  const [accountsList, setAccountsList] = useState<PaymentAccount[]>(() => getAllPaymentAccounts());
+  const [isCreateOriginOpen, setIsCreateOriginOpen] = useState(false);
+  const [createOriginTargetTituloId, setCreateOriginTargetTituloId] = useState<string | null>(null);
+  const [newOriginName, setNewOriginName] = useState('');
+  const [newOriginForm, setNewOriginForm] = useState<PaymentForm>('Banco');
+  const [newOriginCode, setNewOriginCode] = useState('');
+  const [newOriginDesc, setNewOriginDesc] = useState('');
+
+  const openCreateOriginModal = (targetTituloId?: string) => {
+    setCreateOriginTargetTituloId(targetTituloId || null);
+    setNewOriginName('');
+    setNewOriginForm('Banco');
+    setNewOriginCode('');
+    setNewOriginDesc('');
+    setIsCreateOriginOpen(true);
+  };
+
+  const handleCreateCustomOrigin = () => {
+    if (!newOriginName.trim()) return;
+    const created = addCustomAccount({
+      label: newOriginName.trim(),
+      paymentForm: newOriginForm,
+      accountCode: newOriginCode.trim(),
+      description: newOriginDesc.trim(),
+    });
+
+    const updated = getAllPaymentAccounts();
+    setAccountsList(updated);
+
+    if (createOriginTargetTituloId) {
+      onSetOrigin(createOriginTargetTituloId, created.code, created.label);
+    }
+
+    setIsCreateOriginOpen(false);
+    setCreateOriginTargetTituloId(null);
+    setFeedback({ tone: 'ok', text: `Conta "${created.label}" cadastrada com sucesso!` });
+  };
 
   // ── Estado da conciliação ─────────────────────────────────────────────────
   const [draft, setDraft] = useState<ReconciliationSettings>(settings);
@@ -1151,18 +1196,28 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
             <select
               value={originFilter}
               onChange={(e) => {
-                setOriginFilter(e.target.value);
+                const val = e.target.value;
+                if (val === '__ADD_NEW__') {
+                  openCreateOriginModal();
+                  return;
+                }
+                setOriginFilter(val);
                 setPage(1);
               }}
               className="px-3 py-2 text-xs font-bold border border-[#EAE6DF] rounded-lg bg-white text-[#433E37] max-w-[190px]"
             >
               <option value="todos">{t.originLabel}: todas</option>
               <option value="sem_origem">Sem conta definida</option>
-              {PAYMENT_ACCOUNTS.map((a) => (
+              {accountsList.map((a) => (
                 <option key={a.code} value={a.code}>
                   {a.label}
                 </option>
               ))}
+              {canEdit && (
+                <option value="__ADD_NEW__" className="font-bold text-amber-800 bg-amber-50">
+                  + Cadastrar nova origem...
+                </option>
+              )}
             </select>
             <select
               value={deptFilter}
@@ -1448,12 +1503,21 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
                             );
                           }
                           return (
-                            <div className="flex flex-col gap-0.5">
+                            <div className="flex items-center gap-1">
                               <select
                                 value={definidoPeloGestor ? key : ''}
                                 onChange={(e) => {
                                   const v = e.target.value;
-                                  onSetOrigin(x.id, v, v ? PAYMENT_ACCOUNT_BY_CODE[v]?.label || '' : '');
+                                  if (v === '__ADD_NEW__') {
+                                    openCreateOriginModal(x.id);
+                                    return;
+                                  }
+                                  const acc = getPaymentAccountByCode(v);
+                                  onSetOrigin(
+                                    x.id,
+                                    v,
+                                    v ? acc?.label || PAYMENT_ACCOUNT_BY_CODE[v]?.label || '' : ''
+                                  );
                                 }}
                                 title={`${t.originHint}${origem?.label ? ` — hoje: ${origem.label}` : ''}`}
                                 className={`text-[11px] px-1.5 py-1 rounded-md border bg-white max-w-[152px] ${
@@ -1467,18 +1531,23 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
                                 <option value="">
                                   {key ? `${origem?.label} (da baixa)` : '— definir conta —'}
                                 </option>
-                                {PAYMENT_ACCOUNTS.map((a) => (
+                                {accountsList.map((a) => (
                                   <option key={a.code} value={a.code}>
                                     {a.label} · {a.paymentForm}
                                   </option>
                                 ))}
+                                <option value="__ADD_NEW__" className="font-semibold text-amber-800 bg-amber-50">
+                                  + Cadastrar nova origem...
+                                </option>
                               </select>
-                              {origem && key && (
-                                <span className="text-[9px] text-[#8B7D6B]">
-                                  {origem.paymentForm}
-                                  {definidoPeloGestor ? ' · definido por você' : ' · pela baixa'}
-                                </span>
-                              )}
+                              <button
+                                type="button"
+                                onClick={() => openCreateOriginModal(x.id)}
+                                title="Cadastrar nova origem manualmente"
+                                className="p-1 rounded text-[#8B7D6B] hover:text-amber-800 hover:bg-amber-100 transition-colors shrink-0"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                              </button>
                             </div>
                           );
                         })()}
@@ -2173,6 +2242,126 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+      {/* ── Modal de Cadastro Manual de Origem ────────────────────────────── */}
+      {isCreateOriginOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-xl shadow-2xl border border-[#EAE6DF] w-full max-w-md overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-[#EAE6DF] bg-[#FAF8F5]">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-amber-100 text-amber-800">
+                  <Plus className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-[#2D2A26] text-base">Cadastrar Nova Origem</h3>
+                  <p className="text-xs text-[#8B7D6B]">Adicione uma conta ou caixa manualmente ao sistema</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCreateOriginOpen(false);
+                  setCreateOriginTargetTituloId(null);
+                }}
+                className="p-1 rounded-md text-[#8B7D6B] hover:text-[#2D2A26] hover:bg-[#EAE6DF]"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Form Body */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleCreateCustomOrigin();
+              }}
+              className="p-5 space-y-4"
+            >
+              <div>
+                <label className="block text-xs font-bold text-[#433E37] mb-1">
+                  Nome da Conta / Origem <span className="text-rose-600">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: Banco Inter, Caixa 30115, Cora..."
+                  value={newOriginName}
+                  onChange={(e) => setNewOriginName(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-[#EAE6DF] rounded-lg focus:outline-none focus:border-[#C19A6B] bg-white text-[#2D2A26]"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-[#433E37] mb-1">
+                    Forma de Pagamento <span className="text-rose-600">*</span>
+                  </label>
+                  <select
+                    value={newOriginForm}
+                    onChange={(e) => setNewOriginForm(e.target.value as PaymentForm)}
+                    className="w-full px-3 py-2 text-xs border border-[#EAE6DF] rounded-lg focus:outline-none focus:border-[#C19A6B] bg-white text-[#2D2A26] font-medium"
+                  >
+                    <option value="Banco">Banco</option>
+                    <option value="Dinheiro">Dinheiro (Caixa em espécie)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[#433E37] mb-1">
+                    Código Contábil <span className="text-[#8B7D6B] font-normal">(Opcional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Ex: 30115"
+                    value={newOriginCode}
+                    onChange={(e) => setNewOriginCode(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-[#EAE6DF] rounded-lg focus:outline-none focus:border-[#C19A6B] bg-white text-[#2D2A26]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[#433E37] mb-1">
+                  Descrição / Observação <span className="text-[#8B7D6B] font-normal">(Opcional)</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ex: Conta corrente secundária..."
+                  value={newOriginDesc}
+                  onChange={(e) => setNewOriginDesc(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-[#EAE6DF] rounded-lg focus:outline-none focus:border-[#C19A6B] bg-white text-[#2D2A26]"
+                />
+              </div>
+
+              {createOriginTargetTituloId && (
+                <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900">
+                  <span className="font-bold">Aviso:</span> Esta nova origem será atribuída automaticamente ao título selecionado após a criação.
+                </div>
+              )}
+
+              {/* Footer */}
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#EAE6DF]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCreateOriginOpen(false);
+                    setCreateOriginTargetTituloId(null);
+                  }}
+                  className="px-4 py-2 text-xs font-semibold text-[#433E37] hover:bg-[#EAE6DF] rounded-lg transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 text-xs font-bold text-white bg-[#C19A6B] hover:bg-[#B0895A] rounded-lg shadow-sm transition-colors"
+                >
+                  Cadastrar e Salvar
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
