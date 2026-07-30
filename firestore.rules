@@ -288,6 +288,37 @@ service cloud.firestore {
     }
 
     /** Faturamento, vendas e estoque — bases importadas, recriáveis. */
+
+    // Detalhe nota a nota particionado por ano: faturamento_2024, faturamento_2025, ...
+    // O código usa billingCollectionForYear(year) => `faturamento_${year}`.
+    // NOTA: Firestore Rules não aceitam wildcards com prefixo literal (ex: /faturamento_{ano}/).
+    // As coleções são declaradas explicitamente por ano ativo. Para acrescentar um ano novo,
+    // basta copiar o bloco e trocar o número.
+    match /faturamento_2022/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /faturamento_2023/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /faturamento_2024/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /faturamento_2025/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /faturamento_2026/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /faturamento_2027/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    // Coleção legada (sem sufixo de ano) — mantida para retrocompatibilidade.
     match /faturamento/{docId} {
       allow read: if autorizado();
       allow write: if escritaValida();
@@ -300,6 +331,34 @@ service cloud.firestore {
       allow read: if autorizado();
       allow write: if escritaValida();
     }
+
+    // Detalhe de vendas particionado por ano: vendas_2024, vendas_2025, ...
+    // O código usa salesCollectionForYear(year) => `vendas_${year}`.
+    match /vendas_2022/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2023/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2024/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2025/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2026/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2027/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    // Coleção legada (sem sufixo de ano).
     match /vendas/{docId} {
       allow read: if autorizado();
       allow write: if escritaValida();
