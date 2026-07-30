@@ -71,6 +71,10 @@ service cloud.firestore {
         : '';
     }
 
+    // NOTA DE SEGURANÇA: este e-mail DEVE ficar hardcoded aqui porque Firestore
+    // Rules NÃO suportam variáveis de ambiente. Ele é o admin "à prova de
+    // lockout" — garante acesso mesmo com a base vazia. Este mesmo e-mail
+    // deve estar configurado em VITE_MASTER_ADMIN_EMAIL no .env do app.
     function ehMaster() {
       return emailToken() == 'onaeror@gmail.com';
     }

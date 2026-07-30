@@ -53,10 +53,11 @@ CREATE TABLE IF NOT EXISTS usuarios (
     criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Inserir/Atualizar Usuário Padrão 'rorim' (Senha: 1987)
+-- Inserir/Atualizar Usuário Padrão (use uma senha forte com hash bcrypt)
+-- Gere o hash com: SELECT crypt('sua_senha_aqui', gen_salt('bf'));
 INSERT INTO usuarios (id, nome, email, funcao, senha_hash)
-VALUES ('usr_rorim', 'Rorim Admin', 'rorim@parisdakar.com.br', 'admin', '1987')
-ON CONFLICT (email) DO UPDATE SET senha_hash = '1987', nome = 'Rorim Admin';
+VALUES ('usr_admin', 'Admin', 'admin@empresa.com.br', 'admin', '$2a$10$HASH_BCRYPT_AQUI')
+ON CONFLICT (email) DO UPDATE SET nome = EXCLUDED.nome;
 
 -- Tabela de Clientes
 CREATE TABLE IF NOT EXISTS clientes (
@@ -127,10 +128,10 @@ CREATE TABLE IF NOT EXISTS titulos_inadimplentes (
 -- CARGA DE DADOS INICIAIS DE TESTE (VALORES REAIS EXTRAÍDOS DOS PDFS)
 -- =================================================================
 
--- 1. Usuário de Acesso 'rorim' (Senha: 1987)
+-- 1. Usuário de Acesso (use uma senha forte com hash bcrypt)
 INSERT INTO usuarios (id, nome, email, funcao, senha_hash)
-VALUES ('usr_rorim', 'Rorim Admin', 'rorim@parisdakar.com.br', 'admin', '1987')
-ON CONFLICT (email) DO UPDATE SET senha_hash = '1987', nome = 'Rorim Admin';
+VALUES ('usr_admin', 'Admin', 'admin@empresa.com.br', 'admin', '$2a$10$HASH_BCRYPT_AQUI')
+ON CONFLICT (email) DO UPDATE SET nome = EXCLUDED.nome;
 
 -- 2. DRE - Resultado Econômico 2025 (Dados do PDF 1) e 2026
 INSERT INTO resultado_economico (ano, mes_chave, receita_bruta, cmv, margem_bruta, despesas_fixas, resultado_economico, ponto_equilibrio)

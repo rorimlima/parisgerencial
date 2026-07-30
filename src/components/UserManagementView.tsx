@@ -23,7 +23,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { User, UserRole } from '../types';
-import { addUser, deleteUser, fetchUsers, updateUser } from '../services/firebaseService';
+import { addUser, deleteUser, fetchUsers, updateUser, MASTER_ADMIN_EMAIL } from '../services/firebaseService';
 
 interface UserManagementViewProps {
   currentUser: User;
@@ -341,7 +341,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ currentU
                 </tr>
               ) : (
                 filteredUsers.map((user) => {
-                  const isMaster = user.email.toLowerCase() === 'onaeror@gmail.com';
+                  const isMaster = MASTER_ADMIN_EMAIL && user.email.toLowerCase() === MASTER_ADMIN_EMAIL;
                   const userStatus = (user as any).status || 'active';
 
                   return (

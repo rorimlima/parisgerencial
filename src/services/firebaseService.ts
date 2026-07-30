@@ -1447,11 +1447,17 @@ export const deleteUser = async (id: string, email?: string): Promise<void> => {
 // (ninguém consegue entrar para cadastrar o primeiro admin) e mantém o acesso
 // do dono mesmo se a coleção `usuarios` estiver vazia, indisponível ou se a
 // cota do Firestore estourar.
-export const MASTER_ADMIN_EMAIL = 'onaeror@gmail.com';
+//
+// SEGURANÇA: o e-mail é lido de variável de ambiente (VITE_MASTER_ADMIN_EMAIL)
+// para não ficar exposto no repositório Git público. Defina no arquivo .env
+// local e nas variáveis de ambiente do Firebase Hosting.
+export const MASTER_ADMIN_EMAIL = (
+  import.meta.env.VITE_MASTER_ADMIN_EMAIL || ''
+).trim().toLowerCase();
 
 const buildMasterAdmin = (name?: string | null, avatar?: string | null): User => ({
   id: 'master_admin',
-  name: name || 'Rorim (Administrador Master)',
+  name: name || 'Administrador Master',
   email: MASTER_ADMIN_EMAIL,
   role: 'admin',
   avatar: avatar || undefined,

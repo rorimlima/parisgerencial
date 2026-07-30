@@ -50,7 +50,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 }) => {
   if (!isOpen) return null;
 
-  const [email, setEmail] = useState('rorim@parisdakar.com.br');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
@@ -149,7 +149,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                   <input
                     type="text"
                     required
-                    placeholder="rorim@parisdakar.com.br"
+                    placeholder="seu.email@empresa.com.br"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="w-full bg-[#F9F7F2] border border-[#EAE6DF] text-xs text-[#2D2A26] pl-9 pr-3 py-2.5 rounded-lg focus:outline-none focus:border-[#C19A6B] font-mono"
