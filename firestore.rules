@@ -318,6 +318,18 @@ service cloud.firestore {
       allow read: if autorizado();
       allow write: if escritaValida();
     }
+    match /faturamento_2028/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /faturamento_2029/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /faturamento_2030/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
     // Coleção legada (sem sufixo de ano) — mantida para retrocompatibilidade.
     match /faturamento/{docId} {
       allow read: if autorizado();
@@ -355,6 +367,18 @@ service cloud.firestore {
       allow write: if escritaValida();
     }
     match /vendas_2027/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2028/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2029/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2030/{docId} {
       allow read: if autorizado();
       allow write: if escritaValida();
     }
