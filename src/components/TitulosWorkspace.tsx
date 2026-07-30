@@ -642,14 +642,71 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
         if (originFilter === 'sem_origem' ? !!key : key !== originFilter) return false;
       }
       if (!q) return true;
-      return (
-        x.personName.toLowerCase().includes(q) ||
-        x.personCode.toLowerCase().includes(q) ||
-        x.titleCode.toLowerCase().includes(q) ||
-        x.titleNumber.toLowerCase().includes(q) ||
-        (x.observation || '').toLowerCase().includes(q) ||
-        (x.department || '').toLowerCase().includes(q)
-      );
+
+      // 1. Fornecedor / Cliente (Nome e Código)
+      if ((x.personName || '').toLowerCase().includes(q)) return true;
+      if ((x.personCode || '').toLowerCase().includes(q)) return true;
+
+      // 2. Lançamento / Título / Lote / Documentos / Observação / Departamento
+      if ((x.titleCode || '').toLowerCase().includes(q)) return true;
+      if ((x.titleNumber || '').toLowerCase().includes(q)) return true;
+      if ((x.parcela || '').toLowerCase().includes(q)) return true;
+      if ((x.titleType || '').toLowerCase().includes(q)) return true;
+      if ((x.launchClass || '').toLowerCase().includes(q)) return true;
+      if ((x.batchCode || '').toLowerCase().includes(q)) return true;
+      if ((x.invoiceCode || '').toLowerCase().includes(q)) return true;
+      if ((x.fiscalNoteCode || '').toLowerCase().includes(q)) return true;
+      if ((x.nossoNumero || '').toLowerCase().includes(q)) return true;
+      if ((x.observation || '').toLowerCase().includes(q)) return true;
+      if ((x.department || '').toLowerCase().includes(q)) return true;
+
+      // 3. Datas (Vencimento, Pagamento, Emissão em formato BR ou ISO)
+      const dueBr = x.dueDate ? formatIsoBr(x.dueDate) : '';
+      const payBr = x.paymentDate ? formatIsoBr(x.paymentDate) : '';
+      const issueBr = x.issueDate ? formatIsoBr(x.issueDate) : '';
+      if (x.dueDate && x.dueDate.includes(q)) return true;
+      if (x.paymentDate && x.paymentDate.includes(q)) return true;
+      if (x.issueDate && x.issueDate.includes(q)) return true;
+      if (dueBr && dueBr.includes(q)) return true;
+      if (payBr && payBr.includes(q)) return true;
+      if (issueBr && issueBr.includes(q)) return true;
+
+      // 4. Valores (Original, Pago Digitado, Saldo)
+      const paidVal =
+        editedPaidAmounts[x.id] !== undefined
+          ? editedPaidAmounts[x.id]
+          : x.paidAmount !== undefined && x.paidAmount > 0
+          ? x.paidAmount
+          : x.balance > 0
+          ? x.balance
+          : x.amount;
+
+      const fmtAmt = formatCurrency(x.amount).toLowerCase();
+      const fmtBal = formatCurrency(x.balance).toLowerCase();
+      const fmtPaid = formatCurrency(paidVal).toLowerCase();
+
+      if (fmtAmt.includes(q) || fmtBal.includes(q) || fmtPaid.includes(q)) return true;
+      if (String(x.amount).includes(q) || String(x.balance).includes(q) || String(paidVal).includes(q)) return true;
+
+      const termDigits = q.replace(/[^\d]/g, '');
+      if (termDigits.length >= 2) {
+        const amtCents = String(Math.round(x.amount * 100));
+        const balCents = String(Math.round(x.balance * 100));
+        const paidCents = String(Math.round(paidVal * 100));
+        const amtInt = String(Math.floor(x.amount));
+        const paidInt = String(Math.floor(paidVal));
+        if (
+          amtCents.includes(termDigits) ||
+          balCents.includes(termDigits) ||
+          paidCents.includes(termDigits) ||
+          amtInt === termDigits ||
+          paidInt === termDigits
+        ) {
+          return true;
+        }
+      }
+
+      return false;
     });
 
     const dir = sortDir === 'asc' ? 1 : -1;

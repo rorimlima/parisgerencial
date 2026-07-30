@@ -269,32 +269,33 @@ export const BAIXADO_STATUSES: readonly BaixaStatus[] = ['Baixado Automático', 
 
 const BAIXADO_SET = new Set<string>(BAIXADO_STATUSES);
 
-/** O título está BAIXADO e tem dia de caixa? Só então ele entra no somatório. */
-export const isSettled = (t: TituloFinanceiro): boolean =>
-  !!t && BAIXADO_SET.has(t.status) && isIsoDate(t.paymentDate);
+/** O título está BAIXADO, tem data de pagamento e tem CONTA DE ORIGEM PREENCHIDA? Só então ele entra no somatório. */
+export const isSettled = (t: TituloFinanceiro): boolean => {
+  if (!t) return false;
+  const isPaidStatus = BAIXADO_SET.has(t.status) || t.isPaid === true;
+  if (!isPaidStatus || !isIsoDate(t.paymentDate)) return false;
+
+  const temOrigem = !!(
+    (t.originAccountKey && t.originAccountKey.trim() !== '' && t.originAccountKey !== '__sem_origem__') ||
+    (t.reconciledStatementId && t.reconciledStatementId.trim() !== '') ||
+    (t.reconciledSource && t.reconciledSource.trim() !== '')
+  );
+  return temOrigem;
+};
 
 /**
  * O ERP diz que foi pago, mas a baixa não existe (ou está em 'Conferir').
- *
- * Este é o número que ninguém gosta de ver e todo mundo precisa ver: é a
- * distância entre o que o sistema de origem afirma e o que a conciliação
- * comprova. Enquanto for maior que zero, o fluxo de caixa está incompleto.
  */
 export const isPendingSettlement = (t: TituloFinanceiro): boolean =>
   !!t && !isSettled(t) && (t.isPaid === true || isIsoDate(t.paymentDate));
 
 /**
- * Quanto de dinheiro este título moveu.
- *
- * `amount` é o valor do título e `balance` é o que ainda falta liquidar. Num
- * título quitado o saldo é 0 e o movimento é o valor cheio. Quando o saldo é
- * positivo E menor que o valor, houve pagamento PARCIAL e o que andou foi a
- * diferença. Saldo maior ou igual ao valor num título baixado é inconsistência
- * da base (baixa gravada sem o ERP baixar o saldo) — nesse caso vale o valor
- * cheio, que é o que a conciliação casou com o extrato, e a linha é marcada
- * como parcial/suspeita no detalhe em vez de sumir do total.
+ * Quanto de dinheiro este título moveu. Prioriza o valor pago digitado pelo gestor.
  */
 export const settledAmount = (t: TituloFinanceiro): number => {
+  if (t?.paidAmount !== undefined && Number.isFinite(t.paidAmount) && t.paidAmount > 0) {
+    return round2(t.paidAmount);
+  }
   const bruto = round2(Number(t?.amount) || 0);
   const saldo = round2(Number(t?.balance) || 0);
   if (!Number.isFinite(bruto) || bruto <= 0) return 0;

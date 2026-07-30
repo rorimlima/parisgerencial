@@ -400,7 +400,26 @@ export const buildStatementIndex = (entries: FinancialStatementEntry[]): Map<str
  * todas vazias. O fallback existe para o título pago parcialmente, em que o ERP
  * mantém o valor no saldo.
  */
-export const tituloPaidAmount = (t: TituloFinanceiro): number => t.amount || t.balance || 0;
+export const tituloPaidAmount = (t: TituloFinanceiro): number => {
+  if (t?.paidAmount !== undefined && Number.isFinite(t.paidAmount) && t.paidAmount > 0) {
+    return t.paidAmount;
+  }
+  return t?.amount || t?.balance || 0;
+};
+
+/** Título válido para o Fluxo de Caixa / Realizado: deve estar BAIXADO E COM CONTA DE ORIGEM PREENCHIDA */
+export const isTituloValidForCashFlow = (
+  t: TituloFinanceiro,
+  statementById?: Map<string, FinancialStatementEntry>
+): boolean => {
+  if (!t) return false;
+  const isPaid = t.isPaid === true || t.status === 'Baixado Manual' || t.status === 'Conciliado' || t.status === 'Baixado Automático';
+  if (!isPaid) return false;
+
+  const origin = resolveTituloOrigin(t, statementById);
+  const temOrigem = !!(origin.accountKey && origin.accountKey !== '' && origin.accountKey !== '__sem_origem__');
+  return temOrigem;
+};
 
 export interface AccountTotal {
   accountKey: string;
@@ -428,7 +447,7 @@ export interface ExpenseTotal {
 }
 
 export interface OriginSummary {
-  /** Só títulos pagos entram: a pergunta é onde o dinheiro passou. */
+  /** Só títulos pagos e com conta de origem preenchida entram: a pergunta é onde o dinheiro passou. */
   paidCount: number;
   paidAmount: number;
   byAccount: AccountTotal[];
@@ -444,10 +463,6 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
  * Classificação de despesa do título, herdada do cadastro da pessoa.
- *
- * O ERP não classifica despesa por título — quem sabe se um fornecedor é custo
- * fixo ou variável é o cadastro (`Customer.expenseClassification`). O vínculo é
- * pelo `personCode`, o mesmo código nas duas bases.
  */
 export const tituloExpenseClass = (
   titulo: TituloFinanceiro,
@@ -465,10 +480,8 @@ export const tituloExpenseClass = (
  * Somas de tudo que foi pago (ou recebido), por conta, por forma de pagamento e
  * por classificação de despesa.
  *
- * AS TRÊS SOMAS FECHAM COM O MESMO TOTAL, sempre. É por isso que "Sem origem" e
- * "Não classificado" são linhas de verdade em vez de serem omitidas: uma soma
- * que ignora o que não sabe classificar dá um total menor que o real, e quem lê
- * o painel não tem como perceber o que ficou de fora.
+ * SÓ VALIDA TÍTULOS QUE ESTEJAM BAIXADOS E COM CONTA DE ORIGEM PREENCHIDA,
+ * UTILIZANDO O VALOR PAGO DIGITADO PELO GESTOR.
  */
 export const summarizeByOrigin = (
   titulos: TituloFinanceiro[],
@@ -476,7 +489,8 @@ export const summarizeByOrigin = (
   customerByCode: Map<string, Customer>,
   normalizeCode: (c: any) => string
 ): OriginSummary => {
-  const pagos = titulos.filter((t) => t.isPaid);
+  // Apenas títulos baixados e com conta de origem preenchida validam no fluxo de caixa automático
+  const pagos = titulos.filter((t) => isTituloValidForCashFlow(t, statementById));
 
   const accounts = new Map<string, AccountTotal>();
   const forms = new Map<string, FormTotal>();

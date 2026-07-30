@@ -265,35 +265,44 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
       }
     }
 
-    // 2) O que só o ERP viu: pago, no mês, e sem baixa contra o extrato.
-    const naoConciliado = (t: TituloFinanceiro) =>
-      t.isPaid &&
-      t.paidYear === selectedYear &&
-      t.paidMonthKey === monthKey &&
-      t.status !== 'Baixado Automático' &&
-      t.status !== 'Baixado Manual';
+    // 2) Títulos pagos no mês, validando se estão BAIXADOS E COM CONTA DE ORIGEM PREENCHIDA
+    const naoConciliado = (t: TituloFinanceiro) => {
+      const baixado = t.isPaid || t.status === 'Baixado Manual' || t.status === 'Conciliado';
+      if (!baixado) return false;
+      if (t.paidYear !== selectedYear || t.paidMonthKey !== monthKey) return false;
+      if (t.status === 'Baixado Automático') return false;
+
+      const temOrigem = !!(
+        (t.originAccountKey && t.originAccountKey.trim() !== '' && t.originAccountKey !== '__sem_origem__') ||
+        (t.reconciledStatementId && t.reconciledStatementId.trim() !== '') ||
+        (t.reconciledSource && t.reconciledSource.trim() !== '')
+      );
+      return temOrigem;
+    };
 
     let titulosReceb = 0;
     let titulosDesemb = 0;
 
     for (const t of receivables) {
       if (!naoConciliado(t)) continue;
+      const val = t.paidAmount !== undefined && Number.isFinite(t.paidAmount) && t.paidAmount > 0 ? t.paidAmount : t.amount;
       const wk = weekOfMonth(t.paymentDate || t.dueDate);
-      weeks[wk].receb += Math.round(t.amount * 100);
-      titulosReceb += t.amount;
+      weeks[wk].receb += Math.round(val * 100);
+      titulosReceb += val;
       const cat = 'Títulos a receber (sem extrato)';
       if (!recebByType[cat]) recebByType[cat] = zero();
-      recebByType[cat][wk] += Math.round(t.amount * 100);
+      recebByType[cat][wk] += Math.round(val * 100);
     }
 
     for (const t of payables) {
       if (!naoConciliado(t)) continue;
+      const val = t.paidAmount !== undefined && Number.isFinite(t.paidAmount) && t.paidAmount > 0 ? t.paidAmount : t.amount;
       const wk = weekOfMonth(t.paymentDate || t.dueDate);
-      weeks[wk].desemb += Math.round(t.amount * 100);
-      titulosDesemb += t.amount;
+      weeks[wk].desemb += Math.round(val * 100);
+      titulosDesemb += val;
       const src = 'Títulos pagos (sem extrato)';
       if (!desembBySource[src]) desembBySource[src] = zero();
-      desembBySource[src][wk] += Math.round(t.amount * 100);
+      desembBySource[src][wk] += Math.round(val * 100);
     }
 
     // Converte de centavos para reais só no fim — ver comentário em sumWeeks.
