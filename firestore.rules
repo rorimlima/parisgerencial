@@ -154,26 +154,22 @@ service cloud.firestore {
      */
     match /usuarios/{userId} {
       allow read: if autorizado();
-      allow create, update: if ehMaster()
+      allow create, update: if (ehMaster() || ehAdmin())
         && tamanhoSao()
         && textoCurto('email', 200)
         && textoCurto('nome', 200)
         && textoCurto('funcao', 20);
-      allow delete: if ehMaster() && userId != 'master_admin';
+      allow delete: if (ehMaster() || ehAdmin()) && userId != 'master_admin';
     }
 
     /**
      * `usuarios_index` — a lista de acesso da Etapa 2, com o e-mail
      * normalizado como ID do documento (regra do Firestore não sabe consultar
      * por campo; só sabe olhar um ID).
-     *
-     * Escrita só do master. Se o próprio usuário pudesse criar o seu
-     * documento aqui, a lista de acesso se autoconcederia — que é exatamente
-     * o furo que ela existe para tapar.
      */
     match /usuarios_index/{emailId} {
       allow read: if logado();
-      allow write: if ehMaster()
+      allow write: if (ehMaster() || ehAdmin())
         && tamanhoSao()
         && textoCurto('funcao', 20)
         && textoCurto('email', 200);

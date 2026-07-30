@@ -181,6 +181,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <optgroup label="Cadastros">
                   <option value="customers">Cadastro de Clientes</option>
                   <option value="sellers">Gestão de Vendedores</option>
+                  <option value="users">Cadastro de Usuários &amp; Acessos</option>
                 </optgroup>
                 <optgroup label="Sistema">
                   <option value="import">Importação Excel / CSV</option>

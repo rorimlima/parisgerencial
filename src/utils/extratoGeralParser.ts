@@ -59,6 +59,7 @@
  */
 
 import { StatementOrigin, StatementSource } from '../types';
+import { findAccountByBankText, normalizeAccountToken } from './paymentAccounts';
 import {
   buildExtratoGeralDedupeKey,
   extractCashAccountFromText,
@@ -143,66 +144,43 @@ export interface ExtratoGeralAccount {
   accountCode?: string;
 }
 
-/**
- * BANCOS RECONHECIDOS.
- *
- * A decisão de projeto aqui é AGRUPAR: Bradesco e PagBank são banco; qualquer
- * caixa em espécie (CAIXA301xx, ALBA301xx, TESOURARIA) entra como
- * `source: 'tesouraria'` / `origin: 'caixa'`, guardando o código 301.xx em
- * `accountCode` e o nome próprio em `accountLabel`. Assim o Resultado Financeiro
- * continua separando "Entradas Bancos" de "Entradas Tesouraria" sem precisar de
- * um tipo novo a cada caixa que a empresa abrir, e o saldo de cada caixa segue
- * conferível pelo código.
- *
- * ALBA30110 e CAIXA30110 são a MESMA conta 301.10 com nomes operacionais
- * diferentes: o código é o mesmo, o rótulo preserva a origem.
- */
-const BANK_MAP: Record<string, ExtratoGeralAccount> = {
-  bradesco: { source: 'bradesco', origin: 'banco', label: 'Bradesco' },
-  pagbank: { source: 'pagseguro', origin: 'banco', label: 'PagBank' },
-  pagseguro: { source: 'pagseguro', origin: 'banco', label: 'PagBank' },
-  tesouraria: { source: 'tesouraria', origin: 'caixa', label: 'Tesouraria 30101', accountCode: '30101' },
-  caixa30101: { source: 'tesouraria', origin: 'caixa', label: 'Tesouraria 30101', accountCode: '30101' },
-  caixa30107: { source: 'tesouraria', origin: 'caixa', label: 'Caixa 30107', accountCode: '30107' },
-  caixa30108: { source: 'tesouraria', origin: 'caixa', label: 'Caixa 30108', accountCode: '30108' },
-  caixa30110: { source: 'tesouraria', origin: 'caixa', label: 'Caixa 30110', accountCode: '30110' },
-  alba30110: { source: 'tesouraria', origin: 'caixa', label: 'Alba 30110', accountCode: '30110' },
-};
-
 /** 'CAIXA 301.07' → 'caixa30107'. Tolera espaço, ponto e hífen. */
-export const normalizeBankToken = (raw: any): string =>
-  normalizeKeyText(raw).replace(/[^a-z0-9]+/g, '');
+export const normalizeBankToken = normalizeAccountToken;
 
 /**
  * Resolve a conta a partir da coluna BANCO.
  *
+ * A LISTA DE CONTAS NÃO MORA AQUI. Ela mora em utils/paymentAccounts.ts, que é
+ * o mesmo registro consultado pelo seletor de origem dos títulos e pelas somas
+ * por conta. Quando existiam duas listas, cadastrar um caixa novo no parser sem
+ * cadastrá-lo na tela de Títulos fazia o dinheiro entrar no extrato e sumir das
+ * somas — sem erro em lugar nenhum.
+ *
+ * O agrupamento continua o mesmo: Bradesco e PagBank são banco; qualquer caixa
+ * em espécie entra como `source: 'tesouraria'` / `origin: 'caixa'`, com o código
+ * 301.xx em `accountCode` e o nome operacional em `accountLabel`.
+ *
  * Banco desconhecido NÃO recebe palpite. Chutar 'banco' para um caixa (ou o
  * contrário) joga o dinheiro na linha errada do Resultado Financeiro, e o erro
  * só aparece meses depois, quando o gerencial não fecha. A linha é rejeitada com
- * o nome do banco no erro, para o gestor cadastrar aqui ou corrigir a planilha.
+ * o nome do banco no erro, para ser cadastrado no registro ou corrigido na
+ * planilha.
  */
 export const resolveAccount = (banco: any, conta?: any): ExtratoGeralAccount | null => {
-  const token = normalizeBankToken(banco);
-  if (!token) return null;
-
-  const direct = BANK_MAP[token];
-  if (direct) return direct;
-
-  // Conta de caixa nova (ex.: 'CAIXA30112' aberto no ERP depois desta lista):
-  // o código 301.xx no nome é prova suficiente de que é caixa em espécie.
-  const cashCode = extractCashAccountFromText(banco);
-  if (cashCode) {
-    const nome = (banco ?? '').toString().trim();
+  const registrada = findAccountByBankText(banco);
+  if (registrada) {
     return {
-      source: 'tesouraria',
-      origin: 'caixa',
-      label: nome || `Caixa ${cashCode}`,
-      accountCode: cashCode,
+      source: registrada.statementSource,
+      origin: registrada.origin,
+      label: registrada.label,
+      accountCode: registrada.accountCode,
     };
   }
 
   // Último recurso: a própria planilha diz que é dinheiro na coluna CONTA.
-  if (normalizeKeyText(conta) === 'dinheiro') {
+  // Vale como evidência de ORIGEM (caixa, não banco), mas sem código contábil —
+  // e é isso que a conta aparece nas somas, para o gestor completar o cadastro.
+  if (normalizeKeyText(conta) === 'dinheiro' && normalizeAccountToken(banco)) {
     const nome = (banco ?? '').toString().trim();
     return { source: 'tesouraria', origin: 'caixa', label: nome || 'Caixa', accountCode: '' };
   }

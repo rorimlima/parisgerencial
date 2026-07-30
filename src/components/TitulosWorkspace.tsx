@@ -76,6 +76,13 @@ import {
 import { reconcile } from '../utils/reconciliation';
 import { buildCustomerIndex, normalizePersonCode } from '../utils/linking';
 import {
+  PAYMENT_ACCOUNTS,
+  PAYMENT_ACCOUNT_BY_CODE,
+  buildStatementIndex,
+  resolveTituloOrigin,
+  summarizeByOrigin,
+} from '../utils/paymentAccounts';
+import {
   DATE_BASIS_LABEL,
   PeriodFilterState,
   addDaysIso,
@@ -106,6 +113,9 @@ interface MovTheme {
   accentBorder: string;
   icon: React.ElementType;
   statementSide: string;
+  /** Cabeçalho da coluna de conta: em Pagar o dinheiro sai, em Receber entra. */
+  originLabel: string;
+  originHint: string;
 }
 
 const THEME: Record<TituloMovType, MovTheme> = {
@@ -122,6 +132,8 @@ const THEME: Record<TituloMovType, MovTheme> = {
     accentBorder: 'border-emerald-200',
     icon: ArrowDownCircle,
     statementSide: 'crédito no extrato',
+    originLabel: 'Conta de entrada',
+    originHint: 'em qual conta o dinheiro entrou',
   },
   P: {
     title: 'Contas a Pagar',
@@ -136,6 +148,8 @@ const THEME: Record<TituloMovType, MovTheme> = {
     accentBorder: 'border-rose-200',
     icon: ArrowUpCircle,
     statementSide: 'débito no extrato',
+    originLabel: 'Conta de origem',
+    originHint: 'de qual conta o dinheiro saiu',
   },
 };
 
@@ -229,6 +243,12 @@ export interface TitulosWorkspaceProps {
   onImport: (titulos: TituloFinanceiro[]) => Promise<void>;
   onApplyMatches: (matches: ReconciliationMatch[], status: BaixaStatus) => Promise<void>;
   onManualBaixa: (id: string, statementId?: string, source?: string) => Promise<void>;
+  /**
+   * Grava a conta de origem apontada pelo gestor. `accountKey` vazio LIMPA a
+   * escolha e devolve o título à conta inferida pela baixa — sem esse caminho de
+   * volta, uma conta selecionada por engano ficaria presa para sempre.
+   */
+  onSetOrigin: (id: string, accountKey: string, accountLabel: string) => Promise<void>;
   onRevertBaixa: (id: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   onClear: () => Promise<void>;
@@ -248,6 +268,7 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
   onImport,
   onApplyMatches,
   onManualBaixa,
+  onSetOrigin,
   onRevertBaixa,
   onDelete,
   onClear,
@@ -267,6 +288,10 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
   const [baixaFilter, setBaixaFilter] = useState<'todos' | BaixaStatus>('todos');
   const [deptFilter, setDeptFilter] = useState('todos');
   const [linkFilter, setLinkFilter] = useState<'todos' | 'vinculados' | 'sem_vinculo'>('todos');
+  // Filtro por conta de origem. 'sem_origem' isola justamente o que falta o
+  // gestor apontar — é a fila de trabalho dele, e sem o filtro seria preciso
+  // caçar essas linhas no meio de centenas já resolvidas.
+  const [originFilter, setOriginFilter] = useState<string>('todos');
   const [sortKey, setSortKey] = useState<'dueDate' | 'amount' | 'personName' | 'paymentDate'>('dueDate');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
@@ -445,6 +470,19 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
     [doAno]
   );
 
+  // ── Conta de origem do dinheiro ───────────────────────────────────────────
+  //
+  // O índice do extrato é montado UMA vez por render, não por título: resolver a
+  // origem de 400 títulos varrendo 2.800 lançamentos em cada um seria mais de um
+  // milhão de comparações a cada digitada no campo de busca.
+  const statementIndex = useMemo(() => buildStatementIndex(statementEntries), [statementEntries]);
+
+  const originByTitulo = useMemo(() => {
+    const m = new Map<string, ReturnType<typeof resolveTituloOrigin>>();
+    for (const x of doAno) m.set(x.id, resolveTituloOrigin(x, statementIndex));
+    return m;
+  }, [doAno, statementIndex]);
+
   // ── Curva mensal: previsto (vencimento) x realizado (pagamento) ───────────
   // Roda sobre a base COMPLETA do ano do filtro, não sobre o recorte: a curva é
   // o retrato do ano inteiro e serve de contexto para o recorte. Se ela também
@@ -535,6 +573,11 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
         if (linkFilter === 'vinculados' && !linked) return false;
         if (linkFilter === 'sem_vinculo' && linked) return false;
       }
+      if (originFilter !== 'todos') {
+        const o = originByTitulo.get(x.id);
+        const key = o?.accountKey || '';
+        if (originFilter === 'sem_origem' ? !!key : key !== originFilter) return false;
+      }
       if (!q) return true;
       return (
         x.personName.toLowerCase().includes(q) ||
@@ -555,12 +598,29 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
       return av < bv ? -dir : av > bv ? dir : 0;
     });
     return lista;
-  }, [doAno, search, statusFilter, baixaFilter, deptFilter, linkFilter, sortKey, sortDir, hoje, customerIndex]);
+  }, [doAno, search, statusFilter, baixaFilter, deptFilter, linkFilter, originFilter, originByTitulo, sortKey, sortDir, hoje, customerIndex]);
 
   const totalPages = Math.max(1, Math.ceil(filtrados.length / PAGE_SIZE));
   const pageSafe = Math.min(page, totalPages);
   const pageItems = filtrados.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
   const filtradosTotal = sumBy(filtrados, (x) => (x.isPaid ? x.amount : x.balance));
+
+  /**
+   * AS SOMAS POR CONTA, POR FORMA DE PAGAMENTO E POR CLASSIFICAÇÃO DE DESPESA.
+   *
+   * Rodam sobre `filtrados`, não sobre a base inteira: o painel tem que
+   * responder à pergunta que está na tela. Se somasse tudo, filtrar "junho" e ler
+   * o total do ano ao lado seria uma armadilha — e é o tipo de número que vai
+   * para uma reunião.
+   *
+   * Só títulos PAGOS entram. A pergunta "de que conta saiu" não existe para um
+   * compromisso que ainda não foi pago; incluí-lo inflaria a conta com dinheiro
+   * que não se moveu.
+   */
+  const originSummary = useMemo(
+    () => summarizeByOrigin(filtrados, statementIndex, customerIndex, normalizePersonCode),
+    [filtrados, statementIndex, customerIndex]
+  );
 
   const toggleSort = (key: typeof sortKey) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -729,6 +789,12 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
       'Saldo': x.balance,
       'Status ERP': x.erpStatus,
       'Situação da baixa': x.status,
+      // A conta vai RESOLVIDA para o Excel (escolha do gestor ou, na falta,
+      // a conta da baixa). Exportar o campo cru mandaria vazio na maioria das
+      // linhas, e quem abrisse a planilha concluiria que ninguém preencheu.
+      [t.originLabel]: originByTitulo.get(x.id)?.label || '',
+      'Forma de pagamento': originByTitulo.get(x.id)?.paymentForm || '',
+      'Conta definida por': originByTitulo.get(x.id)?.source === 'gestor' ? 'Gestor' : originByTitulo.get(x.id)?.source === 'baixa' ? 'Baixa' : '',
       'Extrato conciliado': x.reconciledSource || '',
       'Departamento': x.department,
       'Natureza': x.operationNature,
@@ -1083,6 +1149,22 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
               <option value="Conferir">A conferir</option>
             </select>
             <select
+              value={originFilter}
+              onChange={(e) => {
+                setOriginFilter(e.target.value);
+                setPage(1);
+              }}
+              className="px-3 py-2 text-xs font-bold border border-[#EAE6DF] rounded-lg bg-white text-[#433E37] max-w-[190px]"
+            >
+              <option value="todos">{t.originLabel}: todas</option>
+              <option value="sem_origem">Sem conta definida</option>
+              {PAYMENT_ACCOUNTS.map((a) => (
+                <option key={a.code} value={a.code}>
+                  {a.label}
+                </option>
+              ))}
+            </select>
+            <select
               value={deptFilter}
               onChange={(e) => {
                 setDeptFilter(e.target.value);
@@ -1121,6 +1203,147 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
             </span>
           </div>
 
+          {/* ═══ SOMAS POR CONTA, POR FORMA E POR CLASSIFICAÇÃO DE DESPESA ═══
+              As três respondem à MESMA pergunta por ângulos diferentes e fecham
+              no mesmo total — por isso "Sem conta definida" e "Não classificado"
+              aparecem como linha, em vez de serem omitidos. Uma soma que
+              silenciosamente ignora o que não sabe classificar mostra um total
+              menor que o real, e quem lê não tem como notar o que ficou de fora.
+
+              Todas seguem o recorte de período e os filtros da tela: um painel
+              que soma o ano inteiro ao lado de uma tabela filtrada por mês é uma
+              armadilha, e desses números saem decisões. */}
+          {originSummary.paidCount > 0 && (
+            <div className="px-4 py-4 bg-[#F9F7F2] border-b border-[#EAE6DF] space-y-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h4 className="text-xs font-black text-[#2D2A26]">
+                  {t.paidLabel} por conta — {originSummary.paidCount.toLocaleString('pt-BR')} título(s) no recorte
+                </h4>
+                <span className="text-[11px] text-[#8B7D6B]">
+                  Total {t.paidLabel.toLowerCase()}:{' '}
+                  <b className="text-[#2D2A26] tabular-nums">{formatCurrency(originSummary.paidAmount)}</b>
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                {/* Por conta */}
+                <div className="bg-white border border-[#EAE6DF] rounded-lg overflow-hidden">
+                  <div className="px-3 py-1.5 bg-[#F3F1ED] text-[10px] font-bold uppercase tracking-wider text-[#8B7D6B]">
+                    Por conta
+                  </div>
+                  <table className="w-full text-[11px]">
+                    <tbody className="divide-y divide-[#EAE6DF]">
+                      {originSummary.byAccount.map((a) => (
+                        <tr
+                          key={a.accountKey || 'sem'}
+                          className={`hover:bg-[#F9F7F2] cursor-pointer ${!a.accountKey ? 'bg-amber-50/60' : ''}`}
+                          onClick={() => {
+                            setOriginFilter(a.accountKey || 'sem_origem');
+                            setPage(1);
+                          }}
+                          title="Clique para filtrar a tabela por esta conta"
+                        >
+                          <td className="px-3 py-1.5">
+                            <span className={`font-bold ${a.accountKey ? 'text-[#2D2A26]' : 'text-amber-800'}`}>
+                              {a.label}
+                            </span>
+                            <span className="block text-[9px] text-[#8B7D6B]">
+                              {a.count} título(s)
+                              {a.paymentForm ? ` · ${a.paymentForm}` : ''}
+                              {a.fromBaixa > 0 ? ` · ${a.fromBaixa} pela baixa` : ''}
+                            </span>
+                          </td>
+                          <td className="px-3 py-1.5 text-right tabular-nums font-bold text-[#2D2A26] whitespace-nowrap">
+                            {formatCurrency(a.amount)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Por forma de pagamento */}
+                <div className="bg-white border border-[#EAE6DF] rounded-lg overflow-hidden">
+                  <div className="px-3 py-1.5 bg-[#F3F1ED] text-[10px] font-bold uppercase tracking-wider text-[#8B7D6B]">
+                    Por forma de pagamento
+                  </div>
+                  <table className="w-full text-[11px]">
+                    <tbody className="divide-y divide-[#EAE6DF]">
+                      {originSummary.byForm.map((f) => (
+                        <tr key={f.form} className={f.form === 'Sem origem' ? 'bg-amber-50/60' : ''}>
+                          <td className="px-3 py-1.5">
+                            <span
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                                f.form === 'Dinheiro'
+                                  ? 'bg-[#C19A6B]/15 text-[#C19A6B] border-[#C19A6B]/30'
+                                  : f.form === 'Banco'
+                                  ? 'bg-blue-50 text-blue-800 border-blue-200'
+                                  : 'bg-amber-50 text-amber-800 border-amber-200'
+                              }`}
+                            >
+                              {f.form}
+                            </span>
+                            <span className="block text-[9px] text-[#8B7D6B] mt-0.5">{f.count} título(s)</span>
+                          </td>
+                          <td className="px-3 py-1.5 text-right tabular-nums font-bold text-[#2D2A26] whitespace-nowrap">
+                            {formatCurrency(f.amount)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <p className="px-3 py-1.5 text-[9px] text-[#8B7D6B] border-t border-[#EAE6DF]">
+                    Forma derivada da conta: caixa é dinheiro, conta corrente é banco. Não é campo digitável.
+                  </p>
+                </div>
+
+                {/* Por classificação de despesa (vem do cadastro da pessoa) */}
+                <div className="bg-white border border-[#EAE6DF] rounded-lg overflow-hidden">
+                  <div className="px-3 py-1.5 bg-[#F3F1ED] text-[10px] font-bold uppercase tracking-wider text-[#8B7D6B]">
+                    Despesa fixa x variável
+                  </div>
+                  <table className="w-full text-[11px]">
+                    <tbody className="divide-y divide-[#EAE6DF]">
+                      {originSummary.byExpense.map((e) => (
+                        <tr key={e.classification} className={e.classification === 'Não classificado' ? 'bg-amber-50/60' : ''}>
+                          <td className="px-3 py-1.5">
+                            <span
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                                e.classification === 'Despesa Fixa'
+                                  ? 'bg-blue-50 text-blue-800 border-blue-200'
+                                  : e.classification === 'Despesa Variável'
+                                  ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                  : 'bg-[#F3F1ED] text-[#8B7D6B] border-[#EAE6DF]'
+                              }`}
+                            >
+                              {e.classification}
+                            </span>
+                            <span className="block text-[9px] text-[#8B7D6B] mt-0.5">{e.count} título(s)</span>
+                          </td>
+                          <td className="px-3 py-1.5 text-right tabular-nums font-bold text-[#2D2A26] whitespace-nowrap">
+                            {formatCurrency(e.amount)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <p className="px-3 py-1.5 text-[9px] text-[#8B7D6B] border-t border-[#EAE6DF]">
+                    Vem do cadastro de {t.personLabelPlural.toLowerCase()} (campo Classif. Despesa), pelo código da pessoa.
+                  </p>
+                </div>
+              </div>
+
+              {originSummary.withoutOrigin.count > 0 && (
+                <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  <b>{originSummary.withoutOrigin.count} título(s)</b> pago(s) sem conta identificada (
+                  {formatCurrency(originSummary.withoutOrigin.amount)}). São pagamentos sem baixa no extrato — use a
+                  coluna <b>{t.originLabel}</b> para apontar de onde saiu o dinheiro, ou filtre por
+                  “Sem conta definida” para resolvê-los em série.
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Tabela */}
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
@@ -1135,6 +1358,7 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
                     { k: null, label: 'Saldo', align: 'right' },
                     { k: null, label: 'ERP', align: 'center' },
                     { k: null, label: 'Baixa', align: 'center' },
+                    { k: null, label: t.originLabel, align: 'left' },
                     { k: null, label: '', align: 'right' },
                   ].map((c, i) => (
                     <th
@@ -1203,6 +1427,61 @@ export const TitulosWorkspace: React.FC<TitulosWorkspaceProps> = ({
                             score {x.matchScore}
                           </span>
                         )}
+                      </td>
+                      {/* CONTA DE ORIGEM.
+                          O `value` do select vem da origem RESOLVIDA, não do campo
+                          gravado: assim o título baixado contra o extrato já
+                          aparece com a conta certa sem ninguém ter tocado nele. Ao
+                          escolher, a decisão passa a ser do gestor e vence a baixa
+                          (ver utils/paymentAccounts.ts). A opção "— usar a conta da
+                          baixa —" é o caminho de volta. */}
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        {(() => {
+                          const origem = originByTitulo.get(x.id);
+                          const key = origem?.accountKey || '';
+                          const definidoPeloGestor = origem?.source === 'gestor';
+                          if (!canEdit) {
+                            return origem && key ? (
+                              <span className="text-[11px] text-[#433E37] font-bold">{origem.label}</span>
+                            ) : (
+                              <span className="text-[11px] text-[#8B7D6B]">—</span>
+                            );
+                          }
+                          return (
+                            <div className="flex flex-col gap-0.5">
+                              <select
+                                value={definidoPeloGestor ? key : ''}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  onSetOrigin(x.id, v, v ? PAYMENT_ACCOUNT_BY_CODE[v]?.label || '' : '');
+                                }}
+                                title={`${t.originHint}${origem?.label ? ` — hoje: ${origem.label}` : ''}`}
+                                className={`text-[11px] px-1.5 py-1 rounded-md border bg-white max-w-[152px] ${
+                                  definidoPeloGestor
+                                    ? 'border-[#C19A6B] text-[#2D2A26] font-bold'
+                                    : key
+                                    ? 'border-[#EAE6DF] text-[#8B7D6B]'
+                                    : 'border-amber-300 text-amber-800'
+                                }`}
+                              >
+                                <option value="">
+                                  {key ? `${origem?.label} (da baixa)` : '— definir conta —'}
+                                </option>
+                                {PAYMENT_ACCOUNTS.map((a) => (
+                                  <option key={a.code} value={a.code}>
+                                    {a.label} · {a.paymentForm}
+                                  </option>
+                                ))}
+                              </select>
+                              {origem && key && (
+                                <span className="text-[9px] text-[#8B7D6B]">
+                                  {origem.paymentForm}
+                                  {definidoPeloGestor ? ' · definido por você' : ' · pela baixa'}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-3 py-2.5 text-right whitespace-nowrap">
                         {canEdit && (

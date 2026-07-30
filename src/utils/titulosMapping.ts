@@ -68,9 +68,12 @@ export const stripEmpty = (obj: Record<string, any>): Record<string, any> => {
  * Documento a gravar a partir de um título.
  *
  * Só campos que vêm do ERP. Os campos de CONCILIAÇÃO (status de baixa, extrato
- * casado, código e motivo da baixa) ficam fora: são a única coisa nesta base que
- * não veio do relatório e não pode ser recriada. Deixá-los aqui faria toda
- * reimportação apagar o trabalho de conciliação já conferido.
+ * casado, código e motivo da baixa) e a CONTA DE ORIGEM escolhida pelo gestor
+ * ficam fora: são a única coisa nesta base que não veio do relatório e não pode
+ * ser recriada. Deixá-los aqui faria toda reimportação apagar o trabalho de
+ * conciliação já conferido e as contas de origem apontadas na mão — o RFN046 não
+ * tem coluna de conta de origem, então ele sempre "diria" vazio e o vazio
+ * venceria.
  */
 export const tituloToFirestore = (t: TituloFinanceiro): Record<string, any> =>
   stripEmpty({
@@ -215,6 +218,11 @@ export const tituloFromFirestore = (
     matchReason: d.baixa_motivo || '',
     baixaCode: d.baixa_codigo || '',
     notes: d.observacoes || '',
+
+    originAccountKey: d.conta_origem || '',
+    originAccountLabel: d.conta_origem_label || '',
+    originSetAt: d.conta_origem_em || '',
+    originSetByName: d.conta_origem_por || '',
 
     importedAt: d.importado_em || '',
     updatedAt: d.atualizado_em || '',

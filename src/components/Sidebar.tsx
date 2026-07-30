@@ -34,6 +34,7 @@ import {
   Receipt,
   ShoppingCart,
   TrendingUp,
+  UserCheck,
   Users,
   Wallet,
 } from 'lucide-react';
@@ -74,9 +75,6 @@ const MENU_GROUPS: MenuGroup[] = [
       { id: 'economic', label: 'Resultado Econômico', icon: BarChart3, description: 'DRE: receita, CMV, margem e ponto de equilíbrio' },
       { id: 'financial', label: 'Resultado Financeiro', icon: DollarSign, description: 'Entradas, saídas, estoque e inadimplência' },
       { id: 'cashflow', label: 'Fluxo de Caixa', icon: TrendingUp, description: 'Planejamento semanal previsto x realizado' },
-      // MOVIMENTO DIÁRIO fica no Gerencial, logo abaixo do Fluxo de Caixa, por
-      // ser a versão realizada e diária da mesma pergunta: o Fluxo planeja por
-      // semana, este mostra o que de fato entrou e saiu em cada dia.
       { id: 'daily', label: 'Movimento Diário', icon: Wallet, description: 'Caixa realizado dia a dia: recebimentos e pagamentos BAIXADOS, com data início/fim' },
     ],
   },
@@ -90,10 +88,6 @@ const MENU_GROUPS: MenuGroup[] = [
       { id: 'statement', label: 'Extrato Financeiro', icon: Landmark, description: 'Conciliação bancária e caixa/tesouraria (Bradesco, PagBank e Caixa/Tesouraria)' },
       { id: 'receivables', label: 'Contas a Receber', icon: ArrowDownCircle, description: 'Títulos de entrada (RFN046): recebimento, aging de cobrança e baixa automática' },
       { id: 'payables', label: 'Contas a Pagar', icon: ArrowUpCircle, description: 'Títulos de saída (RFN046): desembolso, previsão e baixa automática' },
-      // INADIMPLÊNCIA saiu do menu como módulo próprio: os títulos vencidos e
-      // não pagos agora são calculados do próprio Contas a Receber (aging no
-      // Painel), sem uma segunda base para manter em dia. A rota continua
-      // acessível para consulta do histórico já importado do RFN029.
     ],
   },
   {
@@ -101,6 +95,7 @@ const MENU_GROUPS: MenuGroup[] = [
     items: [
       { id: 'customers', label: 'Clientes', icon: Users, description: 'Carteira, limites de crédito e classificação' },
       { id: 'sellers', label: 'Vendedores', icon: Briefcase, description: 'Equipe comercial e vínculo de cobrança' },
+      { id: 'users', label: 'Usuários & Acessos', icon: UserCheck, description: 'Cadastro de e-mails (Gmail) autorizados e perfis de acesso' },
     ],
   },
   {

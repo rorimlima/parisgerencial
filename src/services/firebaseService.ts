@@ -1327,13 +1327,113 @@ export const fetchUsers = async (): Promise<User[]> => {
         id: doc.id,
         name: data.nome || '',
         email: data.email || '',
-        role: data.funcao || 'viewer',
-        avatar: data.avatar || undefined
-      };
+        role: data.funcao || 'analista',
+        avatar: data.avatar || undefined,
+        status: data.status || 'active',
+        createdAt: data.criado_em || undefined,
+      } as User;
     });
   } catch (error) {
     console.error('Error fetching users:', error);
     return [];
+  }
+};
+
+export const addUser = async (user: Partial<User>): Promise<string> => {
+  try {
+    const db = getFirestoreDb();
+    const emailNorm = (user.email || '').trim().toLowerCase();
+    if (!emailNorm) throw new Error('E-mail é obrigatório');
+
+    const docId = emailNorm.replace(/[^a-z0-9]/g, '_');
+
+    const payload = {
+      nome: user.name || '',
+      email: emailNorm,
+      funcao: user.role || 'analista',
+      avatar: user.avatar || null,
+      status: (user as any).status || 'active',
+      criado_em: new Date().toISOString(),
+    };
+
+    await setDoc(doc(db, 'usuarios', docId), payload, { merge: true });
+
+    try {
+      await setDoc(
+        doc(db, 'usuarios_index', emailNorm),
+        {
+          email: emailNorm,
+          funcao: user.role || 'analista',
+          nome: user.name || '',
+          atualizado_em: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    } catch (idxErr) {
+      console.warn('Nao foi possivel atualizar usuarios_index:', idxErr);
+    }
+
+    return docId;
+  } catch (error) {
+    console.error('Error adding user:', error);
+    throw error;
+  }
+};
+
+export const updateUser = async (id: string, user: Partial<User>): Promise<void> => {
+  try {
+    const db = getFirestoreDb();
+    const docRef = doc(db, 'usuarios', id);
+    const firestoreData: any = {
+      atualizado_em: new Date().toISOString(),
+    };
+    if (user.name !== undefined) firestoreData.nome = user.name;
+    if (user.email !== undefined) firestoreData.email = user.email.trim().toLowerCase();
+    if (user.role !== undefined) firestoreData.funcao = user.role;
+    if (user.avatar !== undefined) firestoreData.avatar = user.avatar;
+    if ((user as any).status !== undefined) firestoreData.status = (user as any).status;
+
+    await setDoc(docRef, firestoreData, { merge: true });
+
+    if (user.email) {
+      const emailNorm = user.email.trim().toLowerCase();
+      try {
+        await setDoc(
+          doc(db, 'usuarios_index', emailNorm),
+          {
+            email: emailNorm,
+            funcao: user.role || 'analista',
+            nome: user.name || '',
+            atualizado_em: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+      } catch (idxErr) {
+        console.warn('Nao foi possivel sincronizar usuarios_index:', idxErr);
+      }
+    }
+  } catch (error) {
+    console.error('Error updating user:', error);
+    throw error;
+  }
+};
+
+export const deleteUser = async (id: string, email?: string): Promise<void> => {
+  try {
+    const db = getFirestoreDb();
+    await deleteDoc(doc(db, 'usuarios', id));
+
+    if (email) {
+      const emailNorm = email.trim().toLowerCase();
+      try {
+        await deleteDoc(doc(db, 'usuarios_index', emailNorm));
+      } catch (idxErr) {
+        console.warn('Nao foi possivel remover de usuarios_index:', idxErr);
+      }
+    }
+  } catch (error) {
+    console.error('Error deleting user:', error);
+    throw error;
   }
 };
 

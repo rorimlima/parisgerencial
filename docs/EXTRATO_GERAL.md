@@ -19,16 +19,23 @@ Um único arquivo carrega **todas as contas de uma vez**. Não há mais escolha 
 
 ### Contas reconhecidas
 
-| `BANCO` | Entra como | Conta |
-|---|---|---|
-| `BRADESCO` | Entradas Bancos | — |
-| `PAGBANK` / `PAGSEGURO` | Entradas Bancos | — |
-| `TESOURARIA` | Entradas Tesouraria | 30101 |
-| `CAIXA30107` | Entradas Tesouraria | 30107 |
-| `CAIXA30108` | Entradas Tesouraria | 30108 |
-| `CAIXA30110` / `ALBA30110` | Entradas Tesouraria | 30110 |
+O cadastro de contas é **um só**, em `src/utils/paymentAccounts.ts`, e serve ao mesmo tempo o parser do extrato, o seletor de origem dos títulos e as somas por conta. Antes eram listas separadas — cadastrar um caixa em uma e não na outra fazia o dinheiro entrar no extrato e sumir das somas, sem erro em lugar nenhum.
 
-Qualquer `CAIXA 301.xx` novo é reconhecido automaticamente como caixa. **Banco fora dessa lista e sem 301.xx no nome faz a linha ser rejeitada, não adivinhada** — chutar a origem joga dinheiro na linha errada do Resultado Financeiro, e o erro só aparece meses depois. Para cadastrar um banco novo: `BANK_MAP` em `src/utils/extratoGeralParser.ts`.
+| `BANCO` | Entra como | Conta contábil | Forma |
+|---|---|---|---|
+| `BRADESCO` | Entradas Bancos | — | Banco |
+| `PAGBANK` / `PAGSEGURO` | Entradas Bancos | — | Banco |
+| `TESOURARIA` | Entradas Tesouraria | 30101 | Dinheiro |
+| `CAIXA30107` | Entradas Tesouraria | 30107 | Dinheiro |
+| `CAIXA30108` | Entradas Tesouraria | 30108 | Dinheiro |
+| `CAIXA30110` | Entradas Tesouraria | 30110 | Dinheiro |
+| `ALBA30110` | Entradas Tesouraria | 30110 | Dinheiro |
+
+`ALBA30110` e `CAIXA30110` são a **mesma conta contábil 301.10** com nomes operacionais diferentes: o código é o mesmo, o rótulo preserva quem movimentou.
+
+A **forma de pagamento é derivada da conta** (caixa é dinheiro, conta corrente é banco), nunca digitada. Se fosse campo livre, um dia alguém marcaria "Dinheiro" num pagamento do Bradesco e o total por forma pararia de bater com o total por conta.
+
+Qualquer `CAIXA 301.xx` novo é reconhecido automaticamente como caixa. **Banco fora dessa lista e sem 301.xx no nome faz a linha ser rejeitada, não adivinhada** — chutar a origem joga dinheiro na linha errada do Resultado Financeiro, e o erro só aparece meses depois. Para cadastrar uma conta nova: acrescente uma entrada em `PAYMENT_ACCOUNTS`; ela passa a aparecer no seletor, nas somas e no roteamento do extrato de uma vez.
 
 ## As três regras que decidem o número
 
@@ -74,20 +81,44 @@ Baixa manual é decisão de uma pessoa que conferiu o caso; o script não a desf
 - **Leitura sempre do servidor** (`getDocsFromServer`). Com `getDocs`, uma queda de rede faria o SDK responder "coleção vazia" do cache, o script concluiria que não há extrato antigo, não apagaria nada e gravaria os lançamentos novos **ao lado** dos antigos. O script prefere estourar a mentir.
 - **Gravação idempotente.** O ID do documento vem da chave, então rodar de novo depois de uma falha regrava por cima em vez de duplicar.
 
+## Conta de origem dos títulos e somas por conta
+
+Em **Contas a Pagar** e **Contas a Receber**, aba Títulos, cada linha tem a coluna **Conta de origem** (em Receber, "Conta de entrada"): de qual conta saiu — ou em qual entrou — o dinheiro daquele título.
+
+**Como ela é preenchida.** Quando o título é baixado contra o extrato, a conta já vem do próprio lançamento conciliado e aparece marcada como *pela baixa* — não é preciso tocar em nada. O dropdown existe para os dois casos em que a inferência não serve: pagamento feito fora do extrato (sem baixa) e correção de uma conta inferida errada, típico do pagamento que saiu do caixa e só depois foi reembolsado pelo banco.
+
+**A escolha do gestor vence a baixa.** Uma vez selecionada no dropdown, a conta passa a ser a do gestor e a conciliação não a sobrescreve mais. Sem essa precedência, a correção duraria até a próxima conciliação e teria de ser refeita para sempre. A opção *"(da baixa)"* no topo da lista é o caminho de volta: limpa a escolha e devolve o título à conta inferida.
+
+**Os três totais**, no topo da aba Títulos, seguindo o período e os filtros da tela:
+
+- **por conta** — Bradesco, PagBank, Caixa 30107, Tesouraria…; clicar numa linha filtra a tabela por ela;
+- **por forma de pagamento** — Banco x Dinheiro;
+- **despesa fixa x variável** — herdada do campo *Classif. Despesa* do cadastro de clientes/fornecedores, pelo código da pessoa.
+
+Só entram títulos **pagos**: a pergunta "de que conta saiu" não existe para um compromisso que ainda não foi pago. As três somas fecham no mesmo total, sempre — e é por isso que *"Sem conta definida"* e *"Não classificado"* aparecem como linha em vez de serem omitidos. Uma soma que ignora silenciosamente o que não sabe classificar mostra um total menor que o real, e quem lê o painel não tem como perceber o que ficou de fora. O filtro **Sem conta definida** isola exatamente o que falta apontar.
+
+A conta de origem **não vem do RFN046** e por isso fica fora do `tituloToFirestore`: se fosse gravada junto com os campos do ERP, cada reimportação mandaria vazio por cima e apagaria as contas apontadas na mão — o mesmo cuidado que já protege as baixas.
+
 ## Conferir
 
 ```bash
-npm run test:extrato-geral
+npm run test:extrato-geral    # formato, chaves, totais, baixa automática
+npm run test:contas-origem    # conta de origem, precedência e fechamento das somas
 ```
 
-Valida contra a planilha real: totais banco por banco contra a soma direta das colunas, unicidade e estabilidade das chaves (inclusive renumerando o `ID` e inserindo linhas no meio), roteamento de conta, divergências de `TIPO`, e o comportamento da baixa automática — nenhum lançamento quitando dois títulos, entrada só casando com `R`, saída só com `P`, baixa manual fora do jogo.
+O primeiro valida contra a planilha real: totais banco por banco contra a soma direta das colunas, unicidade e estabilidade das chaves (inclusive renumerando o `ID` e inserindo linhas no meio), roteamento de conta, divergências de `TIPO`, e o comportamento da baixa automática — nenhum lançamento quitando dois títulos, entrada só casando com `R`, saída só com `P`, baixa manual fora do jogo.
+
+O segundo valida a precedência gestor > baixa, o caminho de volta ao limpar a escolha, a forma derivada da conta, o registro único (parser e seletor concordando conta a conta) e o fechamento das três somas contra o total pago.
 
 ## Arquivos
 
 | Arquivo | Papel |
 |---|---|
+| `src/utils/paymentAccounts.ts` | cadastro único das contas/caixas, origem do título e somas |
 | `src/utils/extratoGeralParser.ts` | leitura, validação e resumo do formato |
 | `src/utils/statementKeys.ts` | `buildExtratoGeralDedupeKey` — a regra de identidade |
 | `src/components/FinancialStatementView.tsx` | tela de importação e prévia |
+| `src/components/TitulosWorkspace.tsx` | coluna de origem e painel de somas |
 | `scripts/importExtratoGeral.mjs` | substituição do extrato + refação das baixas |
-| `scripts/testExtratoGeralParser.mjs` | conferência automatizada |
+| `scripts/testExtratoGeralParser.mjs` | conferência do formato |
+| `scripts/testContasOrigem.mjs` | conferência da origem e das somas |

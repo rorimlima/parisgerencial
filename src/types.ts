@@ -23,7 +23,8 @@ export type ViewTab =
   | 'sales'
   | 'tasks'
   | 'api-docs'
-  | 'postgres-settings';
+  | 'postgres-settings'
+  | 'users';
 
 export interface Seller {
   id: string;
@@ -379,6 +380,26 @@ export interface TituloFinanceiro {
   matchReason?: string;          // texto auditável do porquê casou
   baixaCode?: string;            // BX-2026-00001
   notes?: string;
+
+  // ── Conta de origem do dinheiro (escolha do gestor) ────────────────────────
+  //
+  // DE QUAL CONTA SAIU (ou entrou) O VALOR. Quando o título é baixado contra o
+  // extrato, a conta já é conhecida pelo lançamento conciliado — e é por isso que
+  // estes campos ficam VAZIOS na maioria dos títulos: não se guarda o que já dá
+  // para derivar. Eles existem para os dois casos em que a derivação não serve:
+  //   1. pagamento feito fora do extrato (ainda sem baixa), e
+  //   2. correção do gestor, quando a conta inferida pela baixa está errada —
+  //      típico do pagamento que saiu do caixa e só depois foi reembolsado pelo
+  //      banco.
+  //
+  // Uma vez preenchido, `originAccountKey` VENCE a inferência da baixa (ver
+  // utils/paymentAccounts.ts → resolveTituloOrigin). Sem essa precedência, a
+  // próxima conciliação desfaria a correção e o gestor teria que refazê-la para
+  // sempre.
+  originAccountKey?: string;     // `code` de PAYMENT_ACCOUNTS ('caixa30107', 'bradesco'...)
+  originAccountLabel?: string;   // rótulo no momento da escolha, para o histórico
+  originSetAt?: string;          // quando foi definida
+  originSetByName?: string;      // quem definiu
 
   importedAt?: string;
   updatedAt?: string;

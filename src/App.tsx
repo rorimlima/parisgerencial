@@ -42,6 +42,7 @@ const BillingView = lazy(() => import('./components/BillingView').then((m) => ({
 const StockView = lazy(() => import('./components/StockView').then((m) => ({ default: m.StockView })));
 const SalesView = lazy(() => import('./components/SalesView').then((m) => ({ default: m.SalesView })));
 const TaskManagerView = lazy(() => import('./components/TaskManagerView').then((m) => ({ default: m.TaskManagerView })));
+const UserManagementView = lazy(() => import('./components/UserManagementView').then((m) => ({ default: m.UserManagementView })));
 
 /** Esqueleto mostrado enquanto o código de uma tela é baixado. */
 const ViewSkeleton: React.FC = () => (
@@ -1495,6 +1496,32 @@ export default function App() {
     );
   };
 
+  /**
+   * Aponta de qual conta saiu (ou entrou) o dinheiro do título.
+   *
+   * `accountKey` vazio LIMPA a escolha e devolve o título à conta inferida pela
+   * baixa — é o caminho de volta de quem clicou na conta errada. Por isso os
+   * campos são gravados como string vazia em vez de omitidos: com `merge: true`,
+   * campo omitido mantém o valor antigo, e a correção não teria efeito.
+   */
+  const handleSetTituloOrigin = async (
+    movType: TituloMovType,
+    id: string,
+    accountKey: string,
+    accountLabel: string
+  ) => {
+    const lista = movType === 'R' ? receivables : payables;
+    const now = new Date().toISOString();
+    const patch = {
+      originAccountKey: accountKey,
+      originAccountLabel: accountKey ? accountLabel : '',
+      originSetAt: accountKey ? now : '',
+      originSetByName: accountKey ? currentUser.name : '',
+    };
+    await atualizarTitulo(movType, id, patch);
+    setTitulosState(movType, lista.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+  };
+
   const handleDeleteTitulo = async (movType: TituloMovType, id: string) => {
     await excluirTitulo(movType, id);
     const lista = movType === 'R' ? receivables : payables;
@@ -1699,6 +1726,9 @@ export default function App() {
               onManualBaixa={(id, sid, src) =>
                 handleManualBaixaTitulo(activeTab === 'receivables' ? 'R' : 'P', id, sid, src)
               }
+              onSetOrigin={(id, accountKey, accountLabel) =>
+                handleSetTituloOrigin(activeTab === 'receivables' ? 'R' : 'P', id, accountKey, accountLabel)
+              }
               onRevertBaixa={(id) => handleRevertBaixaTitulo(activeTab === 'receivables' ? 'R' : 'P', id)}
               onDelete={(id) => handleDeleteTitulo(activeTab === 'receivables' ? 'R' : 'P', id)}
               onClear={() => handleClearTitulos(activeTab === 'receivables' ? 'R' : 'P')}
@@ -1862,6 +1892,10 @@ export default function App() {
               dbConfig={postgresConfig}
               onTestConnection={handleTestPostgresConnection}
             />
+          )}
+
+          {activeTab === 'users' && (
+            <UserManagementView currentUser={currentUser} />
           )}
           </Suspense>
         </main>

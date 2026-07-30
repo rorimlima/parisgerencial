@@ -263,6 +263,15 @@ export const updateTituloFields = async (
   if (fields.notes !== undefined) data.observacoes = fields.notes;
   if (fields.customerId !== undefined) data.cliente_id = fields.customerId;
 
+  // Conta de origem apontada pelo gestor. String vazia é gravada de propósito
+  // (não filtrada como "sem valor"): é assim que ele LIMPA a escolha e devolve
+  // o título à conta inferida pela baixa. Se o vazio fosse ignorado aqui, uma
+  // conta escolhida por engano ficaria presa para sempre.
+  if (fields.originAccountKey !== undefined) data.conta_origem = fields.originAccountKey;
+  if (fields.originAccountLabel !== undefined) data.conta_origem_label = fields.originAccountLabel;
+  if (fields.originSetAt !== undefined) data.conta_origem_em = fields.originSetAt;
+  if (fields.originSetByName !== undefined) data.conta_origem_por = fields.originSetByName;
+
   if (fields.isPaid !== undefined) data.pago = fields.isPaid;
   if (fields.paymentDate !== undefined) data.data_pagamento = fields.paymentDate;
   if (fields.paidYear !== undefined) data.ano_pagamento = fields.paidYear;

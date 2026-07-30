@@ -11,6 +11,9 @@ import {
   fetchSellers,
   fetchApiTokens,
   fetchUsers,
+  addUser as _addUser,
+  updateUser as _updateUser,
+  deleteUser as _deleteUser,
   saveEconomicLaunch,
   saveFinancialLaunch,
   addCustomer,
@@ -68,6 +71,9 @@ export const getTitulosInadimplentes = fetchDelinquentTitles;
 export const getVendedores = fetchSellers;
 export const getApiTokens = fetchApiTokens;
 export const getUsuarios = fetchUsers;
+export const saveUsuario = _addUser;
+export const updateUsuario = _updateUser;
+export const deleteUsuario = _deleteUser;
 
 // ── Persistência de dados ───────────────────────────────────────────────────
 export const saveEconomicMonth = async (
