@@ -180,7 +180,13 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
   }, [safeDelinquentTitles]);
 
   // Map de Clientes do cadastro
-  const customer  // ── 1. Consolidação dos Produtos para o CRM ────────────────────────────────
+  const customerMap = useMemo(() => {
+    const map = new Map<string, Customer>();
+    safeCustomers.forEach((c) => {
+      if (c?.code) map.set(normalizePersonCode(c.code), c);
+    });
+    return map;
+  }, [safeCustomers]);
   const productSummaries = useMemo<ProductCrmSummary[]>(() => {
     const map = new Map<
       string,
@@ -518,17 +524,6 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
         cumPct: Number(c.toFixed(1)),
       };
     });
-  }, [productSummaries, customerSummaries, abcTarget, abcMetric]);rt((a, b) => b.totalNet - a.totalNet);
-      else sorted = [...customerSummaries].sort((a, b) => b.totalMargin - a.totalMargin);
-    }
-
-    const top15 = sorted.slice(0, 15);
-    return top15.map((item, idx) => ({
-      name: (item.productDescription || item.customerName || '').slice(0, 18) + '...',
-      valor: item.totalNet || 0,
-      margem: item.totalMargin || 0,
-      cumPct: Number((item.cumRevenuePct || item.cumMarginPct || (idx + 1) * 6).toFixed(1)),
-    }));
   }, [productSummaries, customerSummaries, abcTarget, abcMetric]);
 
   // Copiar Script Comercial

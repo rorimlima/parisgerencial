@@ -36,6 +36,7 @@
  */
 
 import React, { useMemo, useState } from 'react';
+import { CrmSalesView } from './CrmSalesView';
 import {
   AlertTriangle,
   BadgePercent,
