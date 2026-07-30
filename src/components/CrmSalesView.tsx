@@ -128,9 +128,14 @@ export interface CustomerCrmSummary {
   topProduct?: string;
 }
 
-const fmtQty = (n: number) => (n ?? 0).toLocaleString('pt-BR', { maximumFractionDigits: 1 });
-const fmtPct = (n: number) => `${(Number.isFinite(n) ? n : 0).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%`;
-const fmtInt = (n: number) => (n ?? 0).toLocaleString('pt-BR');
+const safeNum = (v: any, fallback = 0): number => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+};
+
+const fmtQty = (n: number) => safeNum(n).toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+const fmtPct = (n: number) => `${safeNum(n).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%`;
+const fmtInt = (n: number) => safeNum(n).toLocaleString('pt-BR');
 
 export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
   auditedSales = [],
@@ -175,15 +180,7 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
   }, [safeDelinquentTitles]);
 
   // Map de Clientes do cadastro
-  const customerMap = useMemo(() => {
-    const map = new Map<string, Customer>();
-    safeCustomers.forEach((c) => {
-      if (c?.code) map.set(normalizePersonCode(c.code), c);
-    });
-    return map;
-  }, [safeCustomers]);
-
-  // ── 1. Consolidação dos Produtos para o CRM ────────────────────────────────
+  const customer  // ── 1. Consolidação dos Produtos para o CRM ────────────────────────────────
   const productSummaries = useMemo<ProductCrmSummary[]>(() => {
     const map = new Map<
       string,
@@ -202,9 +199,14 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
       const desc = s?.productDescription || 'Produto sem descrição';
       const brand = s?.brandReference || '';
       const cur = map.get(code) || { code, desc, brand, qty: 0, net: 0, margin: 0 };
-      cur.qty += s?.quantity || 0;
-      cur.net += s?.netAmount || 0;
-      cur.margin += s?.marginCalculated ?? s?.marginErp ?? 0;
+      cur.qty += safeNum(s?.quantity);
+      cur.net += safeNum(s?.netAmount);
+
+      const mCalc = safeNum(s?.marginCalculated, NaN);
+      const mErp = safeNum(s?.marginErp, NaN);
+      const mFinal = Number.isFinite(mCalc) ? mCalc : Number.isFinite(mErp) ? mErp : 0;
+      cur.margin += mFinal;
+
       if (!cur.brand && brand) cur.brand = brand;
       map.set(code, cur);
     });
@@ -213,28 +215,31 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
     if (!list.length) return [];
 
     // Calcular totais globais para ordenação e acumulados
-    const totalRev = list.reduce((a, b) => a + b.net, 0);
-    const totalMar = list.reduce((a, b) => a + b.margin, 0);
-    const totalQty = list.reduce((a, b) => a + b.qty, 0);
+    const totalRev = safeNum(list.reduce((a, b) => a + safeNum(b.net), 0));
+    const totalMar = safeNum(list.reduce((a, b) => a + safeNum(b.margin), 0));
+    const totalQty = safeNum(list.reduce((a, b) => a + safeNum(b.qty), 0));
 
     // Calcular Mediana de Saída/Giro
-    const sortedByQty = [...list].sort((a, b) => b.qty - a.qty);
-    const medianQty = sortedByQty[Math.floor(sortedByQty.length / 2)]?.qty || 1;
+    const sortedByQty = [...list].sort((a, b) => safeNum(b.qty) - safeNum(a.qty));
+    const medianQty = safeNum(sortedByQty[Math.floor(sortedByQty.length / 2)]?.qty, 1);
 
     // Calcular Mediana de Margem %
     const sortedByMarginPct = [...list]
-      .filter((p) => p.net > 0)
-      .map((p) => (p.margin / p.net) * 100)
+      .filter((p) => safeNum(p.net) > 0)
+      .map((p) => safeNum((safeNum(p.margin) / safeNum(p.net)) * 100))
+      .filter((pct) => Number.isFinite(pct))
       .sort((a, b) => a - b);
-    const medianMarginPct = sortedByMarginPct[Math.floor(sortedByMarginPct.length / 2)] || 20;
+    const medianMarginPct = sortedByMarginPct.length
+      ? safeNum(sortedByMarginPct[Math.floor(sortedByMarginPct.length / 2)], 20)
+      : 20;
 
     // Ordenar por Receita para Curva ABC de Receita
-    const byRevenue = [...list].sort((a, b) => b.net - a.net);
+    const byRevenue = [...list].sort((a, b) => safeNum(b.net) - safeNum(a.net));
     let runRev = 0;
     const abcRevMap = new Map<string, { cls: 'A' | 'B' | 'C'; cumPct: number }>();
     byRevenue.forEach((item) => {
-      runRev += item.net;
-      const pct = totalRev > 0 ? (runRev / totalRev) * 100 : 100;
+      runRev += safeNum(item.net);
+      const pct = totalRev > 0 ? safeNum((runRev / totalRev) * 100) : 100;
       let cls: 'A' | 'B' | 'C' = 'C';
       if (pct <= 80) cls = 'A';
       else if (pct <= 95) cls = 'B';
@@ -242,12 +247,12 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
     });
 
     // Ordenar por Margem para Curva ABC de Margem
-    const byMargin = [...list].sort((a, b) => b.margin - a.margin);
+    const byMargin = [...list].sort((a, b) => safeNum(b.margin) - safeNum(a.margin));
     let runMar = 0;
     const abcMarMap = new Map<string, { cls: 'A' | 'B' | 'C'; cumPct: number }>();
     byMargin.forEach((item) => {
-      runMar += item.margin;
-      const pct = totalMar > 0 ? (runMar / totalMar) * 100 : 100;
+      runMar += safeNum(item.margin);
+      const pct = totalMar > 0 ? safeNum((runMar / totalMar) * 100) : 100;
       let cls: 'A' | 'B' | 'C' = 'C';
       if (pct <= 80) cls = 'A';
       else if (pct <= 95) cls = 'B';
@@ -258,8 +263,8 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
     let runQty = 0;
     const abcQtyMap = new Map<string, 'A' | 'B' | 'C'>();
     sortedByQty.forEach((item) => {
-      runQty += item.qty;
-      const pct = totalQty > 0 ? (runQty / totalQty) * 100 : 100;
+      runQty += safeNum(item.qty);
+      const pct = totalQty > 0 ? safeNum((runQty / totalQty) * 100) : 100;
       let cls: 'A' | 'B' | 'C' = 'C';
       if (pct <= 80) cls = 'A';
       else if (pct <= 95) cls = 'B';
@@ -268,10 +273,14 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
 
     // Montar resultado final
     return list.map((item) => {
-      const marginPct = item.net > 0 ? (item.margin / item.net) * 100 : 0;
+      const net = safeNum(item.net);
+      const margin = safeNum(item.margin);
+      const qty = safeNum(item.qty);
+
+      const marginPct = net > 0 ? safeNum((margin / net) * 100) : 0;
       const stk = stockMap.get(item.code);
       const isHighMargin = marginPct >= Math.max(22, medianMarginPct);
-      const isHighVolume = item.qty >= medianQty;
+      const isHighVolume = qty >= medianQty;
 
       let quadrant: ProductQuadrant = 'review';
       if (isHighMargin && isHighVolume) quadrant = 'champion';
@@ -287,21 +296,21 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
         productCode: item.code,
         productDescription: item.desc,
         brandReference: item.brand || stk?.brandReference || '',
-        totalQty: item.qty,
-        totalNet: item.net,
-        totalMargin: item.margin,
+        totalQty: qty,
+        totalNet: net,
+        totalMargin: margin,
         marginPct,
-        unitPriceAvg: item.qty > 0 ? item.net / item.qty : 0,
-        unitProfitAvg: item.qty > 0 ? item.margin / item.qty : 0,
-        stockQty: stk?.availableQty || 0,
-        replacementCost: stk?.replacementCost || 0,
-        listPrice: stk?.salePrice || stk?.publicPrice || 0,
+        unitPriceAvg: qty > 0 ? safeNum(net / qty) : 0,
+        unitProfitAvg: qty > 0 ? safeNum(margin / qty) : 0,
+        stockQty: safeNum(stk?.availableQty),
+        replacementCost: safeNum(stk?.replacementCost),
+        listPrice: safeNum(stk?.salePrice || stk?.publicPrice),
         abcRevenueClass: revAbc.cls,
         abcMarginClass: marAbc.cls,
         abcQtyClass: qtyAbc,
         quadrant,
-        cumRevenuePct: revAbc.cumPct,
-        cumMarginPct: marAbc.cumPct,
+        cumRevenuePct: safeNum(revAbc.cumPct, 100),
+        cumMarginPct: safeNum(marAbc.cumPct, 100),
       };
     });
   }, [safeAuditedSales, stockMap]);
@@ -336,21 +345,24 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
         margin: 0,
         invoices: new Set<string>(),
         lastDate: '',
-        seller: s.sellerName || '',
+        seller: s?.sellerName || '',
         topProd: '',
         prodNetMax: 0,
         prodNets: new Map<string, number>(),
       };
 
-      cur.net += s.netAmount || 0;
-      cur.margin += s.marginCalculated ?? s.marginErp ?? 0;
-      if (s.invoiceNumber || s.invoiceCode) cur.invoices.add(s.invoiceNumber || s.invoiceCode);
-      if (s.issueDate && s.issueDate > cur.lastDate) cur.lastDate = s.issueDate;
-      if (!cur.seller && s.sellerName) cur.seller = s.sellerName;
+      cur.net += safeNum(s?.netAmount);
+      const mCalc = safeNum(s?.marginCalculated, NaN);
+      const mErp = safeNum(s?.marginErp, NaN);
+      cur.margin += Number.isFinite(mCalc) ? mCalc : Number.isFinite(mErp) ? mErp : 0;
+
+      if (s?.invoiceNumber || s?.invoiceCode) cur.invoices.add(String(s.invoiceNumber || s.invoiceCode));
+      if (s?.issueDate && s.issueDate > cur.lastDate) cur.lastDate = s.issueDate;
+      if (!cur.seller && s?.sellerName) cur.seller = s.sellerName;
 
       // Track top product bought
-      const pName = s.productDescription || s.productCode;
-      const pNet = (cur.prodNets.get(pName) || 0) + (s.netAmount || 0);
+      const pName = s?.productDescription || s?.productCode || 'Item';
+      const pNet = safeNum(cur.prodNets.get(pName)) + safeNum(s?.netAmount);
       cur.prodNets.set(pName, pNet);
       if (pNet > cur.prodNetMax) {
         cur.prodNetMax = pNet;
@@ -363,36 +375,40 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
     const list = Array.from(map.values());
     if (!list.length) return [];
 
-    const totalRev = list.reduce((a, b) => a + b.net, 0);
-    const sorted = [...list].sort((a, b) => b.net - a.net);
+    const totalRev = safeNum(list.reduce((a, b) => a + safeNum(b.net), 0));
+    const sorted = [...list].sort((a, b) => safeNum(b.net) - safeNum(a.net));
 
     let run = 0;
     return sorted.map((item) => {
-      run += item.net;
-      const cumPct = totalRev > 0 ? (run / totalRev) * 100 : 100;
+      run += safeNum(item.net);
+      const cumPct = totalRev > 0 ? safeNum((run / totalRev) * 100) : 100;
       let abcClass: 'A' | 'B' | 'C' = 'C';
       if (cumPct <= 80) abcClass = 'A';
       else if (cumPct <= 95) abcClass = 'B';
 
-      const dDate = item.lastDate ? new Date(item.lastDate) : today;
+      const dDate = item.lastDate && !isNaN(new Date(item.lastDate).getTime()) ? new Date(item.lastDate) : today;
       const diffMs = today.getTime() - dDate.getTime();
-      const daysSince = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+      const daysSince = Math.max(0, Math.floor(safeNum(diffMs) / (1000 * 60 * 60 * 24)));
 
       const cDoc = customerMap.get(item.code);
-      const delAmt = overdueByCustomer.get(item.code) || 0;
+      const delAmt = safeNum(overdueByCustomer.get(item.code));
 
       let status: 'Adimplente' | 'Inadimplente' | 'Risco' = 'Adimplente';
       if (delAmt > 0) status = 'Inadimplente';
       else if (daysSince > 60 && abcClass !== 'C') status = 'Risco';
 
+      const net = safeNum(item.net);
+      const margin = safeNum(item.margin);
+      const invCount = item.invoices.size || 1;
+
       return {
         customerCode: item.code,
         customerName: item.name,
-        totalNet: item.net,
-        totalMargin: item.margin,
-        marginPct: item.net > 0 ? (item.margin / item.net) * 100 : 0,
-        orderCount: item.invoices.size || 1,
-        avgTicket: item.invoices.size > 0 ? item.net / item.invoices.size : item.net,
+        totalNet: net,
+        totalMargin: margin,
+        marginPct: net > 0 ? safeNum((margin / net) * 100) : 0,
+        orderCount: invCount,
+        avgTicket: invCount > 0 ? safeNum(net / invCount) : net,
         lastPurchaseDate: item.lastDate,
         daysSinceLastPurchase: daysSince,
         abcClass,
@@ -405,26 +421,26 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
         topProduct: item.topProd,
       };
     });
-  }, [auditedSales, customerMap, overdueByCustomer]);
+  }, [safeAuditedSales, customerMap, overdueByCustomer]);
 
   // ── 3. Métricas Globais dos Quadrantes ──────────────────────────────────────
   const kpis = useMemo(() => {
-    const totalRev = productSummaries.reduce((a, b) => a + b.totalNet, 0);
-    const totalMargin = productSummaries.reduce((a, b) => a + b.totalMargin, 0);
-    const avgMarginPct = totalRev > 0 ? (totalMargin / totalRev) * 100 : 0;
+    const totalRev = safeNum(productSummaries.reduce((a, b) => a + safeNum(b.totalNet), 0));
+    const totalMargin = safeNum(productSummaries.reduce((a, b) => a + safeNum(b.totalMargin), 0));
+    const avgMarginPct = totalRev > 0 ? safeNum((totalMargin / totalRev) * 100) : 0;
 
     const champions = productSummaries.filter((p) => p.quadrant === 'champion');
     const opportunities = productSummaries.filter((p) => p.quadrant === 'opportunity');
     const volumeItems = productSummaries.filter((p) => p.quadrant === 'volume');
     const reviewItems = productSummaries.filter((p) => p.quadrant === 'review');
 
-    const championRev = champions.reduce((a, b) => a + b.totalNet, 0);
-    const championMargin = champions.reduce((a, b) => a + b.totalMargin, 0);
+    const championRev = safeNum(champions.reduce((a, b) => a + safeNum(b.totalNet), 0));
+    const championMargin = safeNum(champions.reduce((a, b) => a + safeNum(b.totalMargin), 0));
 
-    const opportunityMarginPotential = opportunities.reduce((a, b) => a + b.totalMargin * 0.15, 0);
+    const opportunityMarginPotential = safeNum(opportunities.reduce((a, b) => a + safeNum(b.totalMargin) * 0.15, 0));
 
     const classAProducts = productSummaries.filter((p) => p.abcRevenueClass === 'A');
-    const classARev = classAProducts.reduce((a, b) => a + b.totalNet, 0);
+    const classARev = safeNum(classAProducts.reduce((a, b) => a + safeNum(b.totalNet), 0));
 
     return {
       totalRev,
@@ -438,7 +454,7 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
       volumeCount: volumeItems.length,
       reviewCount: reviewItems.length,
       classACount: classAProducts.length,
-      classARevPct: totalRev > 0 ? (classARev / totalRev) * 100 : 0,
+      classARevPct: totalRev > 0 ? safeNum((classARev / totalRev) * 100) : 0,
       totalSKUs: productSummaries.length,
       totalCustomers: customerSummaries.length,
     };
@@ -449,12 +465,12 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
     return productSummaries.filter((p) => {
       if (quadrantFilter !== 'all' && p.quadrant !== quadrantFilter) return false;
       if (abcFilter !== 'all' && p.abcRevenueClass !== abcFilter) return false;
-      if (minMarginFilter > 0 && p.marginPct < minMarginFilter) return false;
+      if (minMarginFilter > 0 && safeNum(p.marginPct) < minMarginFilter) return false;
       if (search) {
         const s = search.toLowerCase();
-        const matchDesc = p.productDescription.toLowerCase().includes(s);
-        const matchCode = p.productCode.toLowerCase().includes(s);
-        const matchBrand = p.brandReference.toLowerCase().includes(s);
+        const matchDesc = (p.productDescription || '').toLowerCase().includes(s);
+        const matchCode = (p.productCode || '').toLowerCase().includes(s);
+        const matchBrand = (p.brandReference || '').toLowerCase().includes(s);
         if (!matchDesc && !matchCode && !matchBrand) return false;
       }
       return true;
@@ -466,8 +482,8 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
       if (abcFilter !== 'all' && c.abcClass !== abcFilter) return false;
       if (search) {
         const s = search.toLowerCase();
-        const matchName = c.customerName.toLowerCase().includes(s);
-        const matchCode = c.customerCode.toLowerCase().includes(s);
+        const matchName = (c.customerName || '').toLowerCase().includes(s);
+        const matchCode = (c.customerCode || '').toLowerCase().includes(s);
         const matchCity = (c.city || '').toLowerCase().includes(s);
         if (!matchName && !matchCode && !matchCity) return false;
       }
@@ -482,11 +498,27 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
 
     let sorted: any[] = [];
     if (abcTarget === 'products') {
-      if (abcMetric === 'revenue') sorted = [...productSummaries].sort((a, b) => b.totalNet - a.totalNet);
-      else if (abcMetric === 'margin') sorted = [...productSummaries].sort((a, b) => b.totalMargin - a.totalMargin);
-      else sorted = [...productSummaries].sort((a, b) => b.totalQty - a.totalQty);
+      if (abcMetric === 'revenue') sorted = [...productSummaries].sort((a, b) => safeNum(b.totalNet) - safeNum(a.totalNet));
+      else if (abcMetric === 'margin') sorted = [...productSummaries].sort((a, b) => safeNum(b.totalMargin) - safeNum(a.totalMargin));
+      else sorted = [...productSummaries].sort((a, b) => safeNum(b.totalQty) - safeNum(a.totalQty));
     } else {
-      if (abcMetric === 'revenue') sorted = [...customerSummaries].sort((a, b) => b.totalNet - a.totalNet);
+      if (abcMetric === 'revenue') sorted = [...customerSummaries].sort((a, b) => safeNum(b.totalNet) - safeNum(a.totalNet));
+      else sorted = [...customerSummaries].sort((a, b) => safeNum(b.totalMargin) - safeNum(a.totalMargin));
+    }
+
+    const top15 = sorted.slice(0, 15);
+    return top15.map((item, idx) => {
+      const v = safeNum(item.totalNet);
+      const m = safeNum(item.totalMargin);
+      const c = safeNum(item.cumRevenuePct, safeNum(item.cumMarginPct, (idx + 1) * 6));
+      return {
+        name: String(item.productDescription || item.customerName || 'Item').slice(0, 18),
+        valor: v,
+        margem: m,
+        cumPct: Number(c.toFixed(1)),
+      };
+    });
+  }, [productSummaries, customerSummaries, abcTarget, abcMetric]);rt((a, b) => b.totalNet - a.totalNet);
       else sorted = [...customerSummaries].sort((a, b) => b.totalMargin - a.totalMargin);
     }
 
@@ -1080,24 +1112,30 @@ export const CrmSalesView: React.FC<CrmSalesViewProps> = ({
               Demonstração da Lei de Pareto 80/20: a fatia azul representa o valor absoluto e a linha dourada o percentual acumulado.
             </p>
 
-            <div className="h-72 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={paretoChartData}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#EAE6DF" />
-                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#8B7D6B' }} interval={0} />
-                  <YAxis yAxisId="left" tickFormatter={(v) => `R$ ${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 11, fill: '#8B7D6B' }} />
-                  <YAxis yAxisId="right" orientation="right" tickFormatter={(v) => `${v}%`} domain={[0, 100]} tick={{ fontSize: 11, fill: '#8B7D6B' }} />
-                  <Tooltip
-                    formatter={(val: any, name: any) => [
-                      name === 'cumPct' ? `${val}%` : formatCurrency(Number(val)),
-                      name === 'cumPct' ? '% Acumulado' : name === 'valor' ? 'Receita R$' : 'Margem R$',
-                    ]}
-                  />
-                  <Bar yAxisId="left" dataKey="valor" fill="#2D2A26" radius={[6, 6, 0, 0]} />
-                  <Line yAxisId="right" type="monotone" dataKey="cumPct" stroke="#C19A6B" strokeWidth={3} dot={{ r: 4, fill: '#C19A6B' }} />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
+            {paretoChartData.length > 0 ? (
+              <div className="h-72 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={paretoChartData}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#EAE6DF" />
+                    <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#8B7D6B' }} interval={0} />
+                    <YAxis yAxisId="left" tickFormatter={(v) => `R$ ${(safeNum(v) / 1000).toFixed(0)}k`} tick={{ fontSize: 11, fill: '#8B7D6B' }} />
+                    <YAxis yAxisId="right" orientation="right" tickFormatter={(v) => `${safeNum(v)}%`} domain={[0, 100]} tick={{ fontSize: 11, fill: '#8B7D6B' }} />
+                    <Tooltip
+                      formatter={(val: any, name: any) => [
+                        name === 'cumPct' ? `${safeNum(val)}%` : formatCurrency(safeNum(val)),
+                        name === 'cumPct' ? '% Acumulado' : name === 'valor' ? 'Receita R$' : 'Margem R$',
+                      ]}
+                    />
+                    <Bar yAxisId="left" dataKey="valor" fill="#2D2A26" radius={[6, 6, 0, 0]} />
+                    <Line yAxisId="right" type="monotone" dataKey="cumPct" stroke="#C19A6B" strokeWidth={3} dot={{ r: 4, fill: '#C19A6B' }} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div className="h-48 flex items-center justify-center text-xs text-[#8B7D6B] border border-dashed border-[#EAE6DF] rounded-xl bg-[#FAF8F5]">
+                Sem dados de vendas suficientes para exibir o gráfico de Pareto neste filtro.
+              </div>
+            )}
           </div>
 
           {/* TABELA CURVA ABC COMPLETA */}
