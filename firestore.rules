@@ -344,9 +344,72 @@ service cloud.firestore {
       allow write: if escritaValida();
     }
 
-    // Detalhe de vendas particionado por ano: vendas_2024, vendas_2025, vendas_0, etc.
-    // O código usa salesCollectionForYear(year) => `vendas_${year}`.
-    match /vendas_{year}/{docId} {
+    // Detalhe de vendas particionado por ano: vendas_0, vendas_2020..vendas_2035
+    match /vendas_0/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2020/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2021/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2022/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2023/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2024/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2025/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2026/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2027/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2028/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2029/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2030/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2031/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2032/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2033/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2034/{docId} {
+      allow read: if autorizado();
+      allow write: if escritaValida();
+    }
+    match /vendas_2035/{docId} {
       allow read: if autorizado();
       allow write: if escritaValida();
     }
