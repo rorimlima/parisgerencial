@@ -23,6 +23,7 @@ import {
 } from 'firebase/auth';
 import { firebaseConfig } from '../firebaseConfig';
 import { statementDocId } from '../utils/statementKeys';
+import { planFromFirestore, planToFirestore, normalizePlan } from '../utils/cashFlowPersistence';
 import { INITIAL_ECONOMIC_BY_YEAR, INITIAL_FINANCIAL_BY_YEAR, INITIAL_SELLERS } from '../data/initialData';
 import {
   User,
@@ -1167,30 +1168,12 @@ void stripEmpty;
 // --- Fluxo de Caixa (Planejamento Semanal) ---
 const CASHFLOW_COLLECTION = 'fluxo_caixa';
 
-const EMPTY_WEEK = { recebimentos: 0, desembolsos: 0, aportes: 0 };
-const emptyWeeks = () => ({
-  sem01: { ...EMPTY_WEEK },
-  sem02: { ...EMPTY_WEEK },
-  sem03: { ...EMPTY_WEEK },
-  sem04: { ...EMPTY_WEEK },
-  sem05: { ...EMPTY_WEEK },
-});
-
-const cashFlowFromFirestore = (id: string, data: any): CashFlowPlan => ({
-  id,
-  year: Number(data.ano) || 0,
-  monthKey: (data.mes || '').toString(),
-  saldoInicial: Number(data.saldo_inicial) || 0,
-  useSaldoAutomatico: !!data.saldo_automatico,
-  realizadoManual: !!data.realizado_manual,
-  weeks: { ...emptyWeeks(), ...(data.semanas || {}) },
-  pendencias: Array.isArray(data.pendencias) ? data.pendencias : [],
-  contasCaixa: Array.isArray(data.contas_caixa) ? data.contas_caixa : [],
-  posicaoData: data.posicao_data || '',
-  horizonteAporteDias: Number(data.horizonte_aporte_dias) || 30,
-  notes: data.observacoes || '',
-  updatedAt: data.atualizado_em || undefined,
-});
+// Leitura e escrita compartilham o MESMO normalizador (ver
+// utils/cashFlowPersistence.ts). Quando os dois lados tinham cada um a sua
+// versão do formato, o banco acumulava documentos com campos faltando e o
+// valor digitado pelo gestor "voltava" ao antigo na leitura seguinte.
+const cashFlowFromFirestore = (id: string, data: any): CashFlowPlan =>
+  planFromFirestore(id, data);
 
 // Busca todos os planos de fluxo de caixa de um ano (um por mês).
 export const fetchCashFlowPlans = async (year?: number): Promise<CashFlowPlan[]> => {
@@ -1207,26 +1190,41 @@ export const fetchCashFlowPlans = async (year?: number): Promise<CashFlowPlan[]>
   }
 };
 
-// Salva (upsert) o plano previsto de um mês. Doc id = `${ano}_${mes}`.
-export const saveCashFlowPlan = async (plan: CashFlowPlan): Promise<void> => {
+/**
+ * Salva o plano do mês. Doc id = `${ano}_${mes}` — uma gravação, um documento.
+ *
+ * A gravação é ABSOLUTA: `setDoc` SEM `merge`. Isso é uma correção deliberada,
+ * não descuido.
+ *
+ * Antes usava-se `{ merge: true }`, e no Firestore merge faz DEEP MERGE em
+ * mapas aninhados. `semanas` é um mapa: todo sub-campo ausente no objeto novo
+ * mantinha o valor ANTIGO gravado. Na prática, o gestor corrigia um
+ * recebimento, saía da tela, voltava, e encontrava o número velho de volta —
+ * sem erro, sem aviso, sem rastro. Fluxo de caixa que reescreve sozinho o que
+ * foi digitado não é fonte de decisão; é armadilha.
+ *
+ * Com `merge` desligado + payload normalizado (todas as semanas com todos os
+ * campos, sempre), o documento no banco passa a ser o espelho exato da tela.
+ * O que sumiu da tela some do banco. O que está na tela está no banco.
+ *
+ * Devolve o plano normalizado com o carimbo de `updatedAt` para que o chamador
+ * atualize o estado local sem precisar reler a coleção inteira — uma gravação
+ * de fluxo de caixa custa 1 write e 0 reads.
+ */
+export const saveCashFlowPlan = async (plan: CashFlowPlan): Promise<CashFlowPlan> => {
   try {
     const db = getFirestoreDb();
     const docId = `${plan.year}_${plan.monthKey}`;
-    const payload = {
-      ano: plan.year,
-      mes: plan.monthKey,
-      saldo_inicial: plan.saldoInicial,
-      saldo_automatico: !!plan.useSaldoAutomatico,
-      realizado_manual: !!plan.realizadoManual,
-      semanas: plan.weeks,
-      pendencias: plan.pendencias || [],
-      contas_caixa: plan.contasCaixa || [],
-      posicao_data: plan.posicaoData || '',
-      horizonte_aporte_dias: plan.horizonteAporteDias || 30,
-      observacoes: plan.notes || '',
-      atualizado_em: new Date().toISOString(),
-    };
-    await withTimeout(setDoc(doc(db, CASHFLOW_COLLECTION, docId), payload, { merge: true }), 12000, 'salvar plano de fluxo de caixa');
+    const updatedAt = new Date().toISOString();
+    const payload = planToFirestore(plan, updatedAt);
+
+    await withTimeout(
+      setDoc(doc(db, CASHFLOW_COLLECTION, docId), payload),
+      12000,
+      'salvar plano de fluxo de caixa'
+    );
+
+    return { ...normalizePlan(plan), id: docId, updatedAt };
   } catch (error) {
     console.error('Error saving cash flow plan:', error);
     throw error;

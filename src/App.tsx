@@ -1642,14 +1642,30 @@ export default function App() {
     }
   };
 
-  // ── Handler: Salvar plano de Fluxo de Caixa (previsto manual) ─────────────
-  const handleSaveCashFlowPlan = async (plan: CashFlowPlan) => {
-    await saveFluxoCaixa(plan);
-    // Atualiza o estado local (upsert por mês)
+  /**
+   * Salvar plano de Fluxo de Caixa.
+   *
+   * Guarda o plano DEVOLVIDO pelo serviço, não o que foi enviado: o serviço
+   * normaliza (todas as semanas com todos os campos) e carimba `updatedAt`. É
+   * esse carimbo que a tela usa para saber se o que está em memória já é o que
+   * está no banco — sem ele, o rascunho apareceria como "não salvo" logo depois
+   * de salvar.
+   *
+   * Upsert em posição fixa. A versão anterior fazia `[...others, plan]`, que
+   * empurrava o mês salvo para o fim do array; como a tela procura o plano por
+   * `find`, cada gravação trocava a identidade do objeto e disparava o efeito
+   * de sincronização — que por sua vez sobrescrevia o rascunho em edição.
+   */
+  const handleSaveCashFlowPlan = async (plan: CashFlowPlan): Promise<CashFlowPlan> => {
+    const saved = await saveFluxoCaixa(plan);
     setCashFlowPlans((prev) => {
-      const others = prev.filter((p) => !(p.monthKey === plan.monthKey && p.year === plan.year));
-      return [...others, plan];
+      const idx = prev.findIndex((p) => p.monthKey === saved.monthKey && p.year === saved.year);
+      if (idx === -1) return [...prev, saved];
+      const next = [...prev];
+      next[idx] = saved;
+      return next;
     });
+    return saved;
   };
 
   // ── Handler: Gerar Token API ──────────────────────────────────────────────

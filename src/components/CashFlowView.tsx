@@ -33,7 +33,7 @@
  * automaticamente na previsão os títulos que passaram a ser pagos.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowDownRight,
@@ -82,6 +82,7 @@ import {
   weekOfMonthIso,
   weekRangeLabel,
 } from '../utils/periodFilter';
+import { isPlanDirty, normalizePlan, toMoney } from '../utils/cashFlowPersistence';
 import { PdfExportMenu } from './PdfExportMenu';
 
 interface CashFlowViewProps {
@@ -97,7 +98,12 @@ interface CashFlowViewProps {
   receivables?: TituloFinanceiro[];
   payables?: TituloFinanceiro[];
   selectedYear: number;
-  onSavePlan: (plan: CashFlowPlan) => Promise<void> | void;
+  /**
+   * Grava o plano e devolve o que o banco confirmou (normalizado e com
+   * `updatedAt`). O retorno importa: é como a tela sabe que o rascunho já
+   * corresponde ao que está gravado e para de marcar alterações pendentes.
+   */
+  onSavePlan: (plan: CashFlowPlan) => Promise<CashFlowPlan | void> | CashFlowPlan | void;
   userRole: string;
 }
 
@@ -183,12 +189,26 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
   const [includeForecast, setIncludeForecast] = useState(true);
   const [prefilledHint, setPrefilledHint] = useState(false);
   const [pendingPrefill, setPendingPrefill] = useState(false);
+  // Alguém (ou outra aba) gravou este mês enquanto havia edição pendente aqui.
+  const [remoteChangedWhileEditing, setRemoteChangedWhileEditing] = useState(false);
 
   // ── Buffer de digitação dos campos numéricos ─────────────────────────────
   const [rawEdits, setRawEdits] = useState<Record<string, string>>({});
   const editKey = (...parts: (string | number)[]) => parts.join('__');
   const displayValue = (key: string, numeric: number): string =>
     rawEdits[key] !== undefined ? rawEdits[key] : numeric ? String(numeric) : '';
+
+  /**
+   * Igual ao `displayValue`, mas mostra o ZERO em vez de deixar o campo em branco.
+   *
+   * Usado no saldo inicial. Nas 25 células da grade, branco = zero é uma
+   * abreviação aceitável (não houve movimento). No saldo de abertura não é:
+   * "o mês abriu sem caixa" é uma afirmação do gestor, e exibi-la como campo
+   * vazio faz parecer que ninguém preencheu — o que leva alguém a preencher de
+   * novo por cima, ou a duvidar de um número que estava certo.
+   */
+  const displayValueAbsolute = (key: string, numeric: number): string =>
+    rawEdits[key] !== undefined ? rawEdits[key] : String(numeric ?? 0);
   const beginEdit = (key: string, raw: string, apply: (raw: string) => void) => {
     setRawEdits((r) => ({ ...r, [key]: raw }));
     apply(raw);
@@ -306,10 +326,63 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
   const totalForecast = sumMoney(WEEKS.map((w) => forecastWeeks[w]));
   const totalForecastIn = sumMoney(WEEKS.map((w) => forecastWeeksIn[w]));
 
-  // Sincroniza o rascunho editável com o plano salvo quando muda o mês/ano.
+  /**
+   * SINCRONIZAÇÃO DO RASCUNHO — a correção central do bug de valores que voltavam.
+   *
+   * A versão anterior dependia de `planForMonth`, que é `plans.find(...)`.
+   * Qualquer recarga do ano (`loadYearData`) recria os objetos, muda a
+   * identidade e disparava este efeito — que então jogava fora o que o gestor
+   * tinha acabado de digitar, junto com o buffer de digitação (`setRawEdits({})`).
+   * Como a recarga acontece ao trocar de ano, ao voltar o foco da janela e
+   * depois de várias ações do sistema, o efeito era o que o gestor descrevia:
+   * "digito, saio, volto e o número mudou".
+   *
+   * Agora a re-hidratação é deliberada e acontece em exatamente dois casos:
+   *   • mudou o mês ou o ano na tela (contexto novo, rascunho novo);
+   *   • o documento remoto ficou mais novo E não há edição pendente na tela.
+   *
+   * Havendo edição pendente, o que está na tela SEMPRE vence. Dado digitado e
+   * não salvo é trabalho humano; dado remoto é só uma releitura do que já
+   * existia. Descartar o primeiro em favor do segundo nunca é o certo.
+   */
+  const monthContextKey = `${selectedYear}_${monthKey}`;
+  const hydratedRef = useRef<{ context: string; remoteStamp: string } | null>(null);
+
+  const draftRef = useRef(draft);
+  useEffect(() => { draftRef.current = draft; }, [draft]);
+
+  // Divergência entre a tela e o que está gravado. Base do aviso de saída.
+  const isDirty = useMemo(() => isPlanDirty(draft, planForMonth), [draft, planForMonth]);
+  // Destaque específico do saldo de abertura: é o elo que puxa os cinco saldos
+  // do mês, então vale sinalizar sozinho quando está pendente de gravação.
+  const saldoInicialDirty =
+    toMoney(draft.saldoInicial) !== toMoney(planForMonth?.saldoInicial ?? 0);
+  const isDirtyRef = useRef(isDirty);
+  useEffect(() => { isDirtyRef.current = isDirty; }, [isDirty]);
+
   useEffect(() => {
+    const remoteStamp = planForMonth?.updatedAt || (planForMonth ? 'sem-carimbo' : '');
+    const prev = hydratedRef.current;
+    const contextChanged = !prev || prev.context !== monthContextKey;
+    const remoteChanged = !!prev && prev.remoteStamp !== remoteStamp;
+
+    // Releitura do mesmo mês sem novidade remota: não encosta no rascunho.
+    if (!contextChanged && !remoteChanged) return;
+
+    // Novidade remota com edição pendente: preserva o que está na tela. O
+    // gestor decide salvar (sobrepondo) ou descartar — não o efeito colateral
+    // de um refresh.
+    if (!contextChanged && remoteChanged && isDirtyRef.current) {
+      hydratedRef.current = { context: monthContextKey, remoteStamp };
+      setRemoteChangedWhileEditing(true);
+      return;
+    }
+
+    hydratedRef.current = { context: monthContextKey, remoteStamp };
+    setRemoteChangedWhileEditing(false);
+
     if (planForMonth) {
-      setDraft({ ...planForMonth, weeks: { ...planForMonth.weeks }, realizadoManual: true });
+      setDraft(normalizePlan({ ...planForMonth, realizadoManual: true }));
       setPendingPrefill(false);
       setPrefilledHint(false);
     } else {
@@ -320,11 +393,19 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
     setSavedMsg(null);
     setSaveError(null);
     setRawEdits({});
-  }, [planForMonth, monthKey, selectedYear]);
+  }, [planForMonth, monthContextKey, monthKey, selectedYear]);
 
-  // Pré-preenchimento automático apenas para meses novos (sem plano salvo no Firestore).
+  /**
+   * Pré-preenchimento automático — SOMENTE para mês novo, sem nada salvo e sem
+   * nada digitado. As três condições são obrigatórias.
+   *
+   * Este efeito depende de `realized`, que é derivado do extrato e dos títulos
+   * e muda a cada recarga. Sem as três travas, uma recarga do extrato reescrevia
+   * a coluna REAL. por cima do que o gestor tinha digitado — uma das origens do
+   * "o realizado mudou sozinho".
+   */
   useEffect(() => {
-    if (!pendingPrefill || planForMonth) return;
+    if (!pendingPrefill || planForMonth || isDirtyRef.current) return;
     const hasExtrato = WEEKS.some((w) => realized.weeks[w].receb > 0 || realized.weeks[w].desemb > 0);
     if (!hasExtrato) return;
 
@@ -599,6 +680,18 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
   const saldoProjetadoGrade = rows.realSaldo[semanaAtual];
   const divergenciaGrade = disponivelHoje - saldoProjetadoGrade;
 
+  /**
+   * Grava o mês.
+   *
+   * O que sai daqui é o documento inteiro, normalizado: as cinco semanas com os
+   * cinco campos, sempre. O serviço grava sem `merge`, então o que está na tela
+   * passa a ser exatamente o que está no banco — inclusive os zeros. Zerar um
+   * recebimento é uma informação tão legítima quanto digitar 50 mil, e antes
+   * dessa correção o zero era engolido pelo merge e o valor antigo voltava.
+   *
+   * Só há uma gravação por mês: 1 write, 0 reads. O estado local é atualizado a
+   * partir do retorno, sem reler a coleção.
+   */
   const handleSave = async () => {
     if (!canEdit) return;
     setIsSaving(true);
@@ -607,14 +700,26 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
     try {
       // realizadoManual fica sempre true: a partir desta versão o realizado é o
       // que está digitado, e os relatórios em PDF precisam ler daí.
-      await onSavePlan({
+      const toSave = normalizePlan({
         ...draft,
         id: `${selectedYear}_${monthKey}`,
         year: selectedYear,
         monthKey,
         realizadoManual: true,
       });
-      setSavedMsg('Planejamento salvo com sucesso.');
+      const saved = await onSavePlan(toSave);
+      // Espelha na tela o que o banco confirmou (com o carimbo de horário), para
+      // que o rascunho pare de constar como pendente logo após salvar.
+      if (saved) {
+        hydratedRef.current = {
+          context: `${selectedYear}_${monthKey}`,
+          remoteStamp: saved.updatedAt || 'sem-carimbo',
+        };
+        setDraft(saved);
+      }
+      setRawEdits({});
+      setRemoteChangedWhileEditing(false);
+      setSavedMsg('Planejamento salvo. Os valores digitados foram gravados como definitivos.');
       setPrefilledHint(false);
       setPendingPrefill(false);
     } catch (err) {
@@ -623,6 +728,43 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
       setIsSaving(false);
     }
   };
+
+  /**
+   * Guarda de saída do navegador.
+   *
+   * Necessária por um motivo concreto: o service worker está em `autoUpdate`
+   * com `skipWaiting`, então a aplicação pode se recarregar sozinha quando o
+   * foco volta para a janela e há versão nova publicada. Sem esta guarda, a
+   * recarga leva junto tudo o que estava digitado e não salvo — e do lado de cá
+   * parece que "o sistema mudou os números".
+   */
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!isDirtyRef.current) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
+
+  /** Trocar de mês com edição pendente exige confirmação explícita. */
+  const requestMonthChange = useCallback(
+    (nextMonth: string) => {
+      if (nextMonth === monthKey) return;
+      if (
+        isDirtyRef.current &&
+        !window.confirm(
+          'Há alterações não salvas neste mês. Trocar de mês agora descarta o que foi digitado.\n\n' +
+            'Deseja continuar mesmo assim?'
+        )
+      ) {
+        return;
+      }
+      setMonthKey(nextMonth);
+    },
+    [monthKey]
+  );
 
   const inheritSaldo = () => {
     if (previousMonthFinalSaldo == null) return;
@@ -733,7 +875,7 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
         <div className="flex flex-wrap items-center gap-2">
           <select
             value={monthKey}
-            onChange={(e) => setMonthKey(e.target.value)}
+            onChange={(e) => requestMonthChange(e.target.value)}
             className="bg-[#F9F7F2] border border-[#EAE6DF] text-xs font-bold text-[#2D2A26] rounded-lg px-3 py-2.5 focus:outline-none focus:border-[#C19A6B]"
           >
             {MONTHS.map((m) => (
@@ -755,11 +897,24 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
             <Download className="w-4 h-4 text-[#8B7D6B]" />
             <span>Exportar Excel</span>
           </button>
+          {canEdit && isDirty && (
+            <span
+              title="Existem valores digitados que ainda não foram gravados no banco."
+              className="px-2.5 py-1.5 rounded-lg text-[10px] font-black bg-amber-50 text-amber-900 border border-amber-300 flex items-center gap-1.5"
+            >
+              <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+              NÃO SALVO
+            </span>
+          )}
           {canEdit && (
             <button
               onClick={handleSave}
               disabled={isSaving}
-              className="px-4 py-2.5 text-xs font-bold bg-[#2D2A26] text-white hover:bg-[#3F3B35] rounded-lg shadow-xs transition-all flex items-center gap-2 disabled:opacity-60"
+              className={`px-4 py-2.5 text-xs font-bold rounded-lg shadow-xs transition-all flex items-center gap-2 disabled:opacity-60 ${
+                isDirty
+                  ? 'bg-[#C19A6B] text-white hover:bg-[#A8814F]'
+                  : 'bg-[#2D2A26] text-white hover:bg-[#3F3B35]'
+              }`}
             >
               {isSaving ? (
                 <svg className="animate-spin w-4 h-4 text-[#C19A6B]" viewBox="0 0 24 24" fill="none">
@@ -781,10 +936,27 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
           <p className="text-xs font-bold">{savedMsg}</p>
         </div>
       )}
+      {!savedMsg && !isDirty && planForMonth?.updatedAt && (
+        <p className="text-[10px] text-[#8B7D6B] font-semibold flex items-center gap-1.5">
+          <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+          Saldo inicial, recebimentos e pagamentos deste mês estão gravados no banco. Última gravação:{' '}
+          {new Date(planForMonth.updatedAt).toLocaleString('pt-BR')}.
+        </p>
+      )}
       {saveError && (
         <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 flex items-center gap-2">
           <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />
           <p className="text-xs font-bold">{saveError}</p>
+        </div>
+      )}
+      {remoteChangedWhileEditing && (
+        <div className="p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 flex items-start gap-2">
+          <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+          <p className="text-xs font-semibold">
+            Este mês foi gravado em outro lugar (outra aba ou outro usuário) enquanto você editava.
+            <b> O que está na sua tela foi preservado</b> e nada foi sobrescrito. Se salvar agora, a sua
+            versão passa a valer; se preferir a outra, recarregue a página antes de salvar.
+          </p>
         </div>
       )}
       {prefilledHint && canEdit && (
@@ -1021,10 +1193,17 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
       {/* Saldo inicial editável + controles do automático */}
       <div className="bg-white border border-[#EAE6DF] rounded-xl shadow-xs p-4 flex flex-col lg:flex-row lg:items-center gap-3">
         <label className="text-xs font-bold text-[#433E37] whitespace-nowrap">Saldo inicial de {monthLabel}:</label>
+        {/*
+          O saldo inicial digitado é DEFINITIVO: gravado como está e nunca
+          recalculado sozinho. Digitar aqui desliga o modo "herdado" (o clique
+          do gestor vale mais que a herança automática), e o saldo de abertura
+          é o primeiro elo do encadeamento semanal — se ele derivar, os cinco
+          saldos do mês derivam junto e a projeção inteira perde o sentido.
+        */}
         <input
           type="text"
           disabled={!canEdit}
-          value={displayValue(editKey('saldoInicial'), draft.saldoInicial)}
+          value={displayValueAbsolute(editKey('saldoInicial'), draft.saldoInicial)}
           onChange={(e) =>
             beginEdit(editKey('saldoInicial'), e.target.value, (raw) =>
               setDraft((d) => ({ ...d, saldoInicial: parseInput(raw), useSaldoAutomatico: false }))
@@ -1032,8 +1211,19 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
           }
           onBlur={() => endEdit(editKey('saldoInicial'))}
           placeholder="0,00"
-          className="w-40 bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg px-3 py-2 text-sm font-mono text-right focus:outline-none focus:border-[#C19A6B] disabled:opacity-60"
+          title="Valor digitado é gravado como definitivo. Não é recalculado pelo sistema."
+          className={`w-40 bg-[#F9F7F2] border rounded-lg px-3 py-2 text-sm font-mono text-right focus:outline-none focus:border-[#C19A6B] disabled:opacity-60 ${
+            saldoInicialDirty ? 'border-amber-400 bg-amber-50/50' : 'border-[#EAE6DF]'
+          }`}
         />
+        {!draft.useSaldoAutomatico && (
+          <span
+            className="text-[10px] font-bold text-[#8B7D6B] whitespace-nowrap"
+            title="Este valor foi digitado manualmente e não será substituído pela herança automática."
+          >
+            digitado — definitivo
+          </span>
+        )}
         {previousMonthFinalSaldo != null && canEdit && (
           <button
             onClick={inheritSaldo}
