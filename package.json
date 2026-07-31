@@ -24,6 +24,7 @@
     "test:diario": "node scripts/testMovimentoDiario.mjs",
     "test:periodo": "node scripts/testPeriodoPrecisao.mjs",
     "test:auditoria-titulos": "node scripts/auditarTitulos.mjs --autoteste",
+    "test:negociacao": "node scripts/testNegociacao.mjs",
     "import:fluxo-historico:dry": "node scripts/importFluxoCaixaHistorico.mjs \"FLUXO DE CAIXA (1).xlsx\" --dry",
     "import:fluxo-historico": "node scripts/importFluxoCaixaHistorico.mjs \"FLUXO DE CAIXA (1).xlsx\"",
     "import:titulos:dry": "node scripts/importTitulosRfn046.mjs --dry",
@@ -31,7 +32,7 @@
     "import:titulos:limpo": "node scripts/importTitulosRfn046.mjs --limpar-legado",
     "auditar:titulos": "node scripts/auditarTitulos.mjs",
     "auditar:titulos:detalhado": "node scripts/auditarTitulos.mjs --detalhado",
-    "test": "node scripts/testRfn019Parser.mjs && node scripts/testExtratoGeralParser.mjs && node scripts/testContasOrigem.mjs && node scripts/testFinancialAudit.mjs && node scripts/testPeriodoPrecisao.mjs && node scripts/testMovimentoDiario.mjs"
+    "test": "node scripts/testRfn019Parser.mjs && node scripts/testExtratoGeralParser.mjs && node scripts/testContasOrigem.mjs && node scripts/testFinancialAudit.mjs && node scripts/testPeriodoPrecisao.mjs && node scripts/testMovimentoDiario.mjs && node scripts/testNegociacao.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

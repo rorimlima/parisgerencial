@@ -584,6 +584,8 @@ export const fetchDelinquentTitles = async (): Promise<DelinquentTitle[]> => {
         lastHistoryCode: data.historico_codigo || '',
         occurrence: data.ocorrencia || '',
         importedAt: data.importado_em || '',
+        // Vínculo com acordo de negociação (gravado pelo agreementsService)
+        agreementId: data.acordo_id || '',
       };
     });
   } catch (error) {
@@ -635,6 +637,7 @@ const titleToFirestore = (title: Partial<DelinquentTitle>): Record<string, any> 
   if (title.lastHistoryDate !== undefined) data.historico_data = title.lastHistoryDate || '';
   if (title.lastHistoryCode !== undefined) data.historico_codigo = title.lastHistoryCode || '';
   if (title.occurrence !== undefined) data.ocorrencia = title.occurrence || '';
+  if (title.agreementId !== undefined) data.acordo_id = title.agreementId || '';
   return data;
 };
 

@@ -179,6 +179,98 @@ export interface DelinquentTitle {
   lastHistoryCode?: string;    // TituloHistorico_Codigo (CRI, PAG, ALT ...)
   occurrence?: string;         // Ocorrencia — última movimentação legível
   importedAt?: string;
+
+  // ─── Negociação ────────────────────────────────────────────────────────────
+  // Um título só pode estar dentro de UM acordo vigente. Guardar o vínculo aqui
+  // (e não só do lado do acordo) é o que permite a listagem de inadimplência
+  // avisar, na própria linha, que aquele valor já foi renegociado — sem isso a
+  // cobrança liga para um cliente que já tem acordo assinado.
+  agreementId?: string;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NEGOCIAÇÃO DE DÍVIDA (ACORDO)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Uma parcela do acordo.
+ *
+ * `expectedAmount` é o que foi acordado; `paidAmount` é o que entrou. Manter os
+ * dois separados é o que permite auditar acordo cumprido parcialmente — se
+ * guardássemos só um número, um pagamento a menor viraria silenciosamente a
+ * nova expectativa e o acordo "fecharia" com prejuízo invisível.
+ */
+export interface AgreementInstallment {
+  number: number;              // 1..n (a entrada é a parcela 0, tratada à parte)
+  dueDate: string;             // ISO yyyy-mm-dd
+  expectedAmount: number;
+  paidAmount?: number;
+  paidDate?: string;           // ISO yyyy-mm-dd
+  status: 'Pendente' | 'Paga' | 'Atrasada' | 'Parcial';
+  notes?: string;
+}
+
+export type AgreementStatus =
+  | 'Ativo'          // assinado e em curso
+  | 'Cumprido'       // todas as parcelas quitadas
+  | 'Quebrado'       // inadimplente dentro do acordo — volta à cobrança
+  | 'Cancelado';     // desfeito por decisão da gestão
+
+/**
+ * Acordo de renegociação de um ou mais títulos vencidos.
+ *
+ * Decisão de modelagem: o acordo referencia os títulos (`titleIds`) em vez de
+ * ser um campo dentro do título. Na prática o cliente negocia a dívida inteira,
+ * não boleto a boleto — modelar 1:1 obrigaria a rachar o mesmo acordo em N
+ * registros e a soma dos descontos deixaria de fechar com o que foi assinado.
+ *
+ * Todos os valores monetários são armazenados já arredondados a 2 casas para
+ * que a soma das parcelas bata exatamente com `agreedTotal` (o resíduo de
+ * arredondamento vai na última parcela).
+ */
+export interface DebtAgreement {
+  id: string;
+  code: string;                    // identificador legível: ACO-2026-0001
+  customerId?: string;
+  customerCode: string;
+  customerName: string;
+  cnpjCpf?: string;
+  customerPhone?: string;
+  sellerName?: string;
+
+  titleIds: string[];              // títulos cobertos pelo acordo
+  titleNumbers: string[];          // números legíveis, para o termo impresso
+
+  // Composição da dívida no momento da negociação
+  originalDebt: number;            // soma dos valores originais
+  interestAmount: number;          // juros de mora calculados
+  penaltyAmount: number;           // multa
+  updatedDebt: number;             // original + juros + multa (dívida cheia)
+
+  // Concessões
+  discountPercent: number;         // % de desconto sobre juros+multa (ou total)
+  discountAmount: number;          // valor absoluto abatido
+  discountBasis: 'encargos' | 'total'; // sobre o que o desconto incidiu
+
+  // Condições acordadas
+  agreedTotal: number;             // updatedDebt - discountAmount
+  downPayment: number;             // entrada
+  downPaymentDate?: string;        // ISO
+  installmentCount: number;        // nº de parcelas (fora a entrada)
+  installmentAmount: number;       // valor nominal da parcela
+  firstDueDate: string;            // ISO — vencimento da 1ª parcela
+  installments: AgreementInstallment[];
+  paymentMethod?: 'Boleto' | 'PIX' | 'Cartão' | 'Dinheiro' | 'Transferência' | 'Cheque';
+
+  status: AgreementStatus;
+  negotiatedBy: string;            // e-mail/nome de quem fechou
+  negotiatedAt: string;            // ISO datetime
+  updatedAt?: string;              // ISO datetime
+  notes?: string;
+
+  // Acompanhamento (derivados, gravados para permitir consulta sem recalcular)
+  totalPaid: number;
+  totalOutstanding: number;
 }
 
 export type TransactionCategory =

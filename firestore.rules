@@ -251,6 +251,21 @@ service cloud.firestore {
     }
 
     /**
+     * ACORDOS DE NEGOCIAÇÃO — a prova de qual desconto foi concedido e por quem.
+     *
+     * Delete é restrito a gestor/admin pelo mesmo motivo do extrato: apagar um
+     * acordo elimina o registro do abatimento dado sobre juros, multa ou até
+     * principal. Se a perda precisar ser justificada depois, não há de onde
+     * reconstruir a decisão. A operação normal CANCELA o acordo (campo status),
+     * o que preserva a trilha; o delete existe só para erro de digitação recente.
+     */
+    match /acordos_negociacao/{docId} {
+      allow read: if autorizado();
+      allow create, update: if escritaValida();
+      allow delete: if ehGestorOuAdmin();
+    }
+
+    /**
      * EXTRATO FINANCEIRO — a fonte de verdade da conciliação.
      *
      * É contra estes lançamentos que toda baixa é validada. Apagar um extrato

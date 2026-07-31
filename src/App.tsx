@@ -153,6 +153,7 @@ import {
 } from './firebaseService';
 
 import { fetchTitulos } from './services/titulosService';
+import { fetchAgreements, saveAgreement, deleteAgreement } from './services/agreementsService';
 import { reconcile } from './utils/reconciliation';
 import { buildCustomerIndex, normalizePersonCode } from './utils/linking';
 
@@ -183,6 +184,7 @@ import {
   BillingMonthSummary,
   Customer,
   DelinquentTitle,
+  DebtAgreement,
   DelinquencyValidationRowResult,
   EconomicMonthData,
   FinancialMonthData,
@@ -230,6 +232,7 @@ export default function App() {
   const [financialData, setFinancialData] = useState<Record<string, FinancialMonthData>>({});
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [delinquentTitles, setDelinquentTitles] = useState<DelinquentTitle[]>([]);
+  const [agreements, setAgreements] = useState<DebtAgreement[]>([]);
   const [sellers, setSellers] = useState<Seller[]>([]);
   const [apiTokens, setApiTokens] = useState<ApiToken[]>([]);
   const [statementEntries, setStatementEntries] = useState<FinancialStatementEntry[]>([]);
@@ -303,16 +306,18 @@ export default function App() {
   // carregam uma única vez por login.
   const loadMasterData = useCallback(async () => {
     try {
-      const [cliData, titData, vendData, tokData] = await Promise.all([
+      const [cliData, titData, vendData, tokData, acordosData] = await Promise.all([
         getClientes(),
         getTitulosInadimplentes(),
         getVendedores(),
         getApiTokens(),
+        fetchAgreements(),
       ]);
       setCustomers(cliData);
       setDelinquentTitles(titData);
       setSellers(vendData);
       setApiTokens(tokData);
+      setAgreements(acordosData);
     } catch (err: any) {
       console.error('Erro ao carregar dados mestre do Firestore:', err.message);
     }
@@ -1100,6 +1105,39 @@ export default function App() {
       await applyDelinquencyToCustomers(freshTitles, customers);
     } catch (e) {
       console.error('Erro ao excluir título:', e);
+    }
+  };
+
+  // ── Handlers: Acordos de Negociação ────────────────────────────────────────
+  // Gravar o acordo carimba os títulos envolvidos no mesmo batch (ver
+  // agreementsService). Por isso os títulos são SEMPRE relidos depois: sem essa
+  // releitura a lista continuaria oferecendo "Negociar" num título que já tem
+  // acordo, e a segunda negociação sobrescreveria a primeira.
+  const handleSaveAgreement = async (agreement: DebtAgreement) => {
+    try {
+      await saveAgreement(agreement);
+      const [freshAgreements, freshTitles] = await Promise.all([
+        fetchAgreements(),
+        getTitulosInadimplentes(),
+      ]);
+      setAgreements(freshAgreements);
+      setDelinquentTitles(freshTitles);
+    } catch (e) {
+      console.error('Erro ao gravar acordo de negociação:', e);
+    }
+  };
+
+  const handleDeleteAgreement = async (agreement: DebtAgreement) => {
+    try {
+      await deleteAgreement(agreement.id, agreement.titleIds);
+      const [freshAgreements, freshTitles] = await Promise.all([
+        fetchAgreements(),
+        getTitulosInadimplentes(),
+      ]);
+      setAgreements(freshAgreements);
+      setDelinquentTitles(freshTitles);
+    } catch (e) {
+      console.error('Erro ao excluir acordo de negociação:', e);
     }
   };
 
@@ -1938,6 +1976,10 @@ export default function App() {
               onUpdateTitle={handleUpdateTitle}
               onDeleteTitle={handleDeleteTitle}
               userRole={currentUser.role}
+              agreements={agreements}
+              onSaveAgreement={handleSaveAgreement}
+              onDeleteAgreement={handleDeleteAgreement}
+              currentUserName={currentUser.name || currentUser.email || ''}
               onNavigateToImport={() => {
                 setImportTargetModule('delinquency');
                 setActiveTab('import');

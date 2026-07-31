@@ -30,6 +30,7 @@ import {
   DollarSign,
   FileSpreadsheet,
   Flame,
+  Handshake,
   Landmark,
   LayoutDashboard,
   Receipt,
@@ -88,6 +89,9 @@ const MENU_GROUPS: MenuGroup[] = [
       { id: 'stock', label: 'Estoque', icon: Boxes, description: 'Lista de preço (RPR053), capital parado e margem' },
       { id: 'statement', label: 'Extrato Financeiro', icon: Landmark, description: 'Conciliação bancária e caixa/tesouraria (Bradesco, PagBank e Caixa/Tesouraria)' },
       { id: 'receivables', label: 'Contas a Receber', icon: ArrowDownCircle, description: 'Títulos de entrada (RFN046): recebimento, aging de cobrança e baixa automática' },
+      // Inadimplência ficou fora do menu até 07/2026 — o módulo existia e era
+      // alcançável só por navegação interna, então na prática ninguém usava.
+      { id: 'delinquency', label: 'Inadimplência & Negociação', icon: Handshake, description: 'Aging de títulos vencidos, régua de cobrança e acordos de renegociação com parcelamento' },
       { id: 'payables', label: 'Contas a Pagar', icon: ArrowUpCircle, description: 'Títulos de saída (RFN046): desembolso, previsão e baixa automática' },
     ],
   },

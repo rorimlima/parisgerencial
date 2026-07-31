@@ -22,11 +22,16 @@ import {
   Check,
   Calculator,
   RotateCcw,
+  Handshake,
+  ListChecks,
 } from 'lucide-react';
-import { Customer, DelinquentTitle } from '../types';
+import { Customer, DebtAgreement, DelinquentTitle } from '../types';
 import { exportReportToExcel, exportReportToPdf, formatCurrency } from '../utils/exportUtils';
 import { formatPhoneBr, toWhatsAppNumber } from '../utils/sheetParsers';
 import { WhatsAppLink } from './WhatsAppLink';
+import { NegotiationModal } from './NegotiationModal';
+import { AgreementsPanel } from './AgreementsPanel';
+import { recomputeAgreement } from '../utils/negotiation';
 
 interface DelinquencyReportViewProps {
   titles: DelinquentTitle[];
@@ -38,6 +43,11 @@ interface DelinquencyReportViewProps {
   onUpdateTitle?: (id: string, title: Partial<DelinquentTitle>) => void;
   onDeleteTitle?: (id: string) => void;
   userRole?: string;
+  // ─── Negociação ───────────────────────────────────────────────────────────
+  agreements?: DebtAgreement[];
+  onSaveAgreement?: (agreement: DebtAgreement) => void | Promise<void>;
+  onDeleteAgreement?: (agreement: DebtAgreement) => void | Promise<void>;
+  currentUserName?: string;
 }
 
 const STATUS_OPTIONS: DelinquentTitle['collectionStatus'][] = [
@@ -71,7 +81,15 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
   onUpdateTitle,
   onDeleteTitle,
   userRole,
+  agreements = [],
+  onSaveAgreement,
+  onDeleteAgreement,
+  currentUserName = '',
 }) => {
+  const [activeSection, setActiveSection] = useState<'titulos' | 'acordos'>('titulos');
+  const [negotiationTitles, setNegotiationTitles] = useState<DelinquentTitle[] | null>(null);
+  const [editingAgreement, setEditingAgreement] = useState<DebtAgreement | null>(null);
+  const [selectedForNegotiation, setSelectedForNegotiation] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [agingFilter, setAgingFilter] = useState<string>('all');
   const [sellerFilter, setSellerFilter] = useState<string>('all');
@@ -137,6 +155,52 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
       }),
     [titles, multaPercent, jurosMensalPercent]
   );
+
+  // ─── Negociação ────────────────────────────────────────────────────────────
+  const canNegotiate = userRole !== 'analista' && !!onSaveAgreement;
+
+  /**
+   * Contagem de acordos quebrados, recalculada na leitura. Vira um badge na aba:
+   * é a informação que precisa aparecer sem ninguém ir procurar, porque acordo
+   * quebrado é dívida que voltou a envelhecer sem alarme.
+   */
+  const brokenAgreementsCount = useMemo(
+    () => agreements.filter((a) => recomputeAgreement(a).status === 'Quebrado').length,
+    [agreements]
+  );
+
+  /** Títulos do mesmo cliente ainda sem acordo — oferecidos para juntar na negociação. */
+  const siblingTitlesOf = (anchor: DelinquentTitle) =>
+    simulatedTitles.filter(
+      (t) =>
+        t.id !== anchor.id &&
+        !t.agreementId &&
+        ((anchor.cnpjCpf && t.cnpjCpf === anchor.cnpjCpf) ||
+          (anchor.customerCode && t.customerCode === anchor.customerCode))
+    );
+
+  const openNegotiation = (anchor: DelinquentTitle) => {
+    // Se o operador marcou vários títulos, negocia todos de uma vez — mas só os
+    // do mesmo devedor: acordo que mistura CNPJ diferente não tem como ser assinado.
+    const marked = simulatedTitles.filter(
+      (t) => selectedForNegotiation.includes(t.id) && t.cnpjCpf === anchor.cnpjCpf
+    );
+    const base = marked.length > 1 ? marked : [anchor];
+    setEditingAgreement(null);
+    setNegotiationTitles(base);
+  };
+
+  const openAgreementEdit = (agreement: DebtAgreement) => {
+    const linked = simulatedTitles.filter((t) => agreement.titleIds.includes(t.id));
+    setEditingAgreement(agreement);
+    setNegotiationTitles(linked.length ? linked : simulatedTitles.slice(0, 1));
+  };
+
+  const closeNegotiation = () => {
+    setNegotiationTitles(null);
+    setEditingAgreement(null);
+    setSelectedForNegotiation([]);
+  };
 
   const openAddForm = () => {
     setEditingTitle(null);
@@ -346,9 +410,10 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
             </span>
             <span className="text-xs text-[#8B7D6B]">• Exercício: {selectedYear}</span>
           </div>
-          <h2 className="text-xl font-black text-[#2D2A26] mt-1">Relatório Detalhado de Inadimplência e Cobrança</h2>
+          <h2 className="text-xl font-black text-[#2D2A26] mt-1">Inadimplência, Cobrança e Negociação</h2>
           <p className="text-xs text-[#8B7D6B]">
-            Monitoramento de títulos vencidos, categorização por idade do débito (aging list) e histórico de ações de cobrança.
+            Monitoramento de títulos vencidos, categorização por idade do débito (aging list), acordos de
+            renegociação e acompanhamento do cumprimento das parcelas.
           </p>
         </div>
 
@@ -399,6 +464,54 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Abas: Títulos vencidos × Acordos de negociação */}
+      <div className="flex items-center gap-2 border-b border-[#EAE6DF]">
+        <button
+          onClick={() => setActiveSection('titulos')}
+          className={`px-4 py-2.5 text-xs font-black flex items-center gap-1.5 border-b-2 -mb-px transition-colors ${
+            activeSection === 'titulos'
+              ? 'border-[#C19A6B] text-[#2D2A26]'
+              : 'border-transparent text-[#8B7D6B] hover:text-[#2D2A26]'
+          }`}
+        >
+          <ListChecks className="w-4 h-4" />
+          Títulos Vencidos
+          <span className="px-1.5 py-0.5 rounded bg-[#F3F1ED] text-[10px] font-mono">{titles.length}</span>
+        </button>
+        <button
+          onClick={() => setActiveSection('acordos')}
+          className={`px-4 py-2.5 text-xs font-black flex items-center gap-1.5 border-b-2 -mb-px transition-colors ${
+            activeSection === 'acordos'
+              ? 'border-[#C19A6B] text-[#2D2A26]'
+              : 'border-transparent text-[#8B7D6B] hover:text-[#2D2A26]'
+          }`}
+        >
+          <Handshake className="w-4 h-4" />
+          Acordos de Negociação
+          <span className="px-1.5 py-0.5 rounded bg-[#F3F1ED] text-[10px] font-mono">{agreements.length}</span>
+          {brokenAgreementsCount > 0 && (
+            <span
+              title={`${brokenAgreementsCount} acordo(s) quebrado(s)`}
+              className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 text-[10px] font-black border border-rose-200"
+            >
+              {brokenAgreementsCount} quebrado{brokenAgreementsCount > 1 ? 's' : ''}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {activeSection === 'acordos' ? (
+        <AgreementsPanel
+          agreements={agreements}
+          canEdit={canNegotiate}
+          canDelete={userRole === 'admin' || userRole === 'gestor'}
+          onUpdate={async (a) => { if (onSaveAgreement) await onSaveAgreement(a); }}
+          onEdit={openAgreementEdit}
+          onDelete={async (a) => { if (onDeleteAgreement) await onDeleteAgreement(a); }}
+        />
+      ) : (
+      <>
 
       {/* Simulação Financeira de Juros e Multa */}
       <div className="bg-white border border-[#EAE6DF] p-4 rounded-xl shadow-xs">
@@ -574,12 +687,50 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
         </div>
       </div>
 
+      {/* Barra de ação em bloco — negociar vários títulos do mesmo devedor */}
+      {canNegotiate && selectedForNegotiation.length > 0 && (() => {
+        const marked = simulatedTitles.filter((t) => selectedForNegotiation.includes(t.id));
+        const devedores = new Set(marked.map((t) => t.cnpjCpf || t.customerCode));
+        const total = marked.reduce((acc, t) => acc + (t.updatedAmount || 0), 0);
+        const mesmoDevedor = devedores.size === 1;
+        return (
+          <div className="bg-[#2D2A26] text-white rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="text-xs">
+              <span className="font-black">{marked.length} título(s) marcado(s)</span>
+              <span className="text-[#C19A6B] font-mono ml-2">{formatCurrency(total)}</span>
+              {!mesmoDevedor && (
+                <span className="block text-[10px] text-rose-300 mt-0.5">
+                  Os títulos marcados pertencem a devedores diferentes. Um acordo cobre um único
+                  devedor — desmarque os demais para prosseguir.
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setSelectedForNegotiation([])}
+                className="px-3 py-2 text-xs font-bold text-[#C4BCB0] hover:text-white"
+              >
+                Limpar seleção
+              </button>
+              <button
+                onClick={() => openNegotiation(marked[0])}
+                disabled={!mesmoDevedor}
+                className="px-4 py-2 text-xs font-black bg-[#C19A6B] hover:bg-[#A8814F] disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg flex items-center gap-1.5"
+              >
+                <Handshake className="w-4 h-4" /> Negociar em bloco
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Delinquent Titles Table */}
       <div className="bg-white border border-[#EAE6DF] rounded-xl shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead className="bg-[#F9F7F2] text-[#8B7D6B] font-bold border-b border-[#EAE6DF]">
               <tr>
+                {canNegotiate && <th className="p-3 w-8"></th>}
                 <th className="p-3 text-center whitespace-nowrap">Ações</th>
                 <th className="p-3">Lançamento</th>
                 <th className="p-3">Cliente / CNPJ</th>
@@ -595,7 +746,28 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
             </thead>
             <tbody className="divide-y divide-[#EAE6DF] text-[#433E37]">
               {filteredTitles.map((t) => (
-                <tr key={t.id} className="hover:bg-[#FDFBF7] transition-colors">
+                <tr
+                  key={t.id}
+                  className={`transition-colors ${
+                    t.agreementId ? 'bg-[#C19A6B]/5 hover:bg-[#C19A6B]/10' : 'hover:bg-[#FDFBF7]'
+                  }`}
+                >
+                  {canNegotiate && (
+                    <td className="p-3 text-center">
+                      <input
+                        type="checkbox"
+                        checked={selectedForNegotiation.includes(t.id)}
+                        disabled={!!t.agreementId}
+                        title={t.agreementId ? 'Título já vinculado a um acordo' : 'Marcar para negociar em bloco'}
+                        onChange={() =>
+                          setSelectedForNegotiation((prev) =>
+                            prev.includes(t.id) ? prev.filter((x) => x !== t.id) : [...prev, t.id]
+                          )
+                        }
+                        className="accent-[#C19A6B] disabled:opacity-30"
+                      />
+                    </td>
+                  )}
                   <td className="p-3 text-center whitespace-nowrap">
                     <div className="flex items-center justify-center space-x-1.5">
                       <button
@@ -605,6 +777,24 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
                       >
                         <Eye className="w-3.5 h-3.5" />
                       </button>
+                      {canNegotiate && !t.agreementId && (
+                        <button
+                          onClick={() => openNegotiation(t)}
+                          title="Negociar dívida (acordo com parcelas)"
+                          className="p-1.5 rounded-lg bg-[#C19A6B]/15 hover:bg-[#C19A6B] text-[#8B6B3D] hover:text-white transition-colors"
+                        >
+                          <Handshake className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {t.agreementId && (
+                        <button
+                          onClick={() => setActiveSection('acordos')}
+                          title="Título já negociado — ver acordo"
+                          className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white transition-colors"
+                        >
+                          <Handshake className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                       {canEdit && onUpdateTitle && (
                         <button
                           onClick={() => openEditForm(t)}
@@ -666,6 +856,25 @@ export const DelinquencyReportView: React.FC<DelinquencyReportViewProps> = ({
           </table>
         </div>
       </div>
+
+      </>
+      )}
+
+      {/* Modal: Negociação de Dívida */}
+      {negotiationTitles && negotiationTitles.length > 0 && onSaveAgreement && (
+        <NegotiationModal
+          titles={negotiationTitles}
+          siblingTitles={siblingTitlesOf(negotiationTitles[0])}
+          customers={customers}
+          penaltyPercent={multaPercent}
+          monthlyInterestPercent={jurosMensalPercent}
+          existingAgreements={agreements}
+          currentUser={currentUserName}
+          editing={editingAgreement}
+          onClose={closeNegotiation}
+          onSave={onSaveAgreement}
+        />
+      )}
 
       {/* Modal: Novo / Editar Título */}
       {isFormOpen && (
