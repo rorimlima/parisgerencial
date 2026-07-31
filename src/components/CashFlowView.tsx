@@ -135,7 +135,7 @@ const categorizeReceipt = (e: FinancialStatementEntry): string => {
   return 'OUTROS';
 };
 
-const emptyWeekPlan = () => ({ recebimentos: 0, desembolsos: 0, aportes: 0 });
+const emptyWeekPlan = () => ({ recebimentos: 0, desembolsos: 0, aportes: 0, recebRealizado: 0, desembRealizado: 0 });
 const emptyPlan = (year: number, monthKey: string): CashFlowPlan => ({
   id: `${year}_${monthKey}`,
   year,
@@ -182,23 +182,9 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
   // otimista e mais falso que o fluxo de caixa pode mostrar.
   const [includeForecast, setIncludeForecast] = useState(true);
   const [prefilledHint, setPrefilledHint] = useState(false);
-  const [pendingPrefill, setPendingPrefill] = useState(true);
+  const [pendingPrefill, setPendingPrefill] = useState(false);
 
   // ── Buffer de digitação dos campos numéricos ─────────────────────────────
-  //
-  // Todo campo de valor aqui é um input controlado cujo `value` vem do número
-  // já convertido em `draft`. Sem este buffer, digitar "1," dispara o
-  // onChange, `parseInput` converte para o número 1 (a vírgula não faz parte
-  // de nenhum número), e o input re-renderiza mostrando "1" — a vírgula
-  // desaparece antes de dar tempo de digitar a casa decimal, e "1.234,56"
-  // nunca sai do chão.
-  //
-  // A correção mantém, por campo, o TEXTO EXATO que a pessoa está digitando
-  // (rawEdits). Enquanto o campo está em edição, o input mostra esse texto,
-  // não o número. O valor numérico em `draft` já é atualizado a cada tecla
-  // (os cálculos da tela continuam ao vivo), mas a caixa de texto não é
-  // reformatada até o campo perder o foco — aí sim o buffer é descartado e o
-  // input volta a mostrar o número final, já formatado.
   const [rawEdits, setRawEdits] = useState<Record<string, string>>({});
   const editKey = (...parts: (string | number)[]) => parts.join('__');
   const displayValue = (key: string, numeric: number): string =>
@@ -224,19 +210,6 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
 
   /**
    * REALIZADO AUTOMÁTICO — extrato + títulos pagos que o extrato não cobre.
-   * ======================================================================
-   * Existem duas testemunhas do mesmo dinheiro: o extrato bancário (o que o
-   * banco viu) e o título com Titulo_Status = 'Pago' (o que o ERP registrou).
-   *
-   * Somar as duas cegamente conta cada movimento DUAS VEZES. Ignorar os títulos
-   * perde tudo o que andou fora dos extratos importados (dinheiro em espécie,
-   * cartão, conta não conciliada) — e o realizado fica menor que a realidade.
-   *
-   * A regra aqui: o extrato manda, e o título só entra quando NÃO foi
-   * conciliado com nenhum lançamento. Título já baixado contra o extrato já
-   * está representado pelo lançamento; título pago sem par no extrato é
-   * dinheiro que se moveu e que só o ERP viu. Essa é exatamente a fronteira que
-   * a baixa automática desenha — e o motivo de ela existir.
    */
   const realized = useMemo(() => {
     const zero = (): Record<CashFlowWeekKey, number> => ({ sem01: 0, sem02: 0, sem03: 0, sem04: 0, sem05: 0 });
@@ -305,12 +278,6 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
       desembBySource[src][wk] += Math.round(val * 100);
     }
 
-    // Converte de centavos para reais só no fim — ver comentário em sumWeeks.
-    // Os detalhamentos por tipo e por fonte acumulam na MESMA unidade das
-    // semanas de propósito: se um somasse reais e o outro centavos, a linha
-    // "PIX + BOLETO + CARTÃO" deixaria de fechar com a linha "Recebimentos"
-    // por alguns centavos, e o gestor perderia tempo procurando um erro que é
-    // só de arredondamento.
     for (const w of WEEKS) {
       weeks[w].receb = weeks[w].receb / 100;
       weeks[w].desemb = weeks[w].desemb / 100;
@@ -328,8 +295,6 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
   }, [statementEntries, receivables, payables, selectedYear, monthKey]);
 
   // ── PREVISÃO: títulos EM ABERTO por semana de vencimento ─────────────────
-  // Os dois lados, porque o mês que vem tem entrada e saída previstas — e um
-  // fluxo que só projeta o que sai transforma qualquer mês em déficit.
   const forecastWeeks = useMemo(
     () => forecastByWeek(payables, selectedYear, monthKey),
     [payables, selectedYear, monthKey]
@@ -342,40 +307,33 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
   const totalForecastIn = sumMoney(WEEKS.map((w) => forecastWeeksIn[w]));
 
   // Sincroniza o rascunho editável com o plano salvo quando muda o mês/ano.
-  //
-  // MIGRAÇÃO SUAVE: nos meses gravados na versão antiga (realizado vinha do
-  // extrato e não havia campo digitado), a coluna REAL. apareceria zerada e o
-  // saldo do mês desmoronaria na tela. Nesses casos o rascunho já abre
-  // pré-preenchido com o realizado do extrato — apenas em memória, com aviso
-  // visível; só vira número oficial quando o gestor conferir e salvar.
   useEffect(() => {
-    setDraft(
-      planForMonth
-        ? { ...planForMonth, weeks: { ...planForMonth.weeks }, realizadoManual: true }
-        : emptyPlan(selectedYear, monthKey)
-    );
-    setPendingPrefill(true);
-    setPrefilledHint(false);
+    if (planForMonth) {
+      setDraft({ ...planForMonth, weeks: { ...planForMonth.weeks }, realizadoManual: true });
+      setPendingPrefill(false);
+      setPrefilledHint(false);
+    } else {
+      setDraft(emptyPlan(selectedYear, monthKey));
+      setPendingPrefill(true);
+      setPrefilledHint(false);
+    }
     setSavedMsg(null);
     setSaveError(null);
-    // Ao trocar de mês, qualquer texto em digitação pertence ao mês anterior —
-    // sem isso, um campo que estivesse com "1.234," no meio da digitação
-    // continuaria mostrando esse texto por cima dos valores do mês novo.
     setRawEdits({});
   }, [planForMonth, monthKey, selectedYear]);
 
-  // O pré-preenchimento vive num efeito separado porque o extrato costuma
-  // chegar depois da tela (carga assíncrona). Se ele estivesse junto do efeito
-  // acima, a chegada tardia do extrato reescreveria o que o gestor já tivesse
-  // digitado. Aqui ele só age uma vez por mês aberto, e só enquanto não houver
-  // nenhum valor digitado.
+  // Pré-preenchimento automático apenas para meses novos (sem plano salvo no Firestore).
   useEffect(() => {
-    if (!pendingPrefill) return;
+    if (!pendingPrefill || planForMonth) return;
     const hasExtrato = WEEKS.some((w) => realized.weeks[w].receb > 0 || realized.weeks[w].desemb > 0);
-    if (!hasExtrato) return; // extrato ainda não chegou: continua aguardando
+    if (!hasExtrato) return;
 
     const hasTyped = WEEKS.some(
-      (w) => (draft.weeks[w]?.recebRealizado || 0) !== 0 || (draft.weeks[w]?.desembRealizado || 0) !== 0
+      (w) =>
+        (draft.weeks[w]?.recebRealizado || 0) !== 0 ||
+        (draft.weeks[w]?.desembRealizado || 0) !== 0 ||
+        (draft.weeks[w]?.recebimentos || 0) !== 0 ||
+        (draft.weeks[w]?.desembolsos || 0) !== 0
     );
     if (!hasTyped) {
       setDraft((d) => {
@@ -392,10 +350,8 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
       setPrefilledHint(true);
     }
     setPendingPrefill(false);
-    // `draft` é lido intencionalmente sem entrar nas dependências: o efeito só
-    // dispara na abertura do mês (pendingPrefill) ou quando o extrato chega.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingPrefill, realized]);
+  }, [pendingPrefill, realized, planForMonth]);
 
   // ── Cálculo das linhas (previsto, automático e realizado) ─────────────────
   const rows = useMemo(() => {
@@ -660,6 +616,7 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
       });
       setSavedMsg('Planejamento salvo com sucesso.');
       setPrefilledHint(false);
+      setPendingPrefill(false);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Falha ao salvar. Tente novamente.');
     } finally {
