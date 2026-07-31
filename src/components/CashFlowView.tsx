@@ -122,6 +122,27 @@ const WEEK_LABELS: Record<CashFlowWeekKey, string> = {
  */
 const weekOfMonth = (iso: string): CashFlowWeekKey => weekOfMonthIso(iso) as CashFlowWeekKey;
 
+/**
+ * Os N meses imediatamente ANTERIORES a (year, monthKey), mais recente
+ * primeiro. Atravessa virada de ano sozinho (ex.: 6 meses antes de
+ * 2026/março inclui set..dez/2025 e jan..fev/2026).
+ */
+const priorMonthKeys = (
+  year: number,
+  monthKey: string,
+  count: number
+): { year: number; monthKey: string }[] => {
+  const idx = MONTHS.findIndex((m) => m.key === monthKey);
+  const out: { year: number; monthKey: string }[] = [];
+  for (let i = 1; i <= count; i++) {
+    const total = year * 12 + idx - i;
+    const y = Math.floor(total / 12);
+    const mIdx = ((total % 12) + 12) % 12;
+    out.push({ year: y, monthKey: MONTHS[mIdx].key });
+  }
+  return out;
+};
+
 // Classifica um recebimento por tipo, a partir do documento/descrição do extrato.
 const categorizeReceipt = (e: FinancialStatementEntry): string => {
   const t = `${e.documentType || ''} ${e.description || ''}`.toLowerCase();
@@ -183,6 +204,8 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
   const [includeForecast, setIncludeForecast] = useState(true);
   const [prefilledHint, setPrefilledHint] = useState(false);
   const [pendingPrefill, setPendingPrefill] = useState(true);
+  const [previstoPrefilledHint, setPrevistoPrefilledHint] = useState(false);
+  const [pendingPrevistoPrefill, setPendingPrevistoPrefill] = useState(true);
 
   // ── Buffer de digitação dos campos numéricos ─────────────────────────────
   //
@@ -221,6 +244,43 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
     () => plans.find((p) => p.monthKey === monthKey && p.year === selectedYear),
     [plans, monthKey, selectedYear]
   );
+
+  /**
+   * PREVISTO SUGERIDO — média dos últimos 6 meses de REALIZADO digitado.
+   * ======================================================================
+   * Um novo lançamento (mês sem plano salvo ainda) começa com PREV. em
+   * branco: o gestor teria que chutar. A melhor base que o histórico
+   * oferece é a média do que de fato entrou/saiu nos últimos 6 meses — não
+   * o que foi planejado (PREV. de outros meses), porque plano erra por
+   * definição; REAL. é o número que realmente aconteceu.
+   *
+   * Some o REAL. de cada um dos 6 meses anteriores, tira a média mensal e
+   * divide pelas 5 semanas — mesma unidade que as células PREV. da grade
+   * usam. Meses sem plano salvo (ou sem nada digitado ainda) são ignorados
+   * na média, não contam como zero: um buraco no histórico não deveria
+   * puxar a sugestão para baixo.
+   */
+  const previstoSugerido = useMemo(() => {
+    let somaReceb = 0;
+    let somaDesemb = 0;
+    let meses = 0;
+    for (const { year, monthKey: mk } of priorMonthKeys(selectedYear, monthKey, 6)) {
+      const p = plans.find((pl) => pl.year === year && pl.monthKey === mk);
+      if (!p) continue;
+      const receb = sumWeeks((w) => p.weeks[w]?.recebRealizado || 0);
+      const desemb = sumWeeks((w) => p.weeks[w]?.desembRealizado || 0);
+      if (receb === 0 && desemb === 0) continue;
+      somaReceb += receb;
+      somaDesemb += desemb;
+      meses += 1;
+    }
+    if (meses === 0) return null;
+    return {
+      meses,
+      recebimentosSemana: round2(somaReceb / meses / WEEKS.length),
+      desembolsosSemana: round2(somaDesemb / meses / WEEKS.length), // já negativo
+    };
+  }, [plans, selectedYear, monthKey]);
 
   /**
    * REALIZADO AUTOMÁTICO — extrato + títulos pagos que o extrato não cobre.
@@ -356,6 +416,8 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
     );
     setPendingPrefill(true);
     setPrefilledHint(false);
+    setPendingPrevistoPrefill(true);
+    setPrevistoPrefilledHint(false);
     setSavedMsg(null);
     setSaveError(null);
     // Ao trocar de mês, qualquer texto em digitação pertence ao mês anterior —
@@ -396,6 +458,40 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
     // dispara na abertura do mês (pendingPrefill) ou quando o extrato chega.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingPrefill, realized]);
+
+  // Sugere o PREVISTO de um mês NOVO (sem plano salvo) com a média dos
+  // últimos 6 meses de REAL. Mês que já tem plano salvo mantém o previsto
+  // gravado — mesmo que zerado, é o que o gestor decidiu para aquele mês.
+  useEffect(() => {
+    if (!pendingPrevistoPrefill) return;
+    if (planForMonth) {
+      setPendingPrevistoPrefill(false);
+      return;
+    }
+    if (!previstoSugerido) return; // sem histórico suficiente ainda: continua aguardando `plans` chegar
+
+    const hasTyped = WEEKS.some(
+      (w) => (draft.weeks[w]?.recebimentos || 0) !== 0 || (draft.weeks[w]?.desembolsos || 0) !== 0
+    );
+    if (!hasTyped) {
+      setDraft((d) => {
+        const weeks = { ...d.weeks };
+        for (const w of WEEKS) {
+          weeks[w] = {
+            ...weeks[w],
+            recebimentos: previstoSugerido.recebimentosSemana,
+            desembolsos: previstoSugerido.desembolsosSemana,
+          };
+        }
+        return { ...d, weeks };
+      });
+      setPrevistoPrefilledHint(true);
+    }
+    setPendingPrevistoPrefill(false);
+    // `draft` é lido intencionalmente sem entrar nas dependências, pelo mesmo
+    // motivo do efeito de pré-preenchimento do REAL. logo acima.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingPrevistoPrefill, previstoSugerido, planForMonth]);
 
   // ── Cálculo das linhas (previsto, automático e realizado) ─────────────────
   const rows = useMemo(() => {
@@ -836,6 +932,16 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
           <p className="text-xs font-semibold">
             A coluna <b>REAL.</b> está preenchida com valores sugeridos pelo automático, mas ainda <b>não salvos</b>.
             Confira número por número e clique em <b>Salvar Planejamento</b> — os resultados só usam o que estiver salvo.
+          </p>
+        </div>
+      )}
+      {previstoPrefilledHint && canEdit && (
+        <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 text-blue-900 flex items-start gap-2">
+          <Info className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+          <p className="text-xs font-semibold">
+            A coluna <b>PREV.</b> foi sugerida com a média dos últimos {previstoSugerido?.meses ?? 6} mês(es) de{' '}
+            <b>REAL.</b> (Recebimentos e Desembolsos), ainda <b>não salva</b>. Ajuste conforme sua expectativa para{' '}
+            {monthLabel}/{selectedYear} e clique em <b>Salvar Planejamento</b>.
           </p>
         </div>
       )}

@@ -322,7 +322,7 @@ export default function App() {
   const loadYearData = useCallback(async (year: number) => {
     setIsLoading(true);
     try {
-      const [ecoData, finData, stmtData, allStmtData, recvData, payData, cashData] = await Promise.all([
+      const [ecoData, finData, stmtData, allStmtData, recvData, payData, cashData, cashDataPrevYear] = await Promise.all([
         getEconomicData(year),
         getFinancialData(year),
         getExtratoFinanceiro(year),
@@ -332,6 +332,12 @@ export default function App() {
         fetchTitulos('R', year),
         fetchTitulos('P', year),
         getFluxoCaixa(year),
+        // Ano anterior também: a média de "últimos 6 meses" do Fluxo de Caixa
+        // (que sugere o previsto de um mês novo) pode precisar de meses de
+        // novembro/dezembro do ano anterior quando o mês novo é janeiro..maio.
+        // Coleção pequena (1 doc/mês) — não repete o estouro de cota do
+        // extrato/títulos.
+        getFluxoCaixa(year - 1),
       ]);
       setEconomicData(ecoData);
       setFinancialData(finData);
@@ -339,7 +345,7 @@ export default function App() {
       setAllStatementEntries(allStmtData);
       setReceivables(recvData);
       setPayables(payData);
-      setCashFlowPlans(cashData);
+      setCashFlowPlans([...cashDataPrevYear, ...cashData]);
     } catch (err: any) {
       console.error('Erro ao carregar dados do ano no Firestore:', err.message);
     } finally {
