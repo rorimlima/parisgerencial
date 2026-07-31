@@ -1,6 +1,43 @@
 # Deploy — Paris Dakar Gerencial
 
-## Publicar agora (build já está pronto em `dist/`)
+## Deploy automático (recomendado) — configurar uma única vez
+
+A partir deste commit, todo push na branch `main` publica sozinho no Firebase
+Hosting e atualiza as regras do Firestore via GitHub Actions
+(`.github/workflows/deploy.yml`). Falta um passo manual, que só se faz uma vez:
+cadastrar a credencial de publicação como secret do repositório.
+
+### 1. Gerar a chave da service account
+
+1. Abra o [Console do Google Cloud — Service Accounts](https://console.cloud.google.com/iam-admin/serviceaccounts?project=paris-dakar-gerencial)
+   do projeto `paris-dakar-gerencial`.
+2. Se não existir uma service account para deploy, crie uma (nome sugerido:
+   `github-actions-deploy`) e conceda os papéis **Firebase Hosting Admin** e
+   **Cloud Datastore/Firestore — Firestore Service Agent** (ou, mais simples,
+   o papel **Editor** do projeto, se preferir não detalhar permissões).
+3. Na service account, vá em **Chaves** → **Adicionar chave** → **Criar nova
+   chave** → tipo **JSON**. Isso baixa um arquivo `.json` — guarde-o só até o
+   próximo passo e depois apague do computador.
+
+### 2. Cadastrar o secret no GitHub
+
+1. Vá em `https://github.com/rorimlima/parisgerencial/settings/secrets/actions`.
+2. **New repository secret**.
+3. Nome: `FIREBASE_SERVICE_ACCOUNT` (exatamente assim — o workflow procura por
+   este nome).
+4. Valor: cole o **conteúdo inteiro** do arquivo `.json` baixado no passo 1.
+5. Salvar.
+
+Pronto. A partir daqui, todo `git push` na `main` (incluindo os que eu fizer)
+builda, roda a suíte de testes e publica sozinho. Você pode acompanhar em
+`https://github.com/rorimlima/parisgerencial/actions`.
+
+**Segurança:** esse arquivo `.json` dá permissão de publicação no projeto
+inteiro. Não o envie por e-mail nem o deixe em pasta compartilhada — o único
+lugar onde ele deve existir é dentro do secret do GitHub (que nem os
+colaboradores conseguem ler de volta, só sobrescrever).
+
+## Publicar manualmente (sem esperar o Actions, ou enquanto o secret não está configurado)
 
 Abra o PowerShell na pasta do projeto e rode:
 

@@ -1,0 +1,72 @@
+name: Deploy (Firebase Hosting + Firestore Rules)
+
+# Roda em todo push na main. Não roda em pull request: publicar direto de PR
+# aberta por qualquer colaborador exporia o secret da service account ao
+# workflow do fork — GitHub bloqueia isso por padrão, mas não vale contar com
+# a proteção alheia quando dá para simplesmente não abrir a porta.
+on:
+  push:
+    branches: [main]
+  # Permite disparar manualmente pela aba Actions, sem precisar de um commit
+  # vazio só para forçar uma publicação.
+  workflow_dispatch:
+
+# Só um deploy por vez. Se um push cair em cima do deploy anterior ainda
+# rodando, o mais novo espera — publicar dois builds concorrentes no mesmo
+# hosting é como duas pessoas editando a mesma célula de planilha ao mesmo
+# tempo: quem terminar por último "ganha", mas ninguém sabe qual versão está
+# no ar até conferir.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      # tsc --noEmit não entra aqui de propósito: o projeto tem @types
+      # incompletos de longa data (ver histórico) que já não bloqueiam local,
+      # e replicar isso no CI só criaria um gate vermelho permanente que
+      # ninguém olha. O gate real de qualidade é a suíte funcional abaixo.
+      - name: Rodar suíte de testes (parsers, auditoria, negociação, fluxo de caixa)
+        run: npm test
+
+      - name: Build de produção
+        run: npm run build
+
+      - name: Deploy — Firebase Hosting + Firestore Rules
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: paris-dakar-gerencial
+          channelId: live
+        env:
+          FIREBASE_CLI_EXPERIMENTS: webframeworks
+
+      # A action acima publica hosting; as rules do Firestore são separadas
+      # porque a action-hosting-deploy só cobre --only hosting. Sem este passo,
+      # um push que muda firestore.rules (como o da negociação de dívida) faria
+      # a tela subir mas a gravação continuar negada pelo banco.
+      #
+      # GOOGLE_APPLICATION_CREDENTIALS é o mecanismo padrão do Google Cloud
+      # para autenticar via service account — o firebase-tools o reconhece
+      # nativamente, sem precisar de firebase login nem de token de usuário.
+      - name: Deploy — Firestore Rules
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/service-account.json
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > /tmp/service-account.json
+          npx firebase-tools@latest deploy --only firestore:rules \
+            --project paris-dakar-gerencial --non-interactive
+          rm -f /tmp/service-account.json
