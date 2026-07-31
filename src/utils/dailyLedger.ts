@@ -269,18 +269,12 @@ export const BAIXADO_STATUSES: readonly BaixaStatus[] = ['Baixado Automático', 
 
 const BAIXADO_SET = new Set<string>(BAIXADO_STATUSES);
 
-/** O título está BAIXADO, tem data de pagamento e tem CONTA DE ORIGEM PREENCHIDA? Só então ele entra no somatório. */
+/** O título está BAIXADO e tem data de pagamento válida? Só então ele entra no somatório. */
 export const isSettled = (t: TituloFinanceiro): boolean => {
   if (!t) return false;
-  const isPaidStatus = BAIXADO_SET.has(t.status) || t.isPaid === true;
+  const isPaidStatus = BAIXADO_SET.has(t.status);
   if (!isPaidStatus || !isIsoDate(t.paymentDate)) return false;
-
-  const temOrigem = !!(
-    (t.originAccountKey && t.originAccountKey.trim() !== '' && t.originAccountKey !== '__sem_origem__') ||
-    (t.reconciledStatementId && t.reconciledStatementId.trim() !== '') ||
-    (t.reconciledSource && t.reconciledSource.trim() !== '')
-  );
-  return temOrigem;
+  return true;
 };
 
 /**

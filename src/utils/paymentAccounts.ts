@@ -476,12 +476,16 @@ export const tituloExpenseClass = (
   return 'Não classificado';
 };
 
+export const isTituloPaid = (t: TituloFinanceiro): boolean => {
+  if (!t) return false;
+  return t.isPaid === true || t.status === 'Baixado Manual' || t.status === 'Conciliado' || t.status === 'Baixado Automático';
+};
+
 /**
  * Somas de tudo que foi pago (ou recebido), por conta, por forma de pagamento e
  * por classificação de despesa.
  *
- * SÓ VALIDA TÍTULOS QUE ESTEJAM BAIXADOS E COM CONTA DE ORIGEM PREENCHIDA,
- * UTILIZANDO O VALOR PAGO DIGITADO PELO GESTOR.
+ * SÓ VALIDA TÍTULOS QUE ESTEJAM BAIXADOS, UTILIZANDO O VALOR PAGO DIGITADO PELO GESTOR.
  */
 export const summarizeByOrigin = (
   titulos: TituloFinanceiro[],
@@ -489,8 +493,8 @@ export const summarizeByOrigin = (
   customerByCode: Map<string, Customer>,
   normalizeCode: (c: any) => string
 ): OriginSummary => {
-  // Apenas títulos baixados e com conta de origem preenchida validam no fluxo de caixa automático
-  const pagos = titulos.filter((t) => isTituloValidForCashFlow(t, statementById));
+  // Apenas títulos baixados entram nas somas por conta
+  const pagos = titulos.filter(isTituloPaid);
 
   const accounts = new Map<string, AccountTotal>();
   const forms = new Map<string, FormTotal>();
