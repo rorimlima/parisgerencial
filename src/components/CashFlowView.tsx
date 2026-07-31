@@ -436,8 +436,18 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
     const hasExtrato = WEEKS.some((w) => realized.weeks[w].receb > 0 || realized.weeks[w].desemb > 0);
     if (!hasExtrato) return; // extrato ainda não chegou: continua aguardando
 
+    // CORREÇÃO DE CORRIDA: neste efeito, `draft` ainda pode ser o rascunho em
+    // branco do render anterior — o `setDraft` do efeito de sincronização
+    // (que carrega o plano salvo) foi enfileirado no MESMO ciclo, mas só
+    // aplica no próximo render. Perguntar "já tem REAL. digitado?" olhando
+    // `draft` nesse instante dava falso negativo para um mês JÁ salvo com
+    // REAL. preenchido — e este efeito sobrescrevia o REAL. do gestor pelo
+    // automático assim que a página recarregava. `planForMonth` (o plano que
+    // acabou de vir do banco) é a fonte da verdade quando existe; só cai para
+    // `draft` num mês realmente novo, sem nada salvo ainda.
+    const typedSource = planForMonth ? planForMonth.weeks : draft.weeks;
     const hasTyped = WEEKS.some(
-      (w) => (draft.weeks[w]?.recebRealizado || 0) !== 0 || (draft.weeks[w]?.desembRealizado || 0) !== 0
+      (w) => (typedSource[w]?.recebRealizado || 0) !== 0 || (typedSource[w]?.desembRealizado || 0) !== 0
     );
     if (!hasTyped) {
       setDraft((d) => {
@@ -457,7 +467,7 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
     // `draft` é lido intencionalmente sem entrar nas dependências: o efeito só
     // dispara na abertura do mês (pendingPrefill) ou quando o extrato chega.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingPrefill, realized]);
+  }, [pendingPrefill, realized, planForMonth]);
 
   // Sugere o PREVISTO de um mês NOVO (sem plano salvo) com a média dos
   // últimos 6 meses de REAL. Mês que já tem plano salvo mantém o previsto
