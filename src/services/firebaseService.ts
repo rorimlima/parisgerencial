@@ -125,15 +125,7 @@ export const fetchEconomicData = async (year: number): Promise<Record<string, Ec
         const mes_chave = data.mes_chave || '';
         if (!mes_chave) return;
 
-        // Se para este ano temos uma definição oficial mestre (como 2026 onde jul-dez são zerados),
-        // e o mês em initialForYear é zerado oficialmente, limpa/reseta o documento do Firestore
-        if (initialForYear && initialForYear[mes_chave]) {
-          if (initialForYear[mes_chave].receitaBruta === 0 && data.receita_bruta > 0) {
-            saveEconomicLaunch(year, mes_chave, initialForYear[mes_chave]).catch(() => {});
-            return;
-          }
-        }
-
+        // Lê diretamente do Firestore, preservando dados lançados ou editados manualmente pelo usuário
         const receitaBruta = data.receita_bruta !== undefined ? data.receita_bruta : (result[mes_chave]?.receitaBruta || 0);
         const cmv = data.cmv !== undefined ? data.cmv : (result[mes_chave]?.cmv || 0);
         const margemBruta = data.margem_bruta !== undefined ? data.margem_bruta : (result[mes_chave]?.margemBruta || 0);
@@ -237,19 +229,7 @@ export const fetchFinancialData = async (year: number): Promise<Record<string, F
         const mes_chave = data.mes_chave || '';
         if (!mes_chave) return;
 
-        // Se para este ano temos uma definição oficial mestre (como 2026, com Jan-Jun
-        // oficiais e Jul-Dez zerados), e o mês em initialForYear é zerado oficialmente
-        // mas o Firestore tem um lançamento manual divergente, limpa/reseta o documento
-        // (mesma proteção já aplicada em fetchEconomicData para o Resultado Econômico)
-        if (initialForYear && initialForYear[mes_chave]) {
-          const official = initialForYear[mes_chave];
-          const firestoreEntradas = (data.entradas_bancos || 0) + (data.entradas_tesouraria || 0);
-          if (official.totalEntradas === 0 && firestoreEntradas > 0) {
-            saveFinancialLaunch(year, mes_chave, official).catch(() => {});
-            return;
-          }
-        }
-
+        // Lê diretamente do Firestore, preservando lançamentos e edições manuais
         const entradasBancos = data.entradas_bancos !== undefined ? data.entradas_bancos : (result[mes_chave]?.entradasBancos || 0);
         const entradasTesouraria = data.entradas_tesouraria !== undefined ? data.entradas_tesouraria : (result[mes_chave]?.entradasTesouraria || 0);
         const totalEntradas = data.total_entradas !== undefined ? data.total_entradas : (entradasBancos + entradasTesouraria);

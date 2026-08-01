@@ -3,12 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Calculator,
   FileSpreadsheet,
   FileText,
+  Pencil,
   PlusCircle,
+  Trash2,
 } from 'lucide-react';
 import { EconomicMonthData } from '../types';
 import {
@@ -19,11 +21,14 @@ import {
   formatPercent,
 } from '../utils/exportUtils';
 import { PdfExportMenu } from './PdfExportMenu';
+import { EditEconomicModal } from './EditEconomicModal';
 
 interface EconomicViewProps {
   economicMonths: Record<string, EconomicMonthData>;
   selectedYear: number;
   onOpenLaunchModal: () => void;
+  onEditMonth: (monthKey: string, year: number, fieldValues: Record<string, number>) => void;
+  onDeleteMonth: (monthKey: string, year: number) => void;
   userRole: string;
 }
 
@@ -31,9 +36,13 @@ export const EconomicView: React.FC<EconomicViewProps> = ({
   economicMonths,
   selectedYear,
   onOpenLaunchModal,
+  onEditMonth,
+  onDeleteMonth,
   userRole,
 }) => {
   const monthKeys = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+
+  const [editingMonthKey, setEditingMonthKey] = useState<string | null>(null);
 
   // Calculate Totals & Averages
   const totalReceita = monthKeys.reduce((acc, m) => acc + (economicMonths[m]?.receitaBruta || 0), 0);
@@ -159,7 +168,7 @@ export const EconomicView: React.FC<EconomicViewProps> = ({
                   INDICADOR / MÊS
                 </th>
                 {monthKeys.map((m) => (
-                  <th key={m} className="p-2.5 text-center min-w-[100px] border-r border-[#EAE6DF] uppercase">
+                  <th key={m} className="p-2.5 text-center min-w-[105px] border-r border-[#EAE6DF] uppercase">
                     {m} <span className="text-[10px] text-[#8B7D6B] block font-normal">%</span>
                   </th>
                 ))}
@@ -170,6 +179,46 @@ export const EconomicView: React.FC<EconomicViewProps> = ({
                   MÉDIA
                 </th>
               </tr>
+
+              {/* ── Linha de ações: Editar / Excluir por mês ── */}
+              {userRole !== 'analista' && (
+                <tr className="bg-[#F3F1ED] border-b-2 border-[#EAE6DF]">
+                  <td className="p-2 sticky left-0 bg-[#F3F1ED] z-10 border-r border-[#EAE6DF] text-[10px] font-bold text-[#8B7D6B] uppercase tracking-wider">
+                    Ações do Mês
+                  </td>
+                  {monthKeys.map((m) => {
+                    const hasData = (economicMonths[m]?.receitaBruta || 0) > 0 ||
+                                    (economicMonths[m]?.cmv || 0) > 0 ||
+                                    (economicMonths[m]?.despesasFixas || 0) > 0;
+                    return (
+                      <td key={m} className="p-1.5 text-center border-r border-[#EAE6DF]">
+                        <div className="flex items-center justify-center gap-1">
+                          {/* Editar */}
+                          <button
+                            title={`Editar DRE de ${m.toUpperCase()}`}
+                            onClick={() => setEditingMonthKey(m)}
+                            className="p-1 rounded-md bg-[#2D2A26] text-[#C19A6B] hover:bg-[#3F3B35] transition-colors"
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </button>
+                          {/* Excluir — só aparece se tiver dados */}
+                          {hasData && (
+                            <button
+                              title={`Excluir DRE de ${m.toUpperCase()}`}
+                              onClick={() => onDeleteMonth(m, selectedYear)}
+                              className="p-1 rounded-md bg-rose-100 text-rose-700 hover:bg-rose-200 transition-colors"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    );
+                  })}
+                  <td className="p-2 bg-[#F3F1ED] border-r border-[#EAE6DF]" />
+                  <td className="p-2 bg-[#F3F1ED]" />
+                </tr>
+              )}
             </thead>
             <tbody className="divide-y divide-[#EAE6DF] text-[#433E37]">
               {/* Row 1: Receita Bruta */}
@@ -356,7 +405,25 @@ export const EconomicView: React.FC<EconomicViewProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Modal de edição */}
+      {editingMonthKey && (
+        <EditEconomicModal
+          isOpen={!!editingMonthKey}
+          onClose={() => setEditingMonthKey(null)}
+          monthKey={editingMonthKey}
+          selectedYear={selectedYear}
+          currentData={economicMonths[editingMonthKey] || null}
+          onSave={(mk, yr, fields) => {
+            onEditMonth(mk, yr, fields);
+            setEditingMonthKey(null);
+          }}
+          onDelete={(mk, yr) => {
+            onDeleteMonth(mk, yr);
+            setEditingMonthKey(null);
+          }}
+        />
+      )}
     </div>
   );
 };
-

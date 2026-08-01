@@ -82,7 +82,7 @@ import {
   weekOfMonthIso,
   weekRangeLabel,
 } from '../utils/periodFilter';
-import { isPlanDirty, normalizePlan, toMoney } from '../utils/cashFlowPersistence';
+import { emptyPlanFor, isPlanDirty, normalizePlan, toMoney } from '../utils/cashFlowPersistence';
 import { PdfExportMenu } from './PdfExportMenu';
 
 interface CashFlowViewProps {
@@ -729,6 +729,38 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
     }
   };
 
+  const [confirmDeletePlan, setConfirmDeletePlan] = useState(false);
+
+  /**
+   * Zera e limpa o plano do mês no banco de dados com dupla confirmação.
+   */
+  const handleDeletePlan = async () => {
+    if (!canEdit) return;
+    if (!confirmDeletePlan) {
+      setConfirmDeletePlan(true);
+      return;
+    }
+    setIsSaving(true);
+    setSaveError(null);
+    setSavedMsg(null);
+    try {
+      const empty = emptyPlanFor(selectedYear, monthKey);
+      const saved = await onSavePlan(empty);
+      if (saved) {
+        setDraft(saved);
+      } else {
+        setDraft(empty);
+      }
+      setRawEdits({});
+      setConfirmDeletePlan(false);
+      setSavedMsg('Planejamento zerado e limpo com sucesso no banco de dados.');
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Falha ao zerar o planejamento. Tente novamente.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   /**
    * Guarda de saída do navegador.
    *
@@ -907,25 +939,41 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
             </span>
           )}
           {canEdit && (
-            <button
-              onClick={handleSave}
-              disabled={isSaving}
-              className={`px-4 py-2.5 text-xs font-bold rounded-lg shadow-xs transition-all flex items-center gap-2 disabled:opacity-60 ${
-                isDirty
-                  ? 'bg-[#C19A6B] text-white hover:bg-[#A8814F]'
-                  : 'bg-[#2D2A26] text-white hover:bg-[#3F3B35]'
-              }`}
-            >
-              {isSaving ? (
-                <svg className="animate-spin w-4 h-4 text-[#C19A6B]" viewBox="0 0 24 24" fill="none">
-                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
-                  <path d="M4 12a8 8 0 018-8V0C5.37 0 0 5.37 0 12h4z" fill="currentColor" className="opacity-75" />
-                </svg>
-              ) : (
-                <Save className="w-4 h-4 text-[#C19A6B]" />
-              )}
-              <span>{isSaving ? 'Salvando...' : 'Salvar Planejamento'}</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleDeletePlan}
+                disabled={isSaving}
+                title="Zera e limpa todos os valores deste mês no banco de dados"
+                className={`px-3 py-2.5 text-xs font-bold rounded-lg shadow-xs transition-all flex items-center gap-1.5 disabled:opacity-60 ${
+                  confirmDeletePlan
+                    ? 'bg-rose-600 text-white hover:bg-rose-700 animate-pulse'
+                    : 'bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100'
+                }`}
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>{confirmDeletePlan ? 'Confirmar Limpeza?' : 'Limpar Mês'}</span>
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={isSaving}
+                className={`px-4 py-2.5 text-xs font-bold rounded-lg shadow-xs transition-all flex items-center gap-2 disabled:opacity-60 ${
+                  isDirty
+                    ? 'bg-[#C19A6B] text-white hover:bg-[#A8814F]'
+                    : 'bg-[#2D2A26] text-white hover:bg-[#3F3B35]'
+                }`}
+              >
+                {isSaving ? (
+                  <svg className="animate-spin w-4 h-4 text-[#C19A6B]" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
+                    <path d="M4 12a8 8 0 018-8V0C5.37 0 0 5.37 0 12h4z" fill="currentColor" className="opacity-75" />
+                  </svg>
+                ) : (
+                  <Save className="w-4 h-4 text-[#C19A6B]" />
+                )}
+                <span>{isSaving ? 'Salvando...' : 'Salvar Planejamento'}</span>
+              </button>
+            </div>
           )}
         </div>
       </div>

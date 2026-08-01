@@ -1309,6 +1309,37 @@ export default function App() {
     await handleSaveLaunch({ targetModule: 'financial', year, monthKey, fieldValues });
   };
 
+  // ── Handlers: Resultado Econômico (Editar / Excluir) ──────────────────────
+  const handleEditEconomicMonth = async (
+    monthKey: string,
+    year: number,
+    fieldValues: Record<string, number>
+  ) => {
+    await handleSaveLaunch({ targetModule: 'economic', year, monthKey, fieldValues });
+  };
+
+  const handleDeleteEconomicMonth = async (monthKey: string, year: number) => {
+    const zeroed: EconomicMonthData = {
+      monthKey,
+      monthLabel: `${monthKey}/${year}`,
+      receitaBruta: 0,
+      cmv: 0,
+      cmvPercent: 0,
+      margemBruta: 0,
+      margemPercent: 0,
+      despesasFixas: 0,
+      despesasPercent: 0,
+      resultadoEconomico: 0,
+      resultadoPercent: 0,
+      pontoEquilibrio: 0,
+    };
+
+    setEconomicData((prev) => ({ ...prev, [monthKey]: zeroed }));
+    await saveEconomicMonth(year, monthKey, zeroed).catch((e) =>
+      console.error('Erro ao zerar mês econômico no Firestore:', e)
+    );
+  };
+
   // ── Handler: Excluir (zerar) mês do Resultado Financeiro ──────────────────
   const handleDeleteFinancialMonth = async (monthKey: string, year: number) => {
     const monthKeys = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
@@ -1835,6 +1866,8 @@ export default function App() {
               economicMonths={economicData}
               selectedYear={selectedYear}
               onOpenLaunchModal={() => setIsLaunchModalOpen(true)}
+              onEditMonth={handleEditEconomicMonth}
+              onDeleteMonth={handleDeleteEconomicMonth}
               userRole={currentUser.role}
             />
           )}
