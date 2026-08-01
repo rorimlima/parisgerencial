@@ -3,15 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
-  AlertTriangle,
   DollarSign,
   FileSpreadsheet,
-  FileText,
-  Package,
+  Pencil,
   PlusCircle,
-  Wallet,
+  Trash2,
 } from 'lucide-react';
 import { FinancialMonthData } from '../types';
 import {
@@ -22,11 +20,14 @@ import {
   formatPercent,
 } from '../utils/exportUtils';
 import { PdfExportMenu } from './PdfExportMenu';
+import { EditFinancialModal } from './EditFinancialModal';
 
 interface FinancialViewProps {
   financialMonths: Record<string, FinancialMonthData>;
   selectedYear: number;
   onOpenLaunchModal: () => void;
+  onEditMonth: (monthKey: string, year: number, fieldValues: Record<string, number>) => void;
+  onDeleteMonth: (monthKey: string, year: number) => void;
   userRole: string;
 }
 
@@ -34,9 +35,14 @@ export const FinancialView: React.FC<FinancialViewProps> = ({
   financialMonths,
   selectedYear,
   onOpenLaunchModal,
+  onEditMonth,
+  onDeleteMonth,
   userRole,
 }) => {
   const monthKeys = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+
+  // Estado do modal de edição
+  const [editingMonthKey, setEditingMonthKey] = useState<string | null>(null);
 
   const totalBancos = monthKeys.reduce((acc, m) => acc + (financialMonths[m]?.entradasBancos || 0), 0);
   const totalTesouraria = monthKeys.reduce((acc, m) => acc + (financialMonths[m]?.entradasTesouraria || 0), 0);
@@ -156,7 +162,7 @@ export const FinancialView: React.FC<FinancialViewProps> = ({
         </div>
       </div>
 
-      {/* Main Financial Spreadsheet Table (matching PDF 2) */}
+      {/* Main Financial Spreadsheet Table */}
       <div className="bg-white border border-[#EAE6DF] rounded-xl shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
@@ -166,7 +172,7 @@ export const FinancialView: React.FC<FinancialViewProps> = ({
                   ENTRADAS / SAÍDAS / ESTOQUE
                 </th>
                 {monthKeys.map((m) => (
-                  <th key={m} className="p-2.5 text-center min-w-[105px] border-r border-[#EAE6DF] uppercase">
+                  <th key={m} className="p-2.5 text-center min-w-[115px] border-r border-[#EAE6DF] uppercase">
                     {m}
                   </th>
                 ))}
@@ -174,7 +180,47 @@ export const FinancialView: React.FC<FinancialViewProps> = ({
                   TOTAL ANO
                 </th>
               </tr>
+
+              {/* ── Linha de ações: Editar / Excluir por mês ── */}
+              {userRole !== 'analista' && (
+                <tr className="bg-[#F3F1ED] border-b-2 border-[#EAE6DF]">
+                  <td className="p-2 sticky left-0 bg-[#F3F1ED] z-10 border-r border-[#EAE6DF] text-[10px] font-bold text-[#8B7D6B] uppercase tracking-wider">
+                    Ações do Mês
+                  </td>
+                  {monthKeys.map((m) => {
+                    const hasData = (financialMonths[m]?.totalEntradas || 0) > 0 ||
+                                    (financialMonths[m]?.totalSaidas || 0) > 0 ||
+                                    (financialMonths[m]?.estoque || 0) > 0;
+                    return (
+                      <td key={m} className="p-1.5 text-center border-r border-[#EAE6DF]">
+                        <div className="flex items-center justify-center gap-1">
+                          {/* Editar */}
+                          <button
+                            title={`Editar ${m.toUpperCase()}`}
+                            onClick={() => setEditingMonthKey(m)}
+                            className="p-1 rounded-md bg-[#2D2A26] text-[#C19A6B] hover:bg-[#3F3B35] transition-colors"
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </button>
+                          {/* Excluir — só aparece se tiver dados */}
+                          {hasData && (
+                            <button
+                              title={`Excluir ${m.toUpperCase()}`}
+                              onClick={() => onDeleteMonth(m, selectedYear)}
+                              className="p-1 rounded-md bg-rose-100 text-rose-700 hover:bg-rose-200 transition-colors"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    );
+                  })}
+                  <td className="p-2 bg-[#F3F1ED]" />
+                </tr>
+              )}
             </thead>
+
             <tbody className="divide-y divide-[#EAE6DF] text-[#433E37]">
               {/* Entradas - Bancos */}
               <tr className="hover:bg-[#FDFBF7] transition-colors">
@@ -384,6 +430,25 @@ export const FinancialView: React.FC<FinancialViewProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Modal de edição */}
+      {editingMonthKey && (
+        <EditFinancialModal
+          isOpen={!!editingMonthKey}
+          onClose={() => setEditingMonthKey(null)}
+          monthKey={editingMonthKey}
+          selectedYear={selectedYear}
+          currentData={financialMonths[editingMonthKey] || null}
+          onSave={(mk, yr, fields) => {
+            onEditMonth(mk, yr, fields);
+            setEditingMonthKey(null);
+          }}
+          onDelete={(mk, yr) => {
+            onDeleteMonth(mk, yr);
+            setEditingMonthKey(null);
+          }}
+        />
+      )}
     </div>
   );
 };

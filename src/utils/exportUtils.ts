@@ -599,7 +599,6 @@ export function exportFinancialPdfMensal(
   const sec2Rows = [
     ['Posição de Estoque (Ativo Circulante)', formatCurrency(estoque), 'Capital investido em mercadoria estocada'],
     ['Inadimplência Gerada no Mês', formatCurrency(inadMensal), 'Títulos vencidos e não pagos no mês corrente'],
-    ['Inadimplência Acumulada de Carteira', formatCurrency(inadAcum), 'Volume total de títulos em atraso na carteira'],
     ['Inadimplência Geral (Saldo Total da Carteira)', formatCurrency(inadGeral), 'Valor total inadimplente na carteira ativa'],
   ];
 

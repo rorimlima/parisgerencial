@@ -1300,6 +1300,51 @@ export default function App() {
     );
   };
 
+  // ── Handler: Editar mês do Resultado Financeiro ────────────────────────────
+  const handleEditFinancialMonth = async (
+    monthKey: string,
+    year: number,
+    fieldValues: Record<string, number>
+  ) => {
+    await handleSaveLaunch({ targetModule: 'financial', year, monthKey, fieldValues });
+  };
+
+  // ── Handler: Excluir (zerar) mês do Resultado Financeiro ──────────────────
+  const handleDeleteFinancialMonth = async (monthKey: string, year: number) => {
+    const monthKeys = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+    const zeroed: FinancialMonthData = {
+      monthKey,
+      monthLabel: `${monthKey}/${year}`,
+      entradasBancos: 0,
+      entradasTesouraria: 0,
+      totalEntradas: 0,
+      totalSaidas: 0,
+      resultadoFinanceiro: 0,
+      resultadoPercent: 0,
+      estoque: 0,
+      inadimplenciaMensal: 0,
+      inadimplenciaAcumulada: 0,
+      inadimplenciaGeral: 0,
+    };
+
+    const newFinancial = { ...financialData, [monthKey]: zeroed };
+
+    // Recalcula acumulado para o ano após zerar o mês
+    let acc = 0;
+    monthKeys.forEach((m) => {
+      if (newFinancial[m]) {
+        acc += newFinancial[m].inadimplenciaMensal;
+        newFinancial[m] = { ...newFinancial[m], inadimplenciaAcumulada: Math.round(acc * 100) / 100 };
+      }
+    });
+
+    setFinancialData(newFinancial);
+    await saveFinancialMonth(year, monthKey, newFinancial[monthKey]).catch((e) =>
+      console.error('Erro ao zerar mês financeiro no Firestore:', e)
+    );
+  };
+
+
   // ── Extrato Financeiro: recálculo do Resultado Financeiro ─────────────────
   // Recalcula, a partir do conjunto completo de lançamentos de extrato de um
   // ano, as Entradas de Bancos e Entradas de Tesouraria de cada mês, e persiste
@@ -1799,6 +1844,8 @@ export default function App() {
               financialMonths={financialData}
               selectedYear={selectedYear}
               onOpenLaunchModal={() => setIsLaunchModalOpen(true)}
+              onEditMonth={handleEditFinancialMonth}
+              onDeleteMonth={handleDeleteFinancialMonth}
               userRole={currentUser.role}
             />
           )}
