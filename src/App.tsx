@@ -759,6 +759,7 @@ export default function App() {
         estoque: 0,
         inadimplenciaMensal: 0,
         inadimplenciaAcumulada: 0,
+        inadimplenciaGeral: 0,
       };
 
       const entradasBancos = launch.fieldValues.entradasBancos ?? current.entradasBancos;
@@ -769,6 +770,7 @@ export default function App() {
       const resultadoPercent = totalEntradas > 0 ? (resultadoFinanceiro / totalEntradas) * 100 : 0;
       const estoque = launch.fieldValues.estoque ?? current.estoque;
       const inadimplenciaMensal = launch.fieldValues.inadimplenciaMensal ?? current.inadimplenciaMensal;
+      const inadimplenciaGeral = launch.fieldValues.inadimplenciaGeral ?? current.inadimplenciaGeral ?? 0;
 
       // Recalcula inadimplência acumulada
       const monthKeys = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
@@ -783,6 +785,7 @@ export default function App() {
         estoque,
         inadimplenciaMensal,
         inadimplenciaAcumulada: current.inadimplenciaAcumulada,
+        inadimplenciaGeral,
       };
 
       const newFinancial = { ...financialData, [launch.monthKey]: updatedMonth };

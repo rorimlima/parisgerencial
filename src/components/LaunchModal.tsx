@@ -43,6 +43,7 @@ export const LaunchModal: React.FC<LaunchModalProps> = ({
   const [totalSaidas, setTotalSaidas] = useState<string>('');
   const [estoque, setEstoque] = useState<string>('');
   const [inadimplenciaMensal, setInadimplenciaMensal] = useState<string>('');
+  const [inadimplenciaGeral, setInadimplenciaGeral] = useState<string>('');
 
   // Computed previews
   const recVal = parseNumberPtBr(receitaBruta);
@@ -84,6 +85,7 @@ export const LaunchModal: React.FC<LaunchModalProps> = ({
           totalSaidas: saidasVal,
           estoque: parseNumberPtBr(estoque),
           inadimplenciaMensal: parseNumberPtBr(inadimplenciaMensal),
+          inadimplenciaGeral: parseNumberPtBr(inadimplenciaGeral),
         },
       });
     }
@@ -283,6 +285,18 @@ export const LaunchModal: React.FC<LaunchModalProps> = ({
                     className="w-full bg-[#F9F7F2] border border-[#EAE6DF] rounded-lg p-2.5 text-xs text-[#2D2A26] focus:outline-none focus:border-[#C19A6B] font-mono"
                   />
                 </div>
+              </div>
+
+              {/* Campo Inadimplência Geral */}
+              <div>
+                <label className="block text-[11px] font-semibold text-rose-700 mb-1">Inadimplência Geral (R$) — Saldo Total da Carteira</label>
+                <input
+                  type="text"
+                  placeholder="Ex: 250.000,00"
+                  value={inadimplenciaGeral}
+                  onChange={(e) => setInadimplenciaGeral(e.target.value)}
+                  className="w-full bg-rose-50 border border-rose-200 rounded-lg p-2.5 text-xs text-rose-900 focus:outline-none focus:border-rose-400 font-mono"
+                />
               </div>
 
               {/* Automatic Cashflow Calculation Box */}

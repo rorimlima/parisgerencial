@@ -491,6 +491,7 @@ export function exportFinancialPdfGeral(
   const avgEstoque = monthKeys.reduce((acc, m) => acc + (financialMonths[m]?.estoque || 0), 0) / activeCount;
   const avgInadMensal = monthKeys.reduce((acc, m) => acc + (financialMonths[m]?.inadimplenciaMensal || 0), 0) / activeCount;
   const avgInadAcumulada = monthKeys.reduce((acc, m) => acc + (financialMonths[m]?.inadimplenciaAcumulada || 0), 0) / activeCount;
+  const avgInadGeral = monthKeys.reduce((acc, m) => acc + (financialMonths[m]?.inadimplenciaGeral || 0), 0) / activeCount;
 
   const headers = ['Métrica Financeira', ...monthKeys.map((m) => m.toUpperCase()), 'Total / Média Ano'];
 
@@ -537,6 +538,11 @@ export function exportFinancialPdfGeral(
       ...monthKeys.map((m) => formatCurrency(financialMonths[m]?.inadimplenciaAcumulada)),
       `Média: ${formatCurrency(avgInadAcumulada)}`,
     ],
+    [
+      'INADIMPLÊNCIA GERAL (Saldo Carteira)',
+      ...monthKeys.map((m) => formatCurrency(financialMonths[m]?.inadimplenciaGeral || 0)),
+      `Média: ${formatCurrency(avgInadGeral)}`,
+    ],
   ];
 
   exportCorporatePdf({
@@ -578,6 +584,7 @@ export function exportFinancialPdfMensal(
   const estoque = fData.estoque || 0;
   const inadMensal = fData.inadimplenciaMensal || 0;
   const inadAcum = fData.inadimplenciaAcumulada || 0;
+  const inadGeral = fData.inadimplenciaGeral || 0;
 
   const sec1Headers = ['Origem / Rubrica Financeira', 'Valor Realizado (R$)', '% s/ Entradas', 'Natureza da Operação'];
   const sec1Rows = [
@@ -593,6 +600,7 @@ export function exportFinancialPdfMensal(
     ['Posição de Estoque (Ativo Circulante)', formatCurrency(estoque), 'Capital investido em mercadoria estocada'],
     ['Inadimplência Gerada no Mês', formatCurrency(inadMensal), 'Títulos vencidos e não pagos no mês corrente'],
     ['Inadimplência Acumulada de Carteira', formatCurrency(inadAcum), 'Volume total de títulos em atraso na carteira'],
+    ['Inadimplência Geral (Saldo Total da Carteira)', formatCurrency(inadGeral), 'Valor total inadimplente na carteira ativa'],
   ];
 
   exportCorporatePdf({

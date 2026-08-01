@@ -53,6 +53,8 @@ export const FinancialView: React.FC<FinancialViewProps> = ({
     monthKeys.reduce((acc, m) => acc + (financialMonths[m]?.inadimplenciaMensal || 0), 0) / activeCount;
   const avgInadAcumulada =
     monthKeys.reduce((acc, m) => acc + (financialMonths[m]?.inadimplenciaAcumulada || 0), 0) / activeCount;
+  const avgInadGeral =
+    monthKeys.reduce((acc, m) => acc + (financialMonths[m]?.inadimplenciaGeral || 0), 0) / activeCount;
 
   const handleExportGeralPdf = () => {
     exportFinancialPdfGeral(financialMonths, selectedYear);
@@ -337,7 +339,7 @@ export const FinancialView: React.FC<FinancialViewProps> = ({
                 </td>
               </tr>
 
-              {/* INADIMPLÊNCIA MENSAL ATUAL (ACUMULADA) */}
+              {/* INADIMPLÊNCIA ACUMULADA */}
               <tr className="hover:bg-[#FDFBF7] transition-colors bg-rose-50/50 font-bold">
                 <td className="p-3 sticky left-0 bg-white z-10 border-r border-[#EAE6DF] text-rose-800 flex items-center justify-between">
                   <span>INADIMPLÊNCIA ACUMULADA</span>
@@ -355,6 +357,27 @@ export const FinancialView: React.FC<FinancialViewProps> = ({
                 })}
                 <td className="p-3 text-right bg-rose-100/60 text-rose-900 font-black font-mono">
                   {formatCurrency(avgInadAcumulada)}
+                </td>
+              </tr>
+
+              {/* INADIMPLÊNCIA GERAL */}
+              <tr className="hover:bg-rose-50/30 transition-colors bg-rose-50/70 font-bold border-t-2 border-rose-300">
+                <td className="p-3 sticky left-0 bg-rose-50 z-10 border-r border-[#EAE6DF] text-rose-900 flex items-center justify-between">
+                  <span>INADIMPLÊNCIA GERAL</span>
+                  <span className="text-[9px] bg-rose-200 text-rose-900 px-1.5 py-0.5 rounded font-mono">
+                    SALDO CARTEIRA
+                  </span>
+                </td>
+                {monthKeys.map((m) => {
+                  const val = financialMonths[m]?.inadimplenciaGeral || 0;
+                  return (
+                    <td key={m} className="p-2.5 text-right border-r border-[#EAE6DF] font-mono text-rose-900">
+                      {val > 0 ? formatCurrency(val) : <span className="text-[#8B7D6B]">-</span>}
+                    </td>
+                  );
+                })}
+                <td className="p-3 text-right bg-rose-200/60 text-rose-900 font-black font-mono">
+                  {avgInadGeral > 0 ? formatCurrency(avgInadGeral) : <span className="text-[#8B7D6B]">-</span>}
                 </td>
               </tr>
             </tbody>

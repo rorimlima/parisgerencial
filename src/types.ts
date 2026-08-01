@@ -87,6 +87,7 @@ export interface FinancialMonthData {
   estoque: number;
   inadimplenciaMensal: number;
   inadimplenciaAcumulada: number;
+  inadimplenciaGeral?: number;
 }
 
 export interface FinancialYearSummary {
