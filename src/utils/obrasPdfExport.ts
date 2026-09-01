@@ -1,11 +1,10 @@
 /**
- * obrasPdfExport.ts — Gerador de PDF Corporativo para Obras
+ * obrasPdfExport.ts — Gerador de PDF Corporativo para Obras & Folha de Ponto
  *
- * Gera relatório profissional completo com:
- *  - Capa com dados da obra e KPIs
- *  - Folha de ponto detalhada (calendário mensal)
- *  - Folha de pagamento com salários calculados
- *  - Rodapé corporativo Paris Dakar em todas as páginas
+ * Oferece:
+ *  1. Relatório Geral Consolidado da Obra (Capa + Calendário + Folha de Pagamento)
+ *  2. Relatório Descritivo Diário Individual por Funcionário (Dia a dia com Diárias, HEs e Assinaturas)
+ *  3. Livro Descritivo Geral de Todos os Funcionários (Caderno consolidado com fichas individuais completas)
  */
 
 import jsPDF from 'jspdf';
@@ -32,7 +31,7 @@ function formatCurrency(value: number): string {
     style: 'currency',
     currency: 'BRL',
     minimumFractionDigits: 2,
-  }).format(value);
+  }).format(value || 0);
 }
 
 function formatDateBr(iso: string): string {
@@ -48,6 +47,10 @@ function getDaysInMonth(month: number, year: number): number {
 const MONTH_NAMES = [
   '', 'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
   'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro',
+];
+
+const WEEKDAY_NAMES_FULL = [
+  'Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado',
 ];
 
 const STATUS_LABELS: Record<StatusPonto, string> = {
@@ -78,12 +81,12 @@ export function calcularResumos(
         case 'falta': diasFalta++; break;
         case 'folga': diasFolga++; break;
       }
-      totalHorasExtras += r.horasExtras || 0;
+      totalHorasExtras += Number(r.horasExtras) || 0;
     });
 
-    const salarioDiarias = diasPresente * func.valorDiaria;
-    const salarioMeiaDiaria = diasMeia * (func.valorDiaria / 2);
-    const salarioHorasExtras = totalHorasExtras * func.valorHoraExtra;
+    const salarioDiarias = diasPresente * (Number(func.valorDiaria) || 0);
+    const salarioMeiaDiaria = diasMeia * ((Number(func.valorDiaria) || 0) / 2);
+    const salarioHorasExtras = totalHorasExtras * (Number(func.valorHoraExtra) || 0);
     const salarioTotal = salarioDiarias + salarioMeiaDiaria + salarioHorasExtras;
 
     return {
@@ -103,7 +106,12 @@ export function calcularResumos(
 
 // ── Cabeçalho corporativo ───────────────────────────────────────────────────
 
-function drawHeader(doc: jsPDF, pageWidth: number, obra: Obra, mes: number, ano: number) {
+function drawHeader(
+  doc: jsPDF,
+  pageWidth: number,
+  subtitulo: string,
+  periodoStr: string,
+) {
   // Banner escuro
   doc.setFillColor(...PRIMARY_DARK);
   doc.rect(0, 0, pageWidth, 22, 'F');
@@ -115,44 +123,53 @@ function drawHeader(doc: jsPDF, pageWidth: number, obra: Obra, mes: number, ano:
   // Título
   doc.setTextColor(...WHITE);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(15);
-  doc.text('PARIS DAKAR GERENCIAL', 14, 11);
+  doc.setFontSize(14);
+  doc.text('PARIS DAKAR GERENCIAL', 14, 10.5);
 
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
+  doc.setFontSize(8);
   doc.setTextColor(203, 213, 225);
-  doc.text('Relatório Corporativo de Gestão de Obras', 14, 17);
+  doc.text(subtitulo, 14, 16.5);
 
   // Data de emissão
   const nowStr = new Date().toLocaleString('pt-BR');
-  doc.setFontSize(8);
+  doc.setFontSize(7.5);
   doc.setTextColor(...WHITE);
-  doc.text(`Gerado em: ${nowStr}`, pageWidth - 14, 11, { align: 'right' });
+  doc.text(`Emissão: ${nowStr}`, pageWidth - 14, 10.5, { align: 'right' });
 
   // Período
   doc.setTextColor(...GOLD_ACCENT);
-  doc.text(`${MONTH_NAMES[mes]} / ${ano}`, pageWidth - 14, 17, { align: 'right' });
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.text(periodoStr, pageWidth - 14, 16.5, { align: 'right' });
 }
 
 // ── Rodapé corporativo ──────────────────────────────────────────────────────
 
-function drawFooter(doc: jsPDF, pageWidth: number, pageHeight: number, pageNum: number, totalPages: number) {
+function drawFooter(
+  doc: jsPDF,
+  pageWidth: number,
+  pageHeight: number,
+  pageNum: number,
+  totalPages: number,
+  modulo: string = 'Gestão de Obras & Registro de Ponto',
+) {
   doc.setDrawColor(...SLATE_200);
-  doc.line(14, pageHeight - 12, pageWidth - 14, pageHeight - 12);
+  doc.line(14, pageHeight - 11, pageWidth - 14, pageHeight - 11);
 
   doc.setFontSize(7);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(148, 163, 184);
   doc.text(
-    `Página ${pageNum} de ${totalPages} | Documento Corporativo Paris Dakar Gerencial`,
+    `Página ${pageNum} de ${totalPages} | Documento Corporativo Paris Dakar Gerencial — Auditoria Financeira & RH`,
     14,
-    pageHeight - 7,
+    pageHeight - 6.5,
   );
-  doc.text('Módulo: Obras & Registro de Ponto', pageWidth - 14, pageHeight - 7, { align: 'right' });
+  doc.text(modulo, pageWidth - 14, pageHeight - 6.5, { align: 'right' });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  EXPORTAR PDF COMPLETO DA OBRA
+//  1. EXPORTAR PDF GERAL CONSOLIDADO DA OBRA (LANDSCAPE)
 // ═══════════════════════════════════════════════════════════════════════════
 
 export function exportObraPdf(
@@ -174,47 +191,45 @@ export function exportObraPdf(
   const totalFaltas = resumos.reduce((s, r) => s + r.diasFalta, 0);
   const totalHE = resumos.reduce((s, r) => s + r.totalHorasExtras, 0);
 
-  // ─── PÁGINA 1: CAPA ──────────────────────────────────────────────────────
-  drawHeader(doc, pageWidth, obra, mes, ano);
+  const periodoStr = `${MONTH_NAMES[mes]} / ${ano}`;
 
-  let y = 30;
+  // ─── PÁGINA 1: CAPA CONSOLIDADA ───────────────────────────────────────────
+  drawHeader(doc, pageWidth, 'Relatório Corporativo Consolidado de Obra', periodoStr);
+
+  let y = 29;
 
   // Título da obra
   doc.setTextColor(...SLATE_800);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(14);
+  doc.setFontSize(13);
   doc.text(`OBRA: ${obra.nome.toUpperCase()}`, 14, y);
-  y += 7;
+  y += 5.5;
 
   // Dados da obra
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
+  doc.setFontSize(8.5);
   doc.setTextColor(...SLATE_500);
-  doc.text(`Endereço: ${obra.endereco || '—'}`, 14, y);
-  y += 5;
-  doc.text(`Responsável: ${obra.responsavel || '—'}`, 14, y);
-  y += 5;
-  doc.text(`Período: ${formatDateBr(obra.dataInicio)} a ${obra.dataFim ? formatDateBr(obra.dataFim) : 'Em aberto'}`, 14, y);
-  y += 5;
-  doc.text(`Status: ${obra.status}`, 14, y);
+  doc.text(`Endereço: ${obra.endereco || 'Não informado'} | Responsável: ${obra.responsavel || 'Não informado'}`, 14, y);
+  y += 4.5;
+  doc.text(`Período Obra: ${formatDateBr(obra.dataInicio)} a ${obra.dataFim ? formatDateBr(obra.dataFim) : 'Em aberto'} | Status: ${obra.status}`, 14, y);
   if (obra.observacao) {
-    y += 5;
-    doc.text(`Obs: ${obra.observacao}`, 14, y);
+    y += 4.5;
+    doc.text(`Observações: ${obra.observacao}`, 14, y);
   }
-  y += 10;
+  y += 8;
 
   // KPI Cards
   const cards = [
     { label: 'FUNCIONÁRIOS ATIVOS', value: String(totalFunc), color: BLUE },
-    { label: 'TOTAL PRESENÇAS', value: String(totalPresencas), color: GREEN },
+    { label: 'DIÁRIAS INTEGRAIS', value: String(totalPresencas), color: GREEN },
     { label: 'MEIAS DIÁRIAS', value: String(totalMeias), color: AMBER },
-    { label: 'TOTAL FALTAS', value: String(totalFaltas), color: RED },
-    { label: 'HORAS EXTRAS', value: `${totalHE}h`, color: AMBER },
-    { label: 'CUSTO TOTAL', value: formatCurrency(custoTotal), color: PRIMARY_DARK },
+    { label: 'FALTAS REGISTRADAS', value: String(totalFaltas), color: RED },
+    { label: 'TOTAL HORAS EXTRAS', value: `${totalHE.toFixed(1)}h`, color: AMBER },
+    { label: 'CUSTO TOTAL FOLHA', value: formatCurrency(custoTotal), color: PRIMARY_DARK },
   ];
 
   const cardW = 42;
-  const cardH = 16;
+  const cardH = 15;
   const gap = 4;
 
   cards.forEach((card, i) => {
@@ -229,29 +244,29 @@ export function exportObraPdf(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(6);
     doc.setTextColor(...SLATE_500);
-    doc.text(card.label, x + 3, y + 5.5);
+    doc.text(card.label, x + 3, y + 5);
 
-    doc.setFontSize(10);
+    doc.setFontSize(9.5);
     doc.setTextColor(...card.color);
-    doc.text(card.value, x + 3, y + 12.5);
+    doc.text(card.value, x + 3, y + 11.5);
   });
 
-  y += cardH + 10;
+  y += cardH + 8;
 
   // Tabela resumo de funcionários na capa
   doc.setFillColor(...SLATE_100);
-  doc.rect(14, y, pageWidth - 28, 6, 'F');
+  doc.rect(14, y, pageWidth - 28, 5.5, 'F');
   doc.setFillColor(...GOLD_ACCENT);
-  doc.rect(14, y, 3, 6, 'F');
+  doc.rect(14, y, 3, 5.5, 'F');
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
+  doc.setFontSize(8.5);
   doc.setTextColor(...SLATE_800);
-  doc.text('QUADRO DE FUNCIONÁRIOS', 19, y + 4.2);
-  y += 8;
+  doc.text('EQUIPE & TABELA DE VALORES BASE', 19, y + 3.8);
+  y += 7.5;
 
   autoTable(doc, {
     startY: y,
-    head: [['#', 'Nome', 'Função', 'Valor Diária', 'Valor Hora Extra', 'Observação', 'Status']],
+    head: [['#', 'Nome do Funcionário', 'Função / Cargo', 'Valor Diária (R$)', 'Valor H.Extra (R$/h)', 'Observações', 'Status']],
     body: funcionarios.map((f, i) => [
       String(i + 1),
       f.nome,
@@ -274,27 +289,15 @@ export function exportObraPdf(
     },
   });
 
-  // ─── PÁGINA 2+: FOLHA DE PONTO ───────────────────────────────────────────
-
-  // Divide dias: se > 20 funcionários ou > 16 dias em landscape, dividir
+  // ─── PÁGINA 2: GRADE DE FREQUÊNCIA MENSAL ────────────────────────────────
   const funcAtivos = funcionarios.filter((f) => f.status === 'Ativo');
   const halfDays = Math.ceil(daysInMonth / 2);
 
-  // Primeira metade dos dias (1 a 15)
+  // Primeira metade dos dias (1 a 15/16)
   doc.addPage();
-  drawHeader(doc, pageWidth, obra, mes, ano);
+  drawHeader(doc, pageWidth, 'Folha de Frequência Mensal — Dias 01 a ' + halfDays, periodoStr);
 
-  let py = 30;
-  doc.setFillColor(...SLATE_100);
-  doc.rect(14, py, pageWidth - 28, 6, 'F');
-  doc.setFillColor(...GOLD_ACCENT);
-  doc.rect(14, py, 3, 6, 'F');
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.setTextColor(...SLATE_800);
-  doc.text(`FOLHA DE PONTO — ${MONTH_NAMES[mes].toUpperCase()} / ${ano} — DIAS 1 A ${halfDays}`, 19, py + 4.2);
-  py += 8;
-
+  let py = 29;
   const daysRange1 = Array.from({ length: halfDays }, (_, i) => i + 1);
   const pontoHeaders1 = ['Funcionário', 'Função', ...daysRange1.map((d) => String(d))];
 
@@ -303,9 +306,9 @@ export function exportObraPdf(
     daysRange1.forEach((day) => {
       const dateStr = `${ano}-${String(mes).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       const reg = registros.find((r) => r.funcionarioId === f.id && r.data === dateStr);
-      if (reg) {
-        let label = STATUS_LABELS[reg.status];
-        if (reg.horasExtras > 0) label += `+${reg.horasExtras}`;
+      if (reg && reg.status) {
+        let label = STATUS_LABELS[reg.status] || '—';
+        if (Number(reg.horasExtras) > 0) label += `+${reg.horasExtras}`;
         cells.push(label);
       } else {
         cells.push('—');
@@ -348,28 +351,18 @@ export function exportObraPdf(
   const daysRange2 = Array.from({ length: daysInMonth - halfDays }, (_, i) => halfDays + i + 1);
   if (daysRange2.length > 0) {
     doc.addPage();
-    drawHeader(doc, pageWidth, obra, mes, ano);
+    drawHeader(doc, pageWidth, `Folha de Frequência Mensal — Dias ${halfDays + 1} a ${daysInMonth}`, periodoStr);
 
-    py = 30;
-    doc.setFillColor(...SLATE_100);
-    doc.rect(14, py, pageWidth - 28, 6, 'F');
-    doc.setFillColor(...GOLD_ACCENT);
-    doc.rect(14, py, 3, 6, 'F');
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.setTextColor(...SLATE_800);
-    doc.text(`FOLHA DE PONTO — ${MONTH_NAMES[mes].toUpperCase()} / ${ano} — DIAS ${halfDays + 1} A ${daysInMonth}`, 19, py + 4.2);
-    py += 8;
-
+    py = 29;
     const pontoHeaders2 = ['Funcionário', 'Função', ...daysRange2.map((d) => String(d))];
     const pontoRows2 = funcAtivos.map((f) => {
       const cells: string[] = [f.nome, f.funcao];
       daysRange2.forEach((day) => {
         const dateStr = `${ano}-${String(mes).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
         const reg = registros.find((r) => r.funcionarioId === f.id && r.data === dateStr);
-        if (reg) {
-          let label = STATUS_LABELS[reg.status];
-          if (reg.horasExtras > 0) label += `+${reg.horasExtras}`;
+        if (reg && reg.status) {
+          let label = STATUS_LABELS[reg.status] || '—';
+          if (Number(reg.horasExtras) > 0) label += `+${reg.horasExtras}`;
           cells.push(label);
         } else {
           cells.push('—');
@@ -409,47 +402,15 @@ export function exportObraPdf(
     });
   }
 
-  // Legenda do ponto
-  const legendY = (doc as any).lastAutoTable.finalY + 6;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7);
-  doc.setTextColor(...SLATE_500);
-  doc.text('LEGENDA:', 14, legendY);
-  doc.setFont('helvetica', 'normal');
-
-  const legends = [
-    { label: 'P = Presente (Diária Completa)', color: GREEN },
-    { label: '½ = Meia Diária', color: AMBER },
-    { label: 'F = Falta', color: RED },
-    { label: 'FG = Folga', color: BLUE },
-    { label: '+N = Horas Extras', color: SLATE_500 },
-  ];
-  let lx = 36;
-  legends.forEach((l) => {
-    doc.setTextColor(...l.color);
-    doc.text(l.label, lx, legendY);
-    lx += doc.getTextWidth(l.label) + 8;
-  });
-
-  // ─── ÚLTIMA PÁGINA: FOLHA DE PAGAMENTO ────────────────────────────────────
-
+  // ─── PÁGINA FINAL: FOLHA DE PAGAMENTO CONSOLIDADA ─────────────────────────
   doc.addPage();
-  drawHeader(doc, pageWidth, obra, mes, ano);
+  drawHeader(doc, pageWidth, 'Folha de Pagamento & Liquidação de Diárias', periodoStr);
 
-  py = 30;
-  doc.setFillColor(...SLATE_100);
-  doc.rect(14, py, pageWidth - 28, 6, 'F');
-  doc.setFillColor(...GOLD_ACCENT);
-  doc.rect(14, py, 3, 6, 'F');
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.setTextColor(...SLATE_800);
-  doc.text(`FOLHA DE PAGAMENTO — ${MONTH_NAMES[mes].toUpperCase()} / ${ano}`, 19, py + 4.2);
-  py += 8;
+  py = 29;
 
   const pagHeaders = [
-    '#', 'Funcionário', 'Função', 'Presenças', 'Meias', 'Faltas', 'Folgas',
-    'Horas Extras', 'Valor Diárias', 'Valor Meias', 'Valor HEs', 'SALÁRIO TOTAL',
+    '#', 'Funcionário', 'Função', 'Diárias (P)', 'Meias (½)', 'Faltas (F)', 'Folgas (FG)',
+    'H. Extras', 'Valor Diárias', 'Valor Meias', 'Valor H.Extras', 'SALÁRIO TOTAL',
   ];
 
   const pagRows = resumos.map((r, i) => [
@@ -460,7 +421,7 @@ export function exportObraPdf(
     String(r.diasMeia),
     String(r.diasFalta),
     String(r.diasFolga),
-    `${r.totalHorasExtras}h`,
+    `${r.totalHorasExtras.toFixed(1)}h`,
     formatCurrency(r.salarioDiarias),
     formatCurrency(r.salarioMeiaDiaria),
     formatCurrency(r.salarioHorasExtras),
@@ -473,10 +434,10 @@ export function exportObraPdf(
   const totalHEVal = resumos.reduce((s, r) => s + r.salarioHorasExtras, 0);
 
   pagRows.push([
-    '', 'TOTAL GERAL', '',
+    '', 'TOTAL CONSOLIDADO', '',
     String(totalPresencas), String(totalMeias), String(totalFaltas),
     String(resumos.reduce((s, r) => s + r.diasFolga, 0)),
-    `${totalHE}h`,
+    `${totalHE.toFixed(1)}h`,
     formatCurrency(totalDiarias),
     formatCurrency(totalMeiaDiaria),
     formatCurrency(totalHEVal),
@@ -506,22 +467,20 @@ export function exportObraPdf(
       11: { halign: 'right', fontStyle: 'bold' },
     },
     didParseCell: (data) => {
-      // Última linha = totais
       if (data.section === 'body' && data.row.index === pagRows.length - 1) {
         data.cell.styles.fillColor = [30, 41, 59];
         data.cell.styles.textColor = WHITE;
         data.cell.styles.fontStyle = 'bold';
       }
-      // Coluna de salário total em verde para linhas normais
       if (data.section === 'body' && data.column.index === 11 && data.row.index < pagRows.length - 1) {
         data.cell.styles.textColor = GREEN;
       }
     },
   });
 
-  // Área de assinaturas
-  const sigY = (doc as any).lastAutoTable.finalY + 20;
-  if (sigY < pageHeight - 30) {
+  // Assinaturas
+  const sigY = (doc as any).lastAutoTable.finalY + 18;
+  if (sigY < pageHeight - 25) {
     doc.setDrawColor(...SLATE_800);
     doc.setLineWidth(0.3);
 
@@ -530,33 +489,397 @@ export function exportObraPdf(
     const sigStart = (pageWidth - 3 * sigWidth - 2 * sigGap) / 2;
 
     const sigs = [
-      `Responsável da Obra\n${obra.responsavel || '_______________'}`,
-      'Engenheiro / Encarregado',
-      'Departamento de RH',
+      `Responsável da Obra\n${obra.responsavel || 'Engenharia / Encarregado'}`,
+      'Engenheiro Residente / Fiscal',
+      'Auditoria de RH & Financeiro',
     ];
 
     sigs.forEach((label, i) => {
       const x = sigStart + i * (sigWidth + sigGap);
       doc.line(x, sigY, x + sigWidth, sigY);
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7.5);
+      doc.setFontSize(7);
       doc.setTextColor(...SLATE_500);
       const lines = label.split('\n');
       lines.forEach((line, li) => {
-        doc.text(line, x + sigWidth / 2, sigY + 5 + li * 4, { align: 'center' });
+        doc.text(line, x + sigWidth / 2, sigY + 4 + li * 3.5, { align: 'center' });
       });
     });
   }
 
-  // ── Rodapé em todas as páginas ────────────────────────────────────────────
+  // Rodapé
   const totalPages = doc.getNumberOfPages();
   for (let i = 1; i <= totalPages; i++) {
     doc.setPage(i);
-    drawFooter(doc, pageWidth, pageHeight, i, totalPages);
+    drawFooter(doc, pageWidth, pageHeight, i, totalPages, 'Gestão de Obras — Relatório Consolidado');
   }
 
-  // ── Salvar ────────────────────────────────────────────────────────────────
   const monthStr = String(mes).padStart(2, '0');
-  const filename = `Obra_${obra.nome.replace(/\s+/g, '_')}_Ponto_${monthStr}_${ano}.pdf`;
+  const filename = `Obra_${obra.nome.replace(/\s+/g, '_')}_Consolidado_${monthStr}_${ano}.pdf`;
+  doc.save(filename);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  2. EXPORTAR PDF INDIVIDUAL DETALHADO POR FUNCIONÁRIO (PORTRAIT - DIA A DIA)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function renderFuncionarioDetalhadoPagina(
+  doc: jsPDF,
+  obra: Obra,
+  funcionario: FuncionarioObra,
+  registros: RegistroPonto[],
+  mes: number,
+  ano: number,
+  pageWidth: number,
+  pageHeight: number,
+) {
+  const daysInMonth = getDaysInMonth(mes, ano);
+  const periodoStr = `${MONTH_NAMES[mes]} / ${ano}`;
+
+  drawHeader(
+    doc,
+    pageWidth,
+    'Relatório Individual Descritivo de Frequência & Remuneração',
+    periodoStr,
+  );
+
+  let y = 28;
+
+  // Box com informações do funcionário e da obra
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(...SLATE_200);
+  doc.roundedRect(14, y, pageWidth - 28, 26, 2, 2, 'FD');
+  doc.setFillColor(...GOLD_ACCENT);
+  doc.rect(14, y, 2.5, 26, 'F');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  doc.setTextColor(...SLATE_800);
+  doc.text(`FUNCIONÁRIO: ${funcionario.nome.toUpperCase()}`, 20, y + 6);
+
+  doc.setFontSize(8);
+  doc.setTextColor(...SLATE_500);
+  doc.text(`Função / Cargo: ${funcionario.funcao}`, 20, y + 11.5);
+  doc.text(`Obra: ${obra.nome} | Responsável: ${obra.responsavel || '—'}`, 20, y + 16.5);
+  doc.text(`Endereço da Obra: ${obra.endereco || '—'}`, 20, y + 21.5);
+
+  // Valores base do lado direito
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...SLATE_800);
+  doc.text(`Diária Base: ${formatCurrency(funcionario.valorDiaria)}`, pageWidth - 20, y + 6, { align: 'right' });
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(...SLATE_500);
+  doc.text(`Hora Extra: ${formatCurrency(funcionario.valorHoraExtra)}/h`, pageWidth - 20, y + 11.5, { align: 'right' });
+  doc.text(`Status: ${funcionario.status}`, pageWidth - 20, y + 16.5, { align: 'right' });
+  if (funcionario.observacao) {
+    doc.text(`Obs: ${funcionario.observacao}`, pageWidth - 20, y + 21.5, { align: 'right' });
+  }
+
+  y += 30;
+
+  // Apuração do mês para o funcionário
+  let diasPresente = 0;
+  let diasMeia = 0;
+  let diasFalta = 0;
+  let diasFolga = 0;
+  let totalHE = 0;
+
+  const rowsDescritivas: (string | number)[][] = [];
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dateObj = new Date(ano, mes - 1, day);
+    const dow = dateObj.getDay();
+    const diaSemana = WEEKDAY_NAMES_FULL[dow];
+    const isWeekend = dow === 0 || dow === 6;
+
+    const dateStr = `${ano}-${String(mes).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const dateFormatted = `${String(day).padStart(2, '0')}/${String(mes).padStart(2, '0')}/${ano}`;
+
+    const reg = registros.find((r) => r.funcionarioId === funcionario.id && r.data === dateStr);
+    const status: StatusPonto | 'nenhum' = reg?.status || (isWeekend ? 'folga' : 'nenhum');
+    const horasExtras = Number(reg?.horasExtras) || 0;
+
+    let statusTexto = 'Não registrado';
+    let valorDiariaDia = 0;
+
+    if (status === 'presente') {
+      diasPresente++;
+      statusTexto = 'Presente (Integral)';
+      valorDiariaDia = Number(funcionario.valorDiaria) || 0;
+    } else if (status === 'meia') {
+      diasMeia++;
+      statusTexto = 'Meia Diária (50%)';
+      valorDiariaDia = (Number(funcionario.valorDiaria) || 0) / 2;
+    } else if (status === 'falta') {
+      diasFalta++;
+      statusTexto = 'Falta';
+      valorDiariaDia = 0;
+    } else if (status === 'folga') {
+      diasFolga++;
+      statusTexto = isWeekend ? `Fim de Semana (${diaSemana})` : 'Folga';
+      valorDiariaDia = 0;
+    } else if (isWeekend) {
+      diasFolga++;
+      statusTexto = `Fim de Semana (${diaSemana})`;
+      valorDiariaDia = 0;
+    }
+
+    totalHE += horasExtras;
+    const valorHEDia = horasExtras * (Number(funcionario.valorHoraExtra) || 0);
+    const totalDia = valorDiariaDia + valorHEDia;
+
+    rowsDescritivas.push([
+      dateFormatted,
+      diaSemana,
+      statusTexto,
+      valorDiariaDia > 0 ? formatCurrency(valorDiariaDia) : '—',
+      horasExtras > 0 ? `${horasExtras.toFixed(1)}h` : '—',
+      valorHEDia > 0 ? formatCurrency(valorHEDia) : '—',
+      totalDia > 0 ? formatCurrency(totalDia) : '—',
+      reg?.observacao || '',
+    ]);
+  }
+
+  const salarioDiarias = diasPresente * (Number(funcionario.valorDiaria) || 0);
+  const salarioMeias = diasMeia * ((Number(funcionario.valorDiaria) || 0) / 2);
+  const salarioHE = totalHE * (Number(funcionario.valorHoraExtra) || 0);
+  const salarioLiquidoTotal = salarioDiarias + salarioMeias + salarioHE;
+
+  // Mini KPI Cards no topo da tabela
+  const kpis = [
+    { label: 'PRESENÇAS', val: `${diasPresente}d`, col: GREEN },
+    { label: 'MEIAS', val: `${diasMeia}d`, col: AMBER },
+    { label: 'FALTAS', val: `${diasFalta}d`, col: RED },
+    { label: 'FOLGAS / FDS', val: `${diasFolga}d`, col: BLUE },
+    { label: 'HORAS EXTRAS', val: `${totalHE.toFixed(1)}h`, col: AMBER },
+    { label: 'SALÁRIO LÍQUIDO', val: formatCurrency(salarioLiquidoTotal), col: PRIMARY_DARK },
+  ];
+
+  const kw = (pageWidth - 28 - 5 * 3) / 6;
+  kpis.forEach((k, idx) => {
+    const kx = 14 + idx * (kw + 3);
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(...SLATE_200);
+    doc.roundedRect(kx, y, kw, 12.5, 1, 1, 'FD');
+    doc.setFillColor(...k.col);
+    doc.rect(kx, y, kw, 1, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(5.5);
+    doc.setTextColor(...SLATE_500);
+    doc.text(k.label, kx + 2, y + 4.5);
+    doc.setFontSize(8);
+    doc.setTextColor(...k.col);
+    doc.text(k.val, kx + 2, y + 9.8);
+  });
+
+  y += 16;
+
+  // Tabela Diária
+  autoTable(doc, {
+    startY: y,
+    head: [[
+      'Data',
+      'Dia da Semana',
+      'Situação / Frequência',
+      'Valor Diária',
+      'Horas Extras',
+      'Valor H.Extra',
+      'Total do Dia',
+      'Obs.',
+    ]],
+    body: rowsDescritivas,
+    theme: 'grid',
+    headStyles: {
+      fillColor: PRIMARY_DARK,
+      textColor: WHITE,
+      fontStyle: 'bold',
+      fontSize: 6.5,
+      halign: 'center',
+      valign: 'middle',
+    },
+    bodyStyles: {
+      fontSize: 6.2,
+      textColor: SLATE_800,
+      valign: 'middle',
+      cellPadding: 1.2,
+    },
+    alternateRowStyles: {
+      fillColor: SLATE_100,
+    },
+    margin: { left: 14, right: 14 },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 18 },
+      1: { cellWidth: 24 },
+      2: { cellWidth: 38 },
+      3: { halign: 'right', cellWidth: 20 },
+      4: { halign: 'center', cellWidth: 18 },
+      5: { halign: 'right', cellWidth: 20 },
+      6: { halign: 'right', cellWidth: 22, fontStyle: 'bold' },
+      7: { cellWidth: 'auto' },
+    },
+    didParseCell: (data) => {
+      if (data.section === 'body') {
+        const raw = String(data.row.raw[2] || '');
+        if (raw.startsWith('Presente')) {
+          if (data.column.index === 2) data.cell.styles.textColor = GREEN;
+        } else if (raw.startsWith('Meia')) {
+          if (data.column.index === 2) data.cell.styles.textColor = AMBER;
+        } else if (raw.startsWith('Falta')) {
+          if (data.column.index === 2) data.cell.styles.textColor = RED;
+          data.cell.styles.fillColor = [254, 242, 242];
+        } else if (raw.startsWith('Fim de Semana') || raw === 'Folga') {
+          if (data.column.index === 2) data.cell.styles.textColor = SLATE_500;
+        }
+      }
+    },
+  });
+
+  let finalTableY = (doc as any).lastAutoTable.finalY + 4;
+
+  // Se a tabela ultrapassou o espaço para o resumo/assinatura, adiciona página
+  if (finalTableY > pageHeight - 42) {
+    doc.addPage();
+    drawHeader(
+      doc,
+      pageWidth,
+      'Relatório Individual Descritivo — Resumo & Assinaturas',
+      periodoStr,
+    );
+    finalTableY = 28;
+  }
+
+  // Card de Totais Finais
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(...SLATE_200);
+  doc.roundedRect(14, finalTableY, pageWidth - 28, 14, 1.5, 1.5, 'FD');
+  doc.setFillColor(...PRIMARY_DARK);
+  doc.rect(14, finalTableY, 2, 14, 'F');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(...SLATE_800);
+  doc.text(
+    `SUBTOTAL DIÁRIAS: ${formatCurrency(salarioDiarias + salarioMeias)} (${diasPresente} integrais + ${diasMeia} meias)`,
+    19,
+    finalTableY + 5.5,
+  );
+  doc.text(
+    `SUBTOTAL HORAS EXTRAS: ${formatCurrency(salarioHE)} (${totalHE.toFixed(1)} horas acumuladas no mês)`,
+    19,
+    finalTableY + 10.5,
+  );
+
+  doc.setFontSize(10);
+  doc.setTextColor(...GREEN);
+  doc.text(
+    `TOTAL LÍQUIDO A RECEBER: ${formatCurrency(salarioLiquidoTotal)}`,
+    pageWidth - 18,
+    finalTableY + 8.5,
+    { align: 'right' },
+  );
+
+  finalTableY += 18;
+
+  // Termo de quitação e declaração
+  doc.setFont('helvetica', 'italic');
+  doc.setFontSize(6.2);
+  doc.setTextColor(...SLATE_500);
+  doc.text(
+    'Declaro que conferi os lançamentos de dias trabalhados e horas extras acima, estando de pleno acordo com a apuração de valores prestados.',
+    14,
+    finalTableY,
+  );
+
+  finalTableY += 11;
+
+  // Duas assinaturas
+  doc.setDrawColor(...SLATE_800);
+  doc.setLineWidth(0.3);
+
+  const sigW = 75;
+  const sigGap = (pageWidth - 28 - 2 * sigW);
+
+  // Assinatura do Funcionário
+  doc.line(14, finalTableY, 14 + sigW, finalTableY);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7);
+  doc.setTextColor(...SLATE_800);
+  doc.text(funcionario.nome, 14 + sigW / 2, finalTableY + 3.5, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.2);
+  doc.setTextColor(...SLATE_500);
+  doc.text(`Assinatura do Funcionário (${funcionario.funcao})`, 14 + sigW / 2, finalTableY + 6.8, { align: 'center' });
+
+  // Assinatura do Responsável
+  const x2 = 14 + sigW + sigGap;
+  doc.line(x2, finalTableY, x2 + sigW, finalTableY);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7);
+  doc.setTextColor(...SLATE_800);
+  doc.text(obra.responsavel || 'Engenheiro / Responsável da Obra', x2 + sigW / 2, finalTableY + 3.5, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.2);
+  doc.setTextColor(...SLATE_500);
+  doc.text('Aprovação da Engenharia / Auditoria de RH', x2 + sigW / 2, finalTableY + 6.8, { align: 'center' });
+}
+
+export function exportFuncionarioDetalhadoPdf(
+  obra: Obra,
+  funcionario: FuncionarioObra,
+  registros: RegistroPonto[],
+  mes: number,
+  ano: number,
+) {
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const pageWidth = 210;
+  const pageHeight = 297;
+
+  renderFuncionarioDetalhadoPagina(doc, obra, funcionario, registros, mes, ano, pageWidth, pageHeight);
+
+  // Rodapé em todas as páginas
+  const totalPages = doc.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i);
+    drawFooter(doc, pageWidth, pageHeight, i, totalPages, `Ficha Individual — ${funcionario.nome}`);
+  }
+
+  const monthStr = String(mes).padStart(2, '0');
+  const filename = `Ponto_${funcionario.nome.replace(/\s+/g, '_')}_${monthStr}_${ano}.pdf`;
+  doc.save(filename);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  3. EXPORTAR CADERNO DESCRITIVO COMPLETO DE TODOS OS FUNCIONÁRIOS (PORTRAIT)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function exportTodosFuncionariosDetalhadosPdf(
+  obra: Obra,
+  funcionarios: FuncionarioObra[],
+  registros: RegistroPonto[],
+  mes: number,
+  ano: number,
+) {
+  const funcAtivos = funcionarios.filter((f) => f.status === 'Ativo');
+  if (funcAtivos.length === 0) return;
+
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const pageWidth = 210;
+  const pageHeight = 297;
+
+  funcAtivos.forEach((func, idx) => {
+    if (idx > 0) {
+      doc.addPage();
+    }
+    renderFuncionarioDetalhadoPagina(doc, obra, func, registros, mes, ano, pageWidth, pageHeight);
+  });
+
+  const totalPages = doc.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i);
+    drawFooter(doc, pageWidth, pageHeight, i, totalPages, 'Caderno Descritivo Geral de Funcionários');
+  }
+
+  const monthStr = String(mes).padStart(2, '0');
+  const filename = `Obra_${obra.nome.replace(/\s+/g, '_')}_Livro_Pontos_Detalhados_${monthStr}_${ano}.pdf`;
   doc.save(filename);
 }
