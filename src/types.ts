@@ -24,7 +24,8 @@ export type ViewTab =
   | 'tasks'
   | 'api-docs'
   | 'postgres-settings'
-  | 'users';
+  | 'users'
+  | 'obras';
 
 export interface Seller {
   id: string;
@@ -1293,3 +1294,53 @@ export interface FinancialAttachment {
 }
 
 
+// ─── MÓDULO OBRAS — Registro de Ponto de Funcionários ──────────────────────
+
+export interface Obra {
+  id: string;
+  nome: string;
+  endereco: string;
+  responsavel: string;
+  dataInicio: string;   // ISO date YYYY-MM-DD
+  dataFim?: string;     // ISO date YYYY-MM-DD
+  status: 'Em andamento' | 'Concluída' | 'Paralisada';
+  observacao?: string;
+  createdAt?: string;
+}
+
+export interface FuncionarioObra {
+  id: string;
+  obraId: string;
+  nome: string;
+  funcao: string;
+  observacao?: string;
+  valorDiaria: number;
+  valorHoraExtra: number;
+  status: 'Ativo' | 'Inativo';
+}
+
+/** Tipos de presença: presente (diária completa), meia (meia diária), falta, folga */
+export type StatusPonto = 'presente' | 'meia' | 'falta' | 'folga';
+
+export interface RegistroPonto {
+  id: string;
+  funcionarioId: string;
+  obraId: string;
+  data: string;          // ISO date YYYY-MM-DD
+  status: StatusPonto;
+  horasExtras: number;
+  observacao?: string;
+}
+
+export interface ResumoFuncionarioObra {
+  funcionario: FuncionarioObra;
+  diasPresente: number;
+  diasMeia: number;
+  diasFalta: number;
+  diasFolga: number;
+  totalHorasExtras: number;
+  salarioDiarias: number;
+  salarioMeiaDiaria: number;
+  salarioHorasExtras: number;
+  salarioTotal: number;
+}

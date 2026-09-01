@@ -471,6 +471,32 @@ service cloud.firestore {
     }
 
     // =====================================================================
+    // OBRAS — Gestão de Obras & Registro de Ponto
+    // =====================================================================
+    //
+    // Collection principal + sub-collections para funcionários e registros
+    // de ponto diário. Leitura e escrita liberadas para qualquer autenticado
+    // autorizado (mesmo padrão de coleções operacionais).
+
+    match /obras/{obraId} {
+      allow read: if autorizado();
+      allow create, update: if escritaValida();
+      allow delete: if escritaValida() && ehGestorOuAdmin();
+
+      match /funcionarios/{funcId} {
+        allow read: if autorizado();
+        allow create, update: if escritaValida();
+        allow delete: if escritaValida();
+      }
+
+      match /registrosPonto/{regId} {
+        allow read: if autorizado();
+        allow create, update: if escritaValida();
+        allow delete: if escritaValida();
+      }
+    }
+
+    // =====================================================================
     // FECHAMENTO PADRÃO
     // =====================================================================
     //

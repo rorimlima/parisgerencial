@@ -31,6 +31,7 @@ import {
   FileSpreadsheet,
   Flame,
   Handshake,
+  HardHat,
   Landmark,
   LayoutDashboard,
   Receipt,
@@ -84,6 +85,7 @@ const MENU_GROUPS: MenuGroup[] = [
     title: 'Operacional',
     items: [
       { id: 'tasks', label: 'Tarefas & Rotinas', icon: CheckSquare, description: 'Gerenciador de tarefas diárias, confirmações e ingestão de planilhas', badge: 'Novo' },
+      { id: 'obras', label: 'Obras & Ponto', icon: HardHat, description: 'Gestão de obras, registro de ponto diário de funcionários e folha de pagamento', badge: 'Novo' },
       { id: 'billing', label: 'Faturamento', icon: Receipt, description: 'Notas fiscais (RPR014) e risco por cliente' },
       { id: 'sales', label: 'CRM & Vendas de Produtos', icon: Flame, description: 'CRM comercial com Curva ABC, melhores produtos para venda, margem e auditoria', badge: 'CRM' },
       { id: 'stock', label: 'Estoque', icon: Boxes, description: 'Lista de preço (RPR053), capital parado e margem' },

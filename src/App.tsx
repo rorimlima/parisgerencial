@@ -43,6 +43,7 @@ const StockView = lazy(() => import('./components/StockView').then((m) => ({ def
 const SalesView = lazy(() => import('./components/SalesView').then((m) => ({ default: m.SalesView })));
 const TaskManagerView = lazy(() => import('./components/TaskManagerView').then((m) => ({ default: m.TaskManagerView })));
 const UserManagementView = lazy(() => import('./components/UserManagementView').then((m) => ({ default: m.UserManagementView })));
+const ObrasView = lazy(() => import('./components/ObrasView').then((m) => ({ default: m.ObrasView })));
 
 /** Esqueleto mostrado enquanto o código de uma tela é baixado. */
 const ViewSkeleton: React.FC = () => (
@@ -2099,6 +2100,10 @@ export default function App() {
 
           {activeTab === 'users' && (
             <UserManagementView currentUser={currentUser} />
+          )}
+
+          {activeTab === 'obras' && (
+            <ObrasView selectedYear={selectedYear} />
           )}
           </Suspense>
           </ErrorBoundary>
