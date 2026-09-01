@@ -286,20 +286,20 @@ service cloud.firestore {
      */
     match /resultado_economico/{docId} {
       allow read: if autorizado();
-      allow create, update: if escritaValida() && ehGestorOuAdmin();
-      allow delete: if ehAdmin();
+      allow create, update: if escritaValida();
+      allow delete: if ehGestorOuAdmin();
     }
 
     match /resultado_financeiro/{docId} {
       allow read: if autorizado();
-      allow create, update: if escritaValida() && ehGestorOuAdmin();
-      allow delete: if ehAdmin();
+      allow create, update: if escritaValida();
+      allow delete: if ehGestorOuAdmin();
     }
 
     match /fluxo_caixa/{docId} {
       allow read: if autorizado();
-      allow create, update: if escritaValida() && ehGestorOuAdmin();
-      allow delete: if ehAdmin();
+      allow create, update: if escritaValida();
+      allow delete: if ehGestorOuAdmin();
     }
 
     /** Faturamento, vendas e estoque — bases importadas, recriáveis. */

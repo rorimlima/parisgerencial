@@ -118,24 +118,27 @@ export const fetchEconomicData = async (year: number): Promise<Record<string, Ec
       }
     });
 
-    // Se o Firestore tiver registros para este ano
+    // Se o Firestore tiver registros para este ano, os dados do banco são a fonte de verdade absoluta
     if (!snapshot.empty) {
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
-        const mes_chave = data.mes_chave || '';
+        const mes_chave = (data.mes_chave || docSnap.id.split('-')[1] || '').toLowerCase().trim();
         if (!mes_chave) return;
 
         // Lê diretamente do Firestore, preservando dados lançados ou editados manualmente pelo usuário
-        const receitaBruta = data.receita_bruta !== undefined ? data.receita_bruta : (result[mes_chave]?.receitaBruta || 0);
-        const cmv = data.cmv !== undefined ? data.cmv : (result[mes_chave]?.cmv || 0);
-        const margemBruta = data.margem_bruta !== undefined ? data.margem_bruta : (result[mes_chave]?.margemBruta || 0);
-        const despesasFixas = data.despesas_fixas !== undefined ? data.despesas_fixas : (result[mes_chave]?.despesasFixas || 0);
-        const resultadoEconomico = data.resultado_economico !== undefined ? data.resultado_economico : (result[mes_chave]?.resultadoEconomico || 0);
+        const receitaBruta = data.receita_bruta !== undefined ? Number(data.receita_bruta) : (result[mes_chave]?.receitaBruta || 0);
+        const cmv = data.cmv !== undefined ? Number(data.cmv) : (result[mes_chave]?.cmv || 0);
+        const margemBruta = data.margem_bruta !== undefined ? Number(data.margem_bruta) : (receitaBruta - cmv);
+        const despesasFixas = data.despesas_fixas !== undefined ? Number(data.despesas_fixas) : (result[mes_chave]?.despesasFixas || 0);
+        const resultadoEconomico = data.resultado_economico !== undefined ? Number(data.resultado_economico) : (margemBruta - despesasFixas);
         
         const cmvPercent = receitaBruta > 0 ? (cmv / receitaBruta) * 100 : 0;
         const margemPercent = receitaBruta > 0 ? (margemBruta / receitaBruta) * 100 : 0;
         const despesasPercent = receitaBruta > 0 ? (despesasFixas / receitaBruta) * 100 : 0;
         const resultadoPercent = receitaBruta > 0 ? (resultadoEconomico / receitaBruta) * 100 : 0;
+        const pontoEquilibrio = data.ponto_equilibrio !== undefined
+          ? Number(data.ponto_equilibrio)
+          : (margemPercent > 0 ? despesasFixas / (margemPercent / 100) : 0);
 
         const monthLabel = `${mes_chave.charAt(0).toUpperCase() + mes_chave.slice(1)}/${year.toString().slice(-2)}`;
         
@@ -144,29 +147,20 @@ export const fetchEconomicData = async (year: number): Promise<Record<string, Ec
           monthLabel,
           receitaBruta,
           cmv,
-          cmvPercent,
+          cmvPercent: Math.round(cmvPercent * 100) / 100,
           margemBruta,
-          margemPercent,
+          margemPercent: Math.round(margemPercent * 100) / 100,
           despesasFixas,
-          despesasPercent,
+          despesasPercent: Math.round(despesasPercent * 100) / 100,
           resultadoEconomico,
-          resultadoPercent,
-          pontoEquilibrio: data.ponto_equilibrio !== undefined ? data.ponto_equilibrio : (result[mes_chave]?.pontoEquilibrio || 0)
+          resultadoPercent: Math.round(resultadoPercent * 100) / 100,
+          pontoEquilibrio: Math.round(pontoEquilibrio * 100) / 100
         };
       });
     } else if (initialForYear) {
+      // Se não há dados no Firestore para este ano, popula a primeira vez com os dados padrão
       Object.entries(initialForYear).forEach(([mKey, mData]) => {
-        saveEconomicLaunch(year, mKey, mData).catch((err) => console.warn('Erro ao salvar lote inicial:', err));
-      });
-    }
-
-    // Para o ano de 2026, forçamos a sincronização dos dados mestres oficiais (Jan-Jun preenchidos, Jul-Dez zerados) no Firestore
-    if (year === 2026 && initialForYear) {
-      ALL_MONTHS.forEach((mKey) => {
-        if (initialForYear[mKey]) {
-          result[mKey] = { ...initialForYear[mKey] };
-          saveEconomicLaunch(year, mKey, initialForYear[mKey]).catch(() => {});
-        }
+        saveEconomicLaunch(year, mKey, mData).catch((err) => console.warn('Erro ao salvar lote inicial econômico:', err));
       });
     }
     
@@ -190,12 +184,17 @@ export const saveEconomicLaunch = async (year: number, monthKey: string, data: P
     const firestoreData: any = {
       ano: year,
       mes_chave: monthKey,
+      atualizado_em: new Date().toISOString(),
     };
     if (data.receitaBruta !== undefined) firestoreData.receita_bruta = data.receitaBruta;
     if (data.cmv !== undefined) firestoreData.cmv = data.cmv;
+    if (data.cmvPercent !== undefined) firestoreData.cmv_percent = data.cmvPercent;
     if (data.margemBruta !== undefined) firestoreData.margem_bruta = data.margemBruta;
+    if (data.margemPercent !== undefined) firestoreData.margem_percent = data.margemPercent;
     if (data.despesasFixas !== undefined) firestoreData.despesas_fixas = data.despesasFixas;
+    if (data.despesasPercent !== undefined) firestoreData.despesas_percent = data.despesasPercent;
     if (data.resultadoEconomico !== undefined) firestoreData.resultado_economico = data.resultadoEconomico;
+    if (data.resultadoPercent !== undefined) firestoreData.resultado_percent = data.resultadoPercent;
     if (data.pontoEquilibrio !== undefined) firestoreData.ponto_equilibrio = data.pontoEquilibrio;
 
     await setDoc(docRef, firestoreData, { merge: true });
@@ -222,19 +221,19 @@ export const fetchFinancialData = async (year: number): Promise<Record<string, F
       }
     });
     
-    // Se o Firestore tiver registros para este ano, mescla com os dados do Firestore
+    // Se o Firestore tiver registros para este ano, os dados do banco são a fonte de verdade absoluta
     if (!snapshot.empty) {
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
-        const mes_chave = data.mes_chave || '';
+        const mes_chave = (data.mes_chave || docSnap.id.split('-')[1] || '').toLowerCase().trim();
         if (!mes_chave) return;
 
         // Lê diretamente do Firestore, preservando lançamentos e edições manuais
-        const entradasBancos = data.entradas_bancos !== undefined ? data.entradas_bancos : (result[mes_chave]?.entradasBancos || 0);
-        const entradasTesouraria = data.entradas_tesouraria !== undefined ? data.entradas_tesouraria : (result[mes_chave]?.entradasTesouraria || 0);
-        const totalEntradas = data.total_entradas !== undefined ? data.total_entradas : (entradasBancos + entradasTesouraria);
-        const totalSaidas = data.total_saidas !== undefined ? data.total_saidas : (result[mes_chave]?.totalSaidas || 0);
-        const resultadoFinanceiro = data.resultado_financeiro !== undefined ? data.resultado_financeiro : (totalEntradas - totalSaidas);
+        const entradasBancos = data.entradas_bancos !== undefined ? Number(data.entradas_bancos) : (result[mes_chave]?.entradasBancos || 0);
+        const entradasTesouraria = data.entradas_tesouraria !== undefined ? Number(data.entradas_tesouraria) : (result[mes_chave]?.entradasTesouraria || 0);
+        const totalEntradas = data.total_entradas !== undefined ? Number(data.total_entradas) : (entradasBancos + entradasTesouraria);
+        const totalSaidas = data.total_saidas !== undefined ? Number(data.total_saidas) : (result[mes_chave]?.totalSaidas || 0);
+        const resultadoFinanceiro = data.resultado_financeiro !== undefined ? Number(data.resultado_financeiro) : (totalEntradas - totalSaidas);
         
         const resultadoPercent = totalEntradas > 0 ? (resultadoFinanceiro / totalEntradas) * 100 : 0;
         const monthLabel = `${mes_chave.charAt(0).toUpperCase() + mes_chave.slice(1)}/${year.toString().slice(-2)}`;
@@ -247,28 +246,17 @@ export const fetchFinancialData = async (year: number): Promise<Record<string, F
           totalEntradas,
           totalSaidas,
           resultadoFinanceiro,
-          resultadoPercent,
-          estoque: data.estoque !== undefined ? data.estoque : (result[mes_chave]?.estoque || 0),
-          inadimplenciaMensal: data.inadimplencia_mensal !== undefined ? data.inadimplencia_mensal : (result[mes_chave]?.inadimplenciaMensal || 0),
-          inadimplenciaAcumulada: data.inadimplencia_acumulada !== undefined ? data.inadimplencia_acumulada : (result[mes_chave]?.inadimplenciaAcumulada || 0)
+          resultadoPercent: Math.round(resultadoPercent * 100) / 100,
+          estoque: data.estoque !== undefined ? Number(data.estoque) : (result[mes_chave]?.estoque || 0),
+          inadimplenciaMensal: data.inadimplencia_mensal !== undefined ? Number(data.inadimplencia_mensal) : (result[mes_chave]?.inadimplenciaMensal || 0),
+          inadimplenciaAcumulada: data.inadimplencia_acumulada !== undefined ? Number(data.inadimplencia_acumulada) : (result[mes_chave]?.inadimplenciaAcumulada || 0),
+          inadimplenciaGeral: data.inadimplencia_geral !== undefined ? Number(data.inadimplencia_geral) : (result[mes_chave]?.inadimplenciaGeral || 0)
         };
       });
     } else if (initialForYear) {
       // Se não há dados no Firestore ainda para este ano, salva os dados de initialData em background
       Object.entries(initialForYear).forEach(([mKey, mData]) => {
         saveFinancialLaunch(year, mKey, mData).catch((err) => console.warn('Erro ao salvar lote inicial financeiro:', err));
-      });
-    }
-
-    // Para o ano de 2026, forçamos a sincronização dos dados mestres oficiais (Jan-Jun
-    // preenchidos, Jul-Dez zerados) no Firestore — corrige lançamentos manuais incorretos
-    // feitos via LaunchModal e evita que voltem a divergir da planilha oficial.
-    if (year === 2026 && initialForYear) {
-      ALL_MONTHS.forEach((mKey) => {
-        if (initialForYear[mKey]) {
-          result[mKey] = { ...initialForYear[mKey] };
-          saveFinancialLaunch(year, mKey, initialForYear[mKey]).catch(() => {});
-        }
       });
     }
 
@@ -292,15 +280,18 @@ export const saveFinancialLaunch = async (year: number, monthKey: string, data: 
     const firestoreData: any = {
       ano: year,
       mes_chave: monthKey,
+      atualizado_em: new Date().toISOString(),
     };
     if (data.entradasBancos !== undefined) firestoreData.entradas_bancos = data.entradasBancos;
     if (data.entradasTesouraria !== undefined) firestoreData.entradas_tesouraria = data.entradasTesouraria;
     if (data.totalEntradas !== undefined) firestoreData.total_entradas = data.totalEntradas;
     if (data.totalSaidas !== undefined) firestoreData.total_saidas = data.totalSaidas;
     if (data.resultadoFinanceiro !== undefined) firestoreData.resultado_financeiro = data.resultadoFinanceiro;
+    if (data.resultadoPercent !== undefined) firestoreData.resultado_percent = data.resultadoPercent;
     if (data.estoque !== undefined) firestoreData.estoque = data.estoque;
     if (data.inadimplenciaMensal !== undefined) firestoreData.inadimplencia_mensal = data.inadimplenciaMensal;
     if (data.inadimplenciaAcumulada !== undefined) firestoreData.inadimplencia_acumulada = data.inadimplenciaAcumulada;
+    if (data.inadimplenciaGeral !== undefined) firestoreData.inadimplencia_geral = data.inadimplenciaGeral;
 
     await setDoc(docRef, firestoreData, { merge: true });
   } catch (error) {
