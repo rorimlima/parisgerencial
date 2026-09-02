@@ -497,6 +497,26 @@ service cloud.firestore {
     }
 
     // =====================================================================
+    // PATRIMÔNIO & TOMBAMENTO DE LOJA
+    // =====================================================================
+    //
+    // Bens patrimoniais, ativo imobilizado e subcoleção de anexos de notas
+    // fiscais. Leitura e escrita liberadas para qualquer autenticado autorizado.
+    // Exclusão permitida para gestores e administradores.
+
+    match /patrimonio/{patrimonioId} {
+      allow read: if autorizado();
+      allow create, update: if escritaValida();
+      allow delete: if escritaValida() && ehGestorOuAdmin();
+
+      match /anexos/{anexoId} {
+        allow read: if autorizado();
+        allow create, update: if autorizado();
+        allow delete: if autorizado();
+      }
+    }
+
+    // =====================================================================
     // FECHAMENTO PADRÃO
     // =====================================================================
     //

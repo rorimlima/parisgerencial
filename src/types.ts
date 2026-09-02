@@ -25,7 +25,8 @@ export type ViewTab =
   | 'api-docs'
   | 'postgres-settings'
   | 'users'
-  | 'obras';
+  | 'obras'
+  | 'tombamento';
 
 export interface Seller {
   id: string;
@@ -1343,4 +1344,40 @@ export interface ResumoFuncionarioObra {
   salarioMeiaDiaria: number;
   salarioHorasExtras: number;
   salarioTotal: number;
+}
+
+// ─── MÓDULO TOMBAMENTO DE LOJA — Patrimônio & Ativo Imobilizado ─────────────
+
+export type EstadoConservacaoPatrimonio = 'Novo' | 'Bom' | 'Regular' | 'Danificado' | 'Baixado';
+
+export interface PatrimonioAnexo {
+  id: string;
+  patrimonioId: string;
+  fileName: string;
+  fileSize: number;
+  fileType: string;
+  fileData: string; // Base64 data URL ou URL de download
+  uploadedAt: string; // ISO date
+  uploadedBy?: string;
+  tipoDocumento?: 'nota_fiscal' | 'recibo' | 'termo_garantia' | 'foto_bem' | 'outro';
+  descricao?: string;
+}
+
+export interface PatrimonioItem {
+  id: string;
+  codigoTombo: string; // ex: TOM-0001
+  produto: string; // Descrição do bem / equipamento / móvel patrimonial
+  quantidade: number;
+  valorUnitario: number;
+  valorTotal: number; // quantidade * valorUnitario
+  setor: string; // Salão de Vendas, Frente de Caixa, etc.
+  empresa: string; // Paris Dakar Matriz, Filial 1, etc.
+  dataAquisicao: string; // ISO date YYYY-MM-DD
+  numeroNotaFiscal?: string;
+  fornecedor?: string;
+  estadoConservacao: EstadoConservacaoPatrimonio;
+  observacao?: string;
+  anexosCount?: number; // Contador rápido de anexos vinculados
+  createdAt?: string;
+  updatedAt?: string;
 }

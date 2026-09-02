@@ -34,6 +34,7 @@ import {
   HardHat,
   Landmark,
   LayoutDashboard,
+  PackageCheck,
   Receipt,
   ShoppingCart,
   TrendingUp,
@@ -89,6 +90,7 @@ const MENU_GROUPS: MenuGroup[] = [
       { id: 'billing', label: 'Faturamento', icon: Receipt, description: 'Notas fiscais (RPR014) e risco por cliente' },
       { id: 'sales', label: 'CRM & Vendas de Produtos', icon: Flame, description: 'CRM comercial com Curva ABC, melhores produtos para venda, margem e auditoria', badge: 'CRM' },
       { id: 'stock', label: 'Estoque', icon: Boxes, description: 'Lista de preço (RPR053), capital parado e margem' },
+      { id: 'tombamento', label: 'Tombamento de Loja', icon: PackageCheck, description: 'Patrimônio da empresa, ativo imobilizado e arquivamento de notas fiscais', badge: 'Novo' },
       { id: 'statement', label: 'Extrato Financeiro', icon: Landmark, description: 'Conciliação bancária e caixa/tesouraria (Bradesco, PagBank e Caixa/Tesouraria)' },
       { id: 'receivables', label: 'Contas a Receber', icon: ArrowDownCircle, description: 'Títulos de entrada (RFN046): recebimento, aging de cobrança e baixa automática' },
       // Inadimplência ficou fora do menu até 07/2026 — o módulo existia e era
