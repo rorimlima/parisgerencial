@@ -506,13 +506,11 @@ service cloud.firestore {
 
     match /patrimonio/{patrimonioId} {
       allow read: if autorizado();
-      allow create, update: if escritaValida();
-      allow delete: if escritaValida() && ehGestorOuAdmin();
+      allow create, update, delete: if escritaValida();
 
       match /anexos/{anexoId} {
         allow read: if autorizado();
-        allow create, update: if autorizado();
-        allow delete: if autorizado();
+        allow create, update, delete: if autorizado();
       }
     }
 
