@@ -189,6 +189,9 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
   const [includeForecast, setIncludeForecast] = useState(true);
   const [prefilledHint, setPrefilledHint] = useState(false);
   const [pendingPrefill, setPendingPrefill] = useState(false);
+  // As pendências deste mês novo foram herdadas do mês anterior e ainda não
+  // foram salvas. Sinaliza que a lista veio do passado, não foi digitada agora.
+  const [carriedPendenciasHint, setCarriedPendenciasHint] = useState(false);
   // Alguém (ou outra aba) gravou este mês enquanto havia edição pendente aqui.
   const [remoteChangedWhileEditing, setRemoteChangedWhileEditing] = useState(false);
 
@@ -347,6 +350,9 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
    */
   const monthContextKey = `${selectedYear}_${monthKey}`;
   const hydratedRef = useRef<{ context: string; remoteStamp: string } | null>(null);
+  // Qual contexto (ano_mês) já recebeu a herança de pendências do mês anterior.
+  // Evita re-semear depois que o gestor apaga as linhas de propósito.
+  const pendenciasSeededRef = useRef<string | null>(null);
 
   const draftRef = useRef(draft);
   useEffect(() => { draftRef.current = draft; }, [draft]);
@@ -389,7 +395,10 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
       setDraft(emptyPlan(selectedYear, monthKey));
       setPendingPrefill(true);
       setPrefilledHint(false);
+      // Mês novo aberto: libera uma nova herança de pendências para este contexto.
+      pendenciasSeededRef.current = null;
     }
+    setCarriedPendenciasHint(false);
     setSavedMsg(null);
     setSaveError(null);
     setRawEdits({});
@@ -515,6 +524,49 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
     return acc / 100;
   }, [plans, statementEntries, monthKey, selectedYear]);
 
+  /**
+   * HERANÇA DAS PENDÊNCIAS — obrigações em aberto do mês anterior.
+   *
+   * Pró-labore, aluguel, acordos e empréstimos quase nunca desaparecem de um
+   * mês para o outro: a lista do mês novo começa igual à do mês passado e só
+   * depois recebe as baixas e os acréscimos daquele mês. Digitá-la de novo a
+   * cada mês é trabalho repetido — e trabalho repetido é onde some uma linha.
+   *
+   * Por isso, ao abrir um mês AINDA NÃO SALVO, a lista é semeada com uma cópia
+   * das pendências do mês anterior. Só uma cópia: o que o gestor fizer aqui
+   * (apagar o que foi pago, editar valor, acrescentar uma nova) é deste mês, e
+   * ao salvar vira a base que o PRÓXIMO mês vai herdar. Assim as atualizações se
+   * propagam para frente sozinhas, mês a mês, sem nunca reescrever um mês que já
+   * tem plano próprio gravado.
+   *
+   * Observação: como `plans` traz só o ano selecionado (ver `getFluxoCaixa` em
+   * App.tsx) e, como `previousMonthFinalSaldo`, a herança é dentro do mesmo ano,
+   * janeiro não puxa de dezembro do ano anterior.
+   */
+  const previousMonthPendencias = useMemo(() => {
+    const idx = MONTHS.findIndex((m) => m.key === monthKey);
+    if (idx <= 0) return null;
+    const prevKey = MONTHS[idx - 1].key;
+    const prevPlan = plans.find((p) => p.monthKey === prevKey && p.year === selectedYear);
+    const list = prevPlan?.pendencias;
+    if (!list || list.length === 0) return null;
+    return list.map((p) => ({ descricao: p.descricao, valor: p.valor }));
+  }, [plans, monthKey, selectedYear]);
+
+  // Semeia, no máximo uma vez por mês/ano, as pendências herdadas. As travas são
+  // as mesmas do pré-preenchimento do realizado: só mês sem plano salvo e sem
+  // edição humana pendente. O `pendenciasSeededRef` garante que, depois de
+  // semear, apagar todas as linhas NÃO faz a herança voltar — o gestor decide.
+  useEffect(() => {
+    if (planForMonth) return;                                   // mês já tem plano próprio
+    if (isDirtyRef.current) return;                             // há trabalho humano na tela
+    if (pendenciasSeededRef.current === monthContextKey) return; // já semeado neste contexto
+    if (!previousMonthPendencias) return;                       // nada para herdar
+    pendenciasSeededRef.current = monthContextKey;
+    setDraft((d) => ({ ...d, pendencias: previousMonthPendencias.map((p) => ({ ...p })) }));
+    setCarriedPendenciasHint(true);
+  }, [planForMonth, monthContextKey, previousMonthPendencias]);
+
   // ── Edição de células ────────────────────────────────────────────────────
   // Aceita tanto formato pt-BR ("7.016,87") quanto plano ("7016.87" / "7016").
   const parseInput = (v: string): number => {
@@ -586,14 +638,21 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
   const pendencias = draft.pendencias || [];
   const totalPendencias = sumBy(pendencias, (p) => Number(p.valor) || 0);
   const setPendencia = (idx: number, field: keyof CashFlowPendencia, raw: string) => {
+    setCarriedPendenciasHint(false);
     setDraft((d) => {
       const list = [...(d.pendencias || [])];
       list[idx] = { ...list[idx], [field]: field === 'valor' ? parseInput(raw) : raw };
       return { ...d, pendencias: list };
     });
   };
-  const addPendencia = () => setDraft((d) => ({ ...d, pendencias: [...(d.pendencias || []), { descricao: '', valor: 0 }] }));
-  const removePendencia = (idx: number) => setDraft((d) => ({ ...d, pendencias: (d.pendencias || []).filter((_, i) => i !== idx) }));
+  const addPendencia = () => {
+    setCarriedPendenciasHint(false);
+    setDraft((d) => ({ ...d, pendencias: [...(d.pendencias || []), { descricao: '', valor: 0 }] }));
+  };
+  const removePendencia = (idx: number) => {
+    setCarriedPendenciasHint(false);
+    setDraft((d) => ({ ...d, pendencias: (d.pendencias || []).filter((_, i) => i !== idx) }));
+  };
 
   // ── POSIÇÃO DE CAIXA E NECESSIDADE DE APORTE ─────────────────────────────
   //
@@ -722,6 +781,9 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
       setSavedMsg('Planejamento salvo. Os valores digitados foram gravados como definitivos.');
       setPrefilledHint(false);
       setPendingPrefill(false);
+      setCarriedPendenciasHint(false);
+      // Já gravado: este contexto não deve mais receber a herança do mês anterior.
+      pendenciasSeededRef.current = `${selectedYear}_${monthKey}`;
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Falha ao salvar. Tente novamente.');
     } finally {
@@ -1687,6 +1749,16 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
           </div>
         </div>
         <div className="p-4">
+          {carriedPendenciasHint && canEdit && (
+            <div className="mb-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 flex items-start gap-2">
+              <Info className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+              <p className="text-xs font-semibold">
+                Estas pendências foram <b>herdadas do mês anterior</b> e ainda <b>não foram salvas</b>.
+                Dê baixa no que já foi pago, ajuste os valores e clique em <b>Salvar Planejamento</b> —
+                o que ficar salvo aqui será a base herdada pelo próximo mês.
+              </p>
+            </div>
+          )}
           {pendencias.length === 0 ? (
             <p className="text-xs text-[#8B7D6B] text-center py-3">Nenhuma pendência registrada para {monthLabel}/{selectedYear}.</p>
           ) : (
